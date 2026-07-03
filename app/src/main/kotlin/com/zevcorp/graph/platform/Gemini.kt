@@ -211,6 +211,17 @@ class GeminiComputerUse(
         informText = message
     }
 
+    private fun fn(name: String, description: String, arg: String) = jo(
+        "type" to js("function"),
+        "name" to js(name),
+        "description" to js(description),
+        "parameters" to jo(
+            "type" to js("object"),
+            "properties" to jo(arg to jo("type" to js("string"))),
+            "required" to JsonArray(listOf(js(arg))),
+        ),
+    )
+
     override suspend fun next(state: ScreenState, actionResults: List<String>): BrainTurn = withContext(Dispatchers.IO) {
         fun image(png: ByteArray) = jo(
             "type" to js("image"), "mime_type" to js("image/png"),
@@ -253,16 +264,8 @@ class GeminiComputerUse(
             "input" to JsonArray(input),
             "tools" to JsonArray(listOf(
                 jo("type" to js("computer_use"), "environment" to js("mobile")),
-                jo(
-                    "type" to js("function"),
-                    "name" to js("ask_user"),
-                    "description" to js("Pregunta al usuario cuando tengas una duda real sobre cómo seguir el tutorial. El usuario responde con texto, voz o demostrándolo en pantalla."),
-                    "parameters" to jo(
-                        "type" to js("object"),
-                        "properties" to jo("question" to jo("type" to js("string"))),
-                        "required" to JsonArray(listOf(js("question"))),
-                    ),
-                ),
+                fn("ask_user", "Pregunta al usuario cuando tengas una duda real e importante. El usuario responde con texto, voz o demostrándolo en pantalla.", "question"),
+                fn("speak", "Di algo en voz alta al usuario con tu personalidad divertida. Úsalo SOLO para lo importante (avisos, dudas). No narres cada paso.", "text"),
             )),
         )
         if (previousId.isNotBlank()) fields += "previous_interaction_id" to js(previousId)
@@ -283,7 +286,9 @@ class GeminiComputerUse(
 
         val actions = mutableListOf<AgentAction>()
         val calls = mutableListOf<Call>()
+        val intents = mutableListOf<String>()
         var question: String? = null
+        var speech: String? = null
         var text = ""
         for (item in items.map { it.jsonObject }) {
             when (item.str("type")) {
@@ -293,6 +298,7 @@ class GeminiComputerUse(
                     val id = item.str("call_id").ifBlank { item.str("id") }.ifBlank { "call_${calls.size}" }
                     val args = item["arguments"]?.jsonObject ?: item["args"]?.jsonObject ?: JsonObject(emptyMap())
                     calls += Call(id, name, args["safety_decision"] != null)
+                    if (name !in setOf("ask_user", "speak")) intents += args.str("intent")
 
                     fun px(key: String, size: Int) =
                         args[key]?.jsonPrimitive?.intOrNull?.let { it * size / 1000 } ?: -1
@@ -320,14 +326,18 @@ class GeminiComputerUse(
                         "take_screenshot" -> {} // el screenshot va en todos los function_result
                         "list_apps" -> internalResults[id] = jo("apps" to js(listApps()))
                         "ask_user" -> question = args.str("question")
+                        "speak" -> speech = args.str("text")
                     }
                 }
             }
         }
         pending = calls
+        // speak/ask_user no llevan screenshot en su function_result: se resuelven aquí.
+        speech?.let { internalResults[calls.first { c -> c.name == "speak" }.id] = jo("said" to js("true")) }
         LogBus.log("gemini", if (calls.isEmpty()) "turno final: ${text.take(120)}"
         else "turno: ${calls.joinToString(", ") { it.name }}" + (question?.let { " · pregunta" } ?: ""))
-        return BrainTurn(actions, question, done = calls.isEmpty(), text = text)
+        return BrainTurn(actions, question, done = calls.isEmpty(), text = text,
+            narration = intents.firstOrNull { it.isNotBlank() } ?: "", speech = speech, intents = intents)
     }
 
     /** Supervisor del learning: mira la captura tras un step del workflow y decide si quedó bien. */
@@ -372,14 +382,52 @@ class GeminiComputerUse(
                 .also { LogBus.log("gemini", "judge step ${step.order} → ${if (it.valid) "válido" else "inválido"} · ${it.reason.take(80)}") }
         }
 
+    /** Observador en vivo del Teaching: solo mira, puede hablar/preguntar (sin computer_use). */
+    override suspend fun observe(lesson: Lesson, state: ScreenState, recentActions: List<String>): BrainTurn? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val parts = mutableListOf<JsonElement>()
+                state.screenshotPng?.let {
+                    parts += jo("inlineData" to jo("mimeType" to js("image/png"),
+                        "data" to js(Base64.encodeToString(it, Base64.NO_WRAP))))
+                }
+                parts += jtext(
+                    "Eres Graph, un asistente con personalidad viva y divertida que está APRENDIENDO viendo al " +
+                        "usuario enseñarte una tarea en su teléfono. Acciones recientes del usuario: " +
+                        recentActions.joinToString("; ").ifBlank { "(ninguna)" } + ". " +
+                        "Mira la pantalla. Si tienes una DUDA IMPORTANTE sobre lo que enseña (p.ej. \"¿y si el " +
+                        "restaurante está cerrado?\"), formúlala. Si no, quédate callado. No comentes por comentar. " +
+                        """Responde SOLO JSON: {"say": "algo corto que decir en voz o vacío", "question": "pregunta importante o vacío"}"""
+                )
+                val req = jo(
+                    "contents" to JsonArray(listOf(jo("role" to js("user"), "parts" to JsonArray(parts)))),
+                    "generationConfig" to jo("responseMimeType" to js("application/json")),
+                )
+                val res = http(
+                    "POST", "$BASE/v1beta/models/${model()}:generateContent",
+                    mapOf("Content-Type" to "application/json", "x-goog-api-key" to apiKey()),
+                    Json.encodeToString(JsonObject.serializer(), req).toByteArray(),
+                ).orThrow()
+                val text = Json.parseToJsonElement(res.body).jsonObject["candidates"]!!.jsonArray[0]
+                    .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
+                    .firstNotNullOf { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
+                val obj = Json.parseToJsonElement(text).jsonObject
+                val say = obj.str("say"); val q = obj.str("question")
+                if (say.isBlank() && q.isBlank()) null
+                else BrainTurn(question = q.ifBlank { null }, speech = say.ifBlank { null })
+            }.getOrNull()
+        }
+
     private fun goalPrompt(lesson: Lesson, state: ScreenState) = """
-        Controlas un teléfono Android REAL. Tu objetivo es reproducir este tutorial que el usuario enseñó en video:
+        Eres Graph, un asistente con PERSONALIDAD viva y divertida que controla un teléfono Android REAL.
+        Tu objetivo es reproducir este tutorial que el usuario enseñó en video:
         META: ${lesson.goal}
         APP: ${lesson.app}
         RESUMEN: ${lesson.summary}
         PASOS: ${lesson.steps.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString(" ")}
-        Usa open_app para abrir apps. Si tienes una duda real sobre cómo continuar, usa ask_user (el usuario puede responderte por texto, voz o demostrándotelo en pantalla).
-        Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones) describiendo el resultado.
+        En el campo "intent" de cada acción escribe una frase corta y con chispa de lo que haces (ej: "Abro el reloj ⏰", "Busco la mejor pizza para ti 🍕"): eso se le narra al usuario.
+        Usa speak SOLO para avisos importantes y ask_user SOLO para dudas reales (p.ej. "¿el Uber es para ti o para tu mamá?"). No hables por hablar.
+        Usa open_app para abrir apps. Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones).
         ${instructions.takeIf { it.isNotBlank() }?.let { "MODO ESPECIAL: $it" } ?: ""}
         Pantalla actual: ${state.screen}
     """.trimIndent()

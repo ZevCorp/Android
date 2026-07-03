@@ -4,22 +4,33 @@ Sistema que aprende tareas de un video-tutorial del usuario y termina ejecutánd
 
 Es el mismo principio del repo [Graph](https://github.com/Joseph1356K/Graph) (extensión de Chrome que graba clics/inputs del DOM como steps de workflows), llevado a Android sobre la superficie de accesibilidad.
 
+> **Una sola ejecución, estado por step.** Ya no hay "consciente" vs "subconsciente" como modos separados: es **una sola ejecución** donde conviven ambos según el ESTADO de cada step. 🟢 verde = se hace por árbol de UI sin LLM (subconsciente); 🟡🔴 = Gemini 3.5 Flash lo hace y, si sale bien, pasa a verde. La primera vez que grabas está 100% en borrador; cada corrida sube el % aprendido. Puedes verlo en vivo en el **dashboard**.
+
 ## Las tres etapas
 
 1. **Teaching** — Tocas *Grabar tutorial* y muestras la tarea en tu teléfono (puedes narrar por voz). Mientras grabas, **tus clics y tecleos se capturan del árbol de UI** como workflow **borrador** (steps 🟡 DRAFT). Al detener, el video se sube a Gemini, que lo analiza como tutorial y lo destila en una `Lesson` ligada a ese borrador. Antes de guardar entra la **capa de inteligencia (curador)**: con el contexto del video — incluida tu narración sobre qué es opcional — Gemini separa el **tronco** (pasos centrales) de las **ramas** situacionales (p.ej. `configurar_direccion`: solo la primera vez o al cambiar de lugar), bifurcaciones que se reincorporan al tronco y se activan por parámetro en la terminal.
 
-2. **Learning (consciente)** — Consolidación supervisada, como el aprendizaje humano: el sistema avanza **un step a la vez ejecutando el workflow por árbol de UI** (no por capturas); tras cada step se toma una captura y **Gemini 3.5 Flash la juzga**. Si el step quedó bien → se marca 🟢 **CONFIRMED** (definitivo, parte de la "red neuronal"). Si falló → **computer use toma el control**, retrocede si hace falta, lo hace él mismo, y el step queda 🔴 **LLM**; el siguiente step vuelve al árbol de UI. Re-ejecutar el learning reintenta los rojos. Si el modelo duda, te pregunta (texto, **voz** o demostración). Las lecciones sin borrador corren el modo libre clásico (el agente ejecuta todo y se graba como DRAFT).
+2. **Learning / Ejecución (unificada)** — Consolidación supervisada, como el aprendizaje humano. Avanza **un step a la vez ejecutando el workflow por árbol de UI**; tras cada step se toma captura y **Gemini 3.5 Flash la juzga**. Si quedó bien → 🟢 **CONFIRMED** (definitivo). Si falló → **computer use toma el control**, retrocede si hace falta, lo hace él mismo, y el step queda 🔴 **LLM**; el siguiente vuelve al árbol de UI. Cada corrida sube el % aprendido y actualiza el grafo/dashboard en vivo. Si el modelo duda, te pregunta por **voz**, texto o demostración. Los steps ya 🟢 se ejecutan sin LLM (rápido). Las lecciones sin borrador corren el modo libre (el agente ejecuta todo y se graba como DRAFT).
 
-3. **Subconsciente** — Ejecución híbrida: los steps 🟢 y 🟡 corren **sin LLM** sobre accesibilidad; los 🔴 se **delegan puntualmente a Gemini 3.5 Flash**. Activado por terminal:
+3. **Terminal** — La misma ejecución desde la terminal, con **profundidad** (avanza por tramos) y **ramas**:
 
    ```bash
-   cli/graph list                                   # descubrir workflows
-   cli/graph info wf_1778724462696                  # mapear su red: ramas, variables, estado por step
-   cli/graph run wf_1778724462696 --input_5="pizza"                                # tronco
+   cli/graph list                                   # workflows y % aprendido
+   cli/graph info wf_1778724462696                  # red: ramas, variables, % aprendido, cursor, estado por step
+   cli/graph run wf_1778724462696 --input_5="pizza"                                # todo el tronco
+   cli/graph run wf_1778724462696 --depth 5                                        # avanza solo 5 steps y recuerda dónde seguir
    cli/graph run wf_1778724462696 --branch configurar_direccion --input_5="pizza"  # con rama
    ```
 
-   Los workflows son **terminal-first**: `info` es el "man page" que un LLM lee para decidir qué ramas activar y con qué variables — ejecución modular de caminos dentro de la misma red. Ver [CLI.md](CLI.md).
+   Los workflows son **terminal-first**: `info` es el "man page" que un LLM lee para decidir profundidad, ramas y variables según qué tan aprendido está. Ver [CLI.md](CLI.md).
+
+## Voz y personalidad
+
+La carita habla (TTS) y muestra un **globo de diálogo** narrando lo que hace con personalidad ("Abro el reloj ⏰", "Busco la mejor pizza para ti 🍕"). La voz está **siempre disponible**: durante el Teaching un observador en vivo puede preguntarte algo importante ("¿y si el restaurante está cerrado?"), y durante la ejecución puede preguntar lo que necesite para hacerlo bien ("¿el Uber es para ti o para tu mamá?"). Solo usa la voz para lo importante.
+
+## Dashboard en vivo
+
+La ejecución se sincroniza en tiempo real con un dashboard web (Supabase Edge Function como host + tabla `runs` con polling cada 1s). Cada step se pinta 🟢/🔴/🟡 mientras el asistente ejecuta, con el step activo pulsando. Botón **📊 Dashboard en vivo** en la app (copia y abre la URL con tu `device`). La carpeta [`dashboard/`](dashboard/) es estática y **lista para Vercel** (`vercel deploy` o conectando el repo); apunta al mismo backend Supabase.
 
 ## La burbuja flotante
 

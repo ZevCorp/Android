@@ -37,6 +37,7 @@ class RunCommandReceiver : BroadcastReceiver() {
                 }
                 Log.i(TAG, "## ${w.id} — ${w.name}")
                 Log.i(TAG, "proposito: ${w.purpose}")
+                Log.i(TAG, "aprendido: ${w.learnedPct()}% subconsciente (verde) · cursor en step ${w.cursor + 1}")
                 Log.i(TAG, "uso: ${w.usage()}")
                 w.branches.forEach { Log.i(TAG, "rama --branch ${it.name}: ${it.description}") }
                 w.variables.forEach { Log.i(TAG, "variable --${it.name}: ${it.field} (default: \"${it.default}\")") }
@@ -56,9 +57,10 @@ class RunCommandReceiver : BroadcastReceiver() {
                     .associateWith { intent.getStringExtra(it) ?: "" }
                 val branches = intent.getStringExtra("branches")?.split(',')
                     ?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
-                LogBus.log("cli", "RUN $id inputs=${inputs.keys.joinToString(",")} ramas=${branches.joinToString(",")}")
+                val depth = intent.getStringExtra("depth")?.toIntOrNull() ?: Int.MAX_VALUE
+                LogBus.log("cli", "RUN $id inputs=${inputs.keys.joinToString(",")} ramas=${branches.joinToString(",")} depth=${if (depth == Int.MAX_VALUE) "all" else depth}")
                 app.scope.launch {
-                    val result = app.runWorkflow(id, inputs, branches)
+                    val result = app.runWorkflow(id, inputs, branches, depth)
                     Log.i(TAG, result)
                     LogBus.log("cli", result)
                 }

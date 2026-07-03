@@ -6,14 +6,18 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Intent
 import android.view.animation.AccelerateInterpolator
+import android.view.animation.OvershootInterpolator
 import android.graphics.Color
 import android.graphics.PixelFormat
+import android.graphics.Typeface
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
 import android.speech.SpeechRecognizer
+import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.MotionEvent
+import android.view.VelocityTracker
 import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
@@ -25,6 +29,8 @@ import com.zevcorp.graph.GraphApp
 import graph.core.domain.Answer
 import graph.core.domain.Lesson
 import graph.core.domain.UserChannel
+import graph.core.domain.Voice
+import java.util.Locale
 import kotlin.coroutines.resume
 import kotlinx.coroutines.*
 
@@ -35,7 +41,7 @@ import kotlinx.coroutines.*
  * Learning desaparece (para no salir en las capturas del agente) y reaparece para preguntar;
  * en modo demostración un toque la convierte en el botón de "terminé".
  */
-class FloatingBubble(private val service: AccessibilityService) : UserChannel {
+class FloatingBubble(private val service: AccessibilityService) : UserChannel, Voice {
 
     private val app get() = GraphApp.instance
     private val wm = service.getSystemService(WindowManager::class.java)
@@ -46,9 +52,22 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel {
     private var panel: View? = null
     private var demoEnd: CompletableDeferred<Unit>? = null
     private var demoBadge: TextView? = null
+    private var dragAnimator: ValueAnimator? = null
+
+    private var speech: TextView? = null
+    private var speechParams: WindowManager.LayoutParams? = null
+    private var speechHide: Job? = null
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
 
     fun show() {
-        val size = service.dp(60)
+        tts = TextToSpeech(service) { status ->
+            if (status == TextToSpeech.SUCCESS) {
+                tts?.language = Locale.getDefault()
+                ttsReady = true
+            }
+        }
+        val size = service.dp(62)
         bubble = FaceView(service)
         bubbleParams = overlayParams(size, size, focusable = false).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -56,22 +75,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel {
             y = service.resources.displayMetrics.heightPixels / 3
         }
         bubble.elevation = 12f
-        var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
-        bubble.setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> { downX = e.rawX; downY = e.rawY; startX = bubbleParams.x; startY = bubbleParams.y; moved = false }
-                MotionEvent.ACTION_MOVE -> {
-                    val dx = (e.rawX - downX).toInt(); val dy = (e.rawY - downY).toInt()
-                    if (moved || dx * dx + dy * dy > 900) {
-                        moved = true
-                        bubbleParams.x = startX + dx; bubbleParams.y = startY + dy
-                        wm.updateViewLayout(bubble, bubbleParams)
-                    }
-                }
-                MotionEvent.ACTION_UP -> if (!moved) v.performClick()
-            }
-            true
-        }
+        attachDrag(size)
         bubble.setOnClickListener {
             when {
                 demoEnd != null -> { demoBadge?.let { runCatching { wm.removeView(it) } }; demoBadge = null; demoEnd?.complete(Unit); demoEnd = null }
@@ -82,11 +86,116 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel {
         wm.addView(bubble, bubbleParams)
     }
 
+    /** Arrastre fluido con inercia: un flick corto la lanza a la esquina; siempre "aterriza" pegada al borde. */
+    private fun attachDrag(size: Int) {
+        var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
+        var tracker: VelocityTracker? = null
+        bubble.setOnTouchListener { v, e ->
+            when (e.actionMasked) {
+                MotionEvent.ACTION_DOWN -> {
+                    dragAnimator?.cancel()
+                    downX = e.rawX; downY = e.rawY; startX = bubbleParams.x; startY = bubbleParams.y; moved = false
+                    tracker = VelocityTracker.obtain().also { it.addMovement(e) }
+                }
+                MotionEvent.ACTION_MOVE -> {
+                    tracker?.addMovement(e)
+                    val dx = (e.rawX - downX).toInt(); val dy = (e.rawY - downY).toInt()
+                    if (moved || dx * dx + dy * dy > 120) {
+                        moved = true
+                        bubbleParams.x = startX + dx; bubbleParams.y = startY + dy
+                        runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+                    }
+                }
+                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
+                    if (!moved) v.performClick()
+                    else {
+                        val vt = tracker
+                        vt?.addMovement(e); vt?.computeCurrentVelocity(1000) // px/s
+                        flingToEdge(size, vt?.xVelocity ?: 0f, vt?.yVelocity ?: 0f)
+                    }
+                    tracker?.recycle(); tracker = null
+                }
+            }
+            true
+        }
+    }
+
+    /** Proyecta la velocidad (momentum) y anima hasta la esquina más cercana con rebote sutil. */
+    private fun flingToEdge(size: Int, vx: Float, vy: Float) {
+        val m = service.resources.displayMetrics
+        val maxX = m.widthPixels - size
+        val maxY = m.heightPixels - size
+        val projX = bubbleParams.x + vx * 0.12f
+        val projY = bubbleParams.y + vy * 0.12f
+        val destX = if (projX + size / 2 < m.widthPixels / 2) 0 else maxX // pega al borde según hacia dónde va
+        val destY = projY.toInt().coerceIn(service.dp(24), maxY - service.dp(24))
+        val speed = kotlin.math.hypot(vx.toDouble(), vy.toDouble()).toFloat()
+        val dur = (260 + (kotlin.math.hypot((destX - bubbleParams.x).toDouble(), (destY - bubbleParams.y).toDouble()) / (0.6f + speed / 4000f))).toLong().coerceIn(200, 620)
+        val fromX = bubbleParams.x; val fromY = bubbleParams.y
+        dragAnimator?.cancel()
+        dragAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = dur
+            interpolator = OvershootInterpolator(0.9f)
+            addUpdateListener { a ->
+                val f = a.animatedValue as Float
+                bubbleParams.x = (fromX + (destX - fromX) * f).toInt()
+                bubbleParams.y = (fromY + (destY - fromY) * f).toInt()
+                runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+                moveSpeechToBubble()
+            }
+            start()
+        }
+    }
+
     fun destroy() {
         scope.cancel()
+        dragAnimator?.cancel()
+        tts?.shutdown()
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
         demoBadge?.let { runCatching { wm.removeView(it) } }
+        speech?.let { runCatching { wm.removeView(it) } }
+    }
+
+    /* ---------- Voz y narración (globo de diálogo + TTS) ---------- */
+
+    override fun narrate(text: String) = showSpeech(text, false)
+    override fun speak(text: String) = showSpeech(text, true)
+
+    private fun showSpeech(text: String, aloud: Boolean) {
+        if (text.isBlank()) return
+        scope.launch {
+            val bubbleText = speech ?: TextView(service).apply {
+                setTextColor(Color.WHITE)
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setPadding(service.dp(14), service.dp(10), service.dp(14), service.dp(10))
+                background = rounded(Palette.accent, service.dp(18).toFloat())
+                elevation = 16f
+                maxWidth = service.dp(230)
+            }.also {
+                speech = it
+                speechParams = overlayParams(-2, -2, focusable = false).apply { gravity = Gravity.TOP or Gravity.START }
+                runCatching { wm.addView(it, speechParams) }
+            }
+            bubbleText.text = text
+            bubbleText.visibility = View.VISIBLE
+            moveSpeechToBubble()
+            if (aloud && ttsReady) tts?.speak(text.filter { it.code in 32..0x2FFF }, TextToSpeech.QUEUE_FLUSH, null, "graph")
+            speechHide?.cancel()
+            speechHide = launch { delay(if (aloud) 5200 else 3400); speech?.visibility = View.GONE }
+        }
+    }
+
+    private fun moveSpeechToBubble() {
+        val view = speech ?: return
+        val p = speechParams ?: return
+        view.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
+        val w = view.measuredWidth.coerceAtLeast(service.dp(60))
+        val onLeftHalf = bubbleParams.x < service.resources.displayMetrics.widthPixels / 2
+        p.x = if (onLeftHalf) bubbleParams.x + service.dp(66) else (bubbleParams.x - w - service.dp(10)).coerceAtLeast(service.dp(4))
+        p.y = (bubbleParams.y + service.dp(6)).coerceAtLeast(service.dp(4))
+        runCatching { wm.updateViewLayout(view, p) }
     }
 
     /* ---------- Modo acompañante: la carita vuela hacia donde se va a hacer clic ---------- */

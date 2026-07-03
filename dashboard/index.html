@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Graph · ejecución en vivo</title>
+<style>
+  :root{
+    --bg:#0D141C; --card:#16202C; --border:#243244; --accent:#2F8CFF;
+    --text:#E9EEF5; --dim:#8FA3B8; --green:#2FBF71; --red:#E5534B; --amber:#D9A03F;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);font:15px/1.4 -apple-system,Segoe UI,Roboto,sans-serif}
+  header{display:flex;align-items:center;gap:12px;padding:18px 22px;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg);z-index:2}
+  .logo{width:36px;height:36px;border-radius:10px;background:linear-gradient(135deg,#1B2836,#0D141C);border:1px solid var(--border);display:grid;place-items:center;color:var(--accent);font-weight:800}
+  h1{font-size:18px;margin:0}
+  .sub{color:var(--dim);font-size:12px}
+  .live{margin-left:auto;display:flex;align-items:center;gap:7px;color:var(--dim);font-size:12px}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--green);box-shadow:0 0 0 0 rgba(47,191,113,.6);animation:pulse 1.4s infinite}
+  @keyframes pulse{0%{box-shadow:0 0 0 0 rgba(47,191,113,.5)}70%{box-shadow:0 0 0 9px rgba(47,191,113,0)}100%{box-shadow:0 0 0 0 rgba(47,191,113,0)}}
+  main{padding:20px;max-width:820px;margin:0 auto;display:flex;flex-direction:column;gap:18px}
+  .run{background:var(--card);border:1px solid var(--border);border-radius:18px;padding:18px 18px 8px}
+  .run h2{font-size:16px;margin:0 0 2px}
+  .meta{color:var(--dim);font-size:12px;margin-bottom:12px}
+  .bar{height:8px;border-radius:99px;background:#0d141c;border:1px solid var(--border);overflow:hidden;margin:8px 0 14px}
+  .bar>i{display:block;height:100%;background:linear-gradient(90deg,var(--green),#7de2a8);transition:width .5s}
+  .steps{position:relative;padding-left:8px}
+  .step{display:flex;align-items:center;gap:12px;padding:5px 0;position:relative}
+  .node{width:26px;height:26px;border-radius:50%;display:grid;place-items:center;font-size:11px;font-weight:800;color:#04121c;flex:0 0 auto;transition:all .3s;z-index:1}
+  .green .node{background:var(--green)} .red .node{background:var(--red);color:#fff} .draft .node{background:var(--amber)}
+  .line{position:absolute;left:20px;top:0;width:2px;height:100%;background:var(--border)}
+  .label{font-weight:600} .st{color:var(--dim);font-size:12px}
+  .branch{margin-left:6px;padding:1px 7px;border-radius:99px;background:rgba(47,140,255,.16);color:var(--accent);font-size:11px}
+  .active{outline:none} .active .node{box-shadow:0 0 0 0 rgba(47,140,255,.6);animation:ping 1s infinite;transform:scale(1.18)}
+  @keyframes ping{0%{box-shadow:0 0 0 0 rgba(47,140,255,.55)}70%{box-shadow:0 0 0 10px rgba(47,140,255,0)}100%{box-shadow:0 0 0 0 rgba(47,140,255,0)}}
+  .note{margin:10px 0 2px;color:var(--accent);font-size:13px;font-weight:600;min-height:18px}
+  .empty{color:var(--dim);text-align:center;padding:60px 20px}
+  .legend{display:flex;gap:16px;justify-content:center;color:var(--dim);font-size:12px;padding:4px 0 18px}
+  .legend b{display:inline-block;width:10px;height:10px;border-radius:50%;margin-right:5px;vertical-align:middle}
+</style>
+</head>
+<body>
+<header>
+  <div class="logo">〔</div>
+  <div>
+    <h1>Graph · ejecución en vivo</h1>
+    <div class="sub" id="sub">conectando…</div>
+  </div>
+  <div class="live"><span class="dot"></span> tiempo real</div>
+</header>
+<main id="main"><div class="empty">Esperando ejecuciones del asistente…</div></main>
+<div class="legend">
+  <span><b style="background:#2FBF71"></b>aprendido (árbol de UI)</span>
+  <span><b style="background:#E5534B"></b>lo hace Gemini</span>
+  <span><b style="background:#D9A03F"></b>por consolidar</span>
+</div>
+<script>
+  const SUPABASE_URL = "https://zyvfamlhlmztliexvmej.supabase.co";
+  const ANON = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Inp5dmZhbWxobG16dGxpZXh2bWVqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODIwMDE2NjcsImV4cCI6MjA5NzU3NzY2N30.J0pmHcE0gohPcqpT_PKXhv_Zct1i4xcR0_uVe9W_r8g";
+  const device = new URLSearchParams(location.search).get("device");
+  const main = document.getElementById("main");
+  const sub = document.getElementById("sub");
+  const esc = s => (s||"").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+
+  function render(runs){
+    if(!runs.length){ main.innerHTML = '<div class="empty">Esperando ejecuciones del asistente…</div>'; return; }
+    main.innerHTML = runs.map(r => {
+      const steps = (r.steps||[]).map(s => `
+        <div class="step ${s.status} ${s.active?'active':''}">
+          <div class="node">${s.order}</div>
+          <div>
+            <div class="label">${esc(s.action)} ${esc(s.label)}${s.branch?`<span class="branch">⑂ ${esc(s.branch)}</span>`:''}</div>
+            <div class="st">${s.status==='green'?'aprendido · árbol de UI':s.status==='red'?'lo hace Gemini 3.5 Flash':'por consolidar'}</div>
+          </div>
+        </div>`).join("");
+      return `<div class="run">
+        <h2>${esc(r.name||r.workflow_id)}</h2>
+        <div class="meta">${r.workflow_id} · dispositivo ${esc(r.device)}</div>
+        <div class="bar"><i style="width:${r.learned||0}%"></i></div>
+        <div class="meta">${r.learned||0}% aprendido de forma subconsciente</div>
+        <div class="note">${esc(r.note||'')}</div>
+        <div class="steps"><div class="line"></div>${steps}</div>
+      </div>`;
+    }).join("");
+  }
+
+  async function tick(){
+    try{
+      let url = `${SUPABASE_URL}/rest/v1/runs?select=*&order=updated_at.desc`;
+      if(device) url += `&device=eq.${encodeURIComponent(device)}`;
+      const res = await fetch(url, { headers: { apikey: ANON, Authorization: `Bearer ${ANON}` }});
+      const rows = await res.json();
+      render(Array.isArray(rows)?rows:[]);
+      sub.textContent = device ? `dispositivo ${device}` : `${rows.length||0} ejecución(es) · actualiza cada 1s`;
+    }catch(e){ sub.textContent = "sin conexión con Supabase"; }
+  }
+  tick(); setInterval(tick, 1000);
+</script>
+</body>
+</html>

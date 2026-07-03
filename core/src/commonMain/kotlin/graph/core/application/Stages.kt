@@ -10,6 +10,11 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
 private val NO_LOG = GraphLog { _, _ -> }
+private val NO_REPORT = RunReporter { _, _, _ -> }
+private val NO_VOICE = object : Voice {
+    override fun narrate(text: String) {}
+    override fun speak(text: String) {}
+}
 
 private fun describe(step: Step, value: String = step.value) =
     "${step.action} \"${step.label.ifBlank { step.selector.short() }}\"" +
@@ -17,9 +22,10 @@ private fun describe(step: Step, value: String = step.value) =
         (step.screen.takeIf { it.isNotBlank() }?.let { " (pantalla: $it)" } ?: "")
 
 /**
- * Etapa 1 · TEACHING: el usuario graba su pantalla enseñando la tarea. Mientras tanto se capturan
- * sus clics/tecleos del árbol de UI como workflow BORRADOR (steps DRAFT). Al detener, el LLM analiza
- * el video como tutorial (Lesson) y el borrador queda ligado a esa lección para el learning.
+ * Etapa 1 · TEACHING: el usuario graba su pantalla enseñando la tarea. Se capturan sus clics/tecleos
+ * del árbol de UI como workflow BORRADOR (100% DRAFT). Un observador opcional (Gemini) mira en vivo y
+ * puede hablar o preguntar algo importante mientras el usuario enseña. Al detener, el LLM analiza el
+ * video (Lesson), el curador separa tronco/ramas y el borrador queda ligado a la lección.
  */
 class TeachingStage(
     private val recorder: ScreenRecorder,
@@ -29,24 +35,45 @@ class TeachingStage(
     private val ui: () -> UiSurface?,
     private val newId: () -> String,
     private val curator: WorkflowCurator? = null,
+    private val brain: (() -> ComputerUseBrain)? = null,
+    private val voice: Voice = NO_VOICE,
+    private val user: UserChannel? = null,
     private val log: GraphLog = NO_LOG,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
     private val captured = mutableListOf<Step>()
     private var collector: Job? = null
+    private var observer: Job? = null
 
     fun startRecording() {
         recorder.start()
         captured.clear()
-        ui()?.let { surface ->
-            collector = scope.launch { surface.userActions.collect { captured += it } }
-            surface.setCapturing(true)
-            log.log("teaching", "grabando video + capturando clics del árbol de UI")
+        val surface = ui() ?: return
+        collector = scope.launch { surface.userActions.collect { captured += it } }
+        surface.setCapturing(true)
+        log.log("teaching", "grabando video + capturando clics del árbol de UI")
+        // Observador en vivo: el asistente puede intervenir con voz mientras aprende.
+        brain?.let { factory ->
+            val observerBrain = factory()
+            observer = scope.launch {
+                val lesson = Lesson(id = "live", goal = "aprender lo que el usuario está enseñando")
+                var lastActions = 0
+                while (true) {
+                    delay(9000) // ritmo tranquilo para no gastar tokens ni interrumpir de más
+                    val recent = captured.drop(lastActions).map { "${it.action} ${it.label.ifBlank { it.selector.short() }}" }
+                    lastActions = captured.size
+                    val turn = runCatching { observerBrain.observe(lesson, surface.state(), recent) }.getOrNull() ?: continue
+                    if (turn.speech != null) voice.speak(turn.speech)
+                    else if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
+                    turn.question?.let { q -> voice.speak(q); user?.ask(q) }
+                }
+            }
         }
     }
 
     suspend fun stopAndAnalyze(): Lesson {
-        ui()?.setCapturing(false) // flush de inputs pendientes
+        observer?.cancel()
+        ui()?.setCapturing(false)
         delay(300)
         collector?.cancel()
         val video = recorder.stop()
@@ -65,7 +92,6 @@ class TeachingStage(
                 steps = steps,
                 variables = Workflow.deriveVariables(steps),
             )
-            // Capa de inteligencia previa al guardado: el contexto del video decide tronco vs ramas.
             curator?.let { c ->
                 draft = runCatching { c.curate(lesson, draft) }
                     .getOrElse { e -> log.log("teaching", "curación falló (${e.message?.take(80)}), se guarda sin ramas"); draft }
@@ -81,12 +107,13 @@ class TeachingStage(
 
 /**
  * Corre turnos de computer use para una instrucción puntual (reparar un step, ejecutar un step rojo)
- * hasta que el modelo devuelve el control respondiendo solo texto.
+ * hasta que el modelo devuelve el control respondiendo solo texto. Narra y habla según el turno.
  */
 internal class AgentRunner(
     private val brain: ComputerUseBrain,
     private val ui: UiSurface,
     private val user: UserChannel?,
+    private val voice: Voice,
     private val log: GraphLog,
 ) {
     private var begun = false
@@ -97,9 +124,12 @@ internal class AgentRunner(
         var results = emptyList<String>()
         repeat(maxTurns) {
             val turn = brain.next(ui.state(), results)
+            if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
+            if (turn.speech != null) voice.speak(turn.speech)
             if (turn.done) { log.log("agente", "devuelve el control: ${turn.text.take(100)}"); return }
             val out = mutableListOf<String>()
-            for (action in turn.actions) {
+            turn.actions.forEachIndexed { idx, action ->
+                turn.intents.getOrNull(idx)?.takeIf { it.isNotBlank() }?.let { voice.narrate(it) }
                 val ok = when (action) {
                     is AgentAction.ClickAt -> ui.tapAt(action.x, action.y) != null
                     is AgentAction.TypeAt -> ui.typeAt(action.x, action.y, action.text) != null
@@ -113,6 +143,7 @@ internal class AgentRunner(
             }
             results = out
             turn.question?.let { q ->
+                voice.speak(q)
                 val answer = user?.ask(q)
                 when {
                     answer == null -> brain.inform("No hay usuario disponible; usa tu mejor criterio.")
@@ -127,97 +158,154 @@ internal class AgentRunner(
 }
 
 /**
- * Etapa 2 · LEARNING (consciente): consolidación supervisada, como el aprendizaje humano.
- *
- * Si la lección tiene workflow borrador, avanza UN step a la vez ejecutándolo por árbol de UI;
- * tras cada step se toma captura y Gemini 3.5 Flash (supervisor) juzga si quedó bien aplicado:
- *  - válido  → el step se marca CONFIRMED (verde): parte definitiva de la "red neuronal"
- *  - fallido → computer use toma el control, se devuelve si hace falta, lo hace él mismo,
- *              y el step queda LLM (rojo); el siguiente step vuelve al árbol de UI.
- * Re-ejecutar el learning reintenta los rojos para seguir consolidando.
- *
- * Sin borrador (lecciones antiguas), corre el modo libre: el agente ejecuta todo el tutorial
- * y las acciones se graban como steps DRAFT (que un learning posterior consolidará).
+ * ETAPA UNIFICADA · EJECUCIÓN. Ya no hay "consciente" vs "subconsciente" como modos separados: es una
+ * sola ejecución donde conviven ambos según el ESTADO de cada step.
+ *  - 🟢 CONFIRMED  → se ejecuta por árbol de UI, sin LLM (subconsciente, rápido y barato).
+ *  - 🟡 DRAFT/🔴 LLM → Gemini 3.5 Flash lo intenta/supervisa; si queda bien pasa a verde (aprende en vivo).
+ * La primera ejecución de una grabación está 100% en borrador; cada corrida sube el % aprendido.
+ * `depth` limita cuántos steps avanzar (ejecución por tramos); `cursor` recuerda dónde seguir.
  */
-class LearningStage(
-    private val brain: ComputerUseBrain,
+class ExecutionStage(
+    private val brain: () -> ComputerUseBrain,
     private val ui: UiSurface,
-    private val user: UserChannel,
+    private val user: UserChannel?,
     private val workflows: WorkflowRepository,
     private val newId: () -> String,
+    private val voice: Voice = NO_VOICE,
+    private val report: RunReporter = NO_REPORT,
     private val log: GraphLog = NO_LOG,
     private val maxTurns: Int = 40,
 ) {
-    suspend fun run(lesson: Lesson): Workflow {
+    /** Ejecuta la lección: usa su workflow borrador si existe; si no, exploración libre con el agente. */
+    suspend fun runLesson(lesson: Lesson): Workflow {
         val draft = workflows.list().lastOrNull { it.lessonId == lesson.id && it.steps.isNotEmpty() }
-        return if (draft != null) supervised(lesson, draft) else freeRun(lesson)
+        return if (draft != null) execute(draft.id).let { workflows.get(draft.id) ?: draft }
+        else freeRun(lesson)
     }
 
-    /* ---------- modo supervisado: workflow por árbol de UI + Gemini como juez ---------- */
+    /**
+     * Corre el workflow (id) con ramas activas y profundidad. Devuelve un texto de resultado (para la CLI).
+     * Aprende en vivo: marca verdes los steps que el árbol de UI aplica bien según el supervisor.
+     */
+    suspend fun execute(
+        id: String,
+        inputs: Map<String, String> = emptyMap(),
+        branches: Set<String> = emptySet(),
+        depth: Int = Int.MAX_VALUE,
+    ): String {
+        val wf0 = workflows.get(id) ?: return "Workflow $id no encontrado"
+        branches.firstOrNull { name -> wf0.branches.none { it.name == name } }
+            ?.let { return "Rama '$it' no existe. Uso: ${wf0.usage()}" }
 
-    private suspend fun supervised(lesson: Lesson, draft: Workflow): Workflow {
-        log.log("learning", "modo supervisado sobre ${draft.id}: ${draft.steps.size} steps")
-        val runner = AgentRunner(brain, ui, user, log)
-        val intro = "Supervisas la repetición paso a paso de un workflow que el usuario enseñó. " +
-            "El sistema ejecuta los pasos por el árbol de accesibilidad; tú solo intervienes cuando " +
-            "un paso falla: si la pantalla quedó en mal estado retrocede (go_back), haz el paso tú " +
-            "mismo y devuelve el control respondiendo únicamente con texto."
-        val steps = draft.steps.toMutableList()
-        fun save() = workflows.save(draft.copy(steps = steps, variables = Workflow.deriveVariables(steps)))
+        val steps = wf0.steps.toMutableList()
+        val start = if (wf0.cursor in 1 until steps.size) wf0.cursor else 0
+        var supervisor: ComputerUseBrain? = null
+        var runner: AgentRunner? = null
+        val lesson = Lesson(id = wf0.id, goal = wf0.name, summary = wf0.purpose)
+        val intro = "Ejecutas y consolidas pasos de un workflow en un teléfono Android real. " +
+            "Haz solo lo que se te pida y devuelve el control respondiendo únicamente con texto. " +
+            "Puedes hablar (speak) o preguntar (ask_user) solo cosas importantes."
 
-        var error: String? = null
-        try {
-            for (i in steps.indices) {
-                val step = steps[i]
-                if (step.status == StepStatus.LLM) {
-                    log.log("learning", "step ${step.order} es rojo → lo ejecuta el agente")
-                    runner.instruct(lesson, intro, "Ejecuta tú el paso ${step.order}: ${describe(step)}. Al terminar responde solo texto.")
-                    // sigue rojo: se reintenta consolidar en el próximo learning
-                    continue
-                }
-                val performed = ui.perform(step, step.value)
-                delay(500)
-                // Un paso de rama que no encuentra su elemento probablemente no aplica en esta
-                // ejecución (p.ej. configuración de primera vez): se conserva sin castigo.
-                if (!performed && step.branch.isNotBlank()) {
-                    log.log("learning", "step ${step.order} (rama ${step.branch}) no aplica ahora → se mantiene 🟡")
-                    continue
-                }
-                val verdict = if (!performed) Verdict(false, "el árbol de UI no encontró o no pudo ejecutar el elemento")
-                else brain.judge(lesson.goal, step, true, ui.state())
-                if (!verdict.applicable && step.branch.isNotBlank()) {
-                    log.log("learning", "step ${step.order} (rama ${step.branch}) no aplicable según el supervisor → 🟡")
-                    continue
-                }
-                if (verdict.valid) {
-                    steps[i] = step.copy(status = StepStatus.CONFIRMED)
-                    log.log("learning", "step ${step.order} CONFIRMADO 🟢 ${describe(step)}")
-                } else {
-                    steps[i] = step.copy(status = StepStatus.LLM)
-                    log.log("learning", "step ${step.order} inválido 🔴 (${verdict.reason.take(80)}) → el agente toma el control")
-                    runner.instruct(lesson, intro,
-                        "El paso ${step.order} (${describe(step)}) falló: ${verdict.reason}. " +
-                            "Si el intento dejó la pantalla en mal estado retrocede primero y hazlo tú. Al terminar responde solo texto.")
-                }
-                save() // progreso vivo: el grafo de la red neuronal se actualiza step a step
-                delay(400)
+        fun persist(cursor: Int) = workflows.save(
+            wf0.copy(steps = steps, variables = Workflow.deriveVariables(steps), cursor = cursor))
+        fun emit(active: Int, note: String) = report.report(
+            wf0.copy(steps = steps), steps.getOrNull(active)?.order ?: -1, note)
+
+        log.log("ejecucion", "▶ ${wf0.id} '${wf0.name}' · ${wf0.learnedPct()}% aprendido · desde step ${start + 1}" +
+            (if (branches.isEmpty()) " · solo tronco" else " · ramas: ${branches.joinToString(",")}") +
+            (if (depth != Int.MAX_VALUE) " · profundidad $depth" else ""))
+        voice.narrate("Vamos con ${wf0.name} 🚀")
+        emit(start, "inicio")
+
+        var advanced = 0
+        var i = start
+        while (i < steps.size && advanced < depth) {
+            val step = steps[i]
+            if (step.branch.isNotBlank() && step.branch !in branches) { i++; continue } // rama desactivada
+            emit(i, "ejecutando")
+
+            val value = if (step.action == ActionType.INPUT)
+                inputs["input_${step.order}"]
+                    ?: wf0.variables.firstOrNull { it.name == "input_${step.order}" }?.default
+                    ?: step.value
+            else step.value
+
+            // 🟢 subconsciente: árbol de UI sin LLM
+            if (step.status == StepStatus.CONFIRMED) {
+                voice.narrate(narrationFor(step))
+                var ok = false; var t = 0
+                while (!ok && t++ < 6) { ok = ui.perform(step, value); if (!ok) delay(500) }
+                log.log("ejecucion", "step ${step.order} 🟢 ${describe(step, value)} → ${if (ok) "ok" else "falló"}")
+                if (!ok) {
+                    steps[i] = step.copy(status = StepStatus.DRAFT) // se desmarca: el próximo paso lo re-consolida
+                    emit(i, "falló-verde")
+                } else emit(i, "ok-verde")
+                if (ok) { advanced++; i++; persist(i); delay(200); continue }
             }
-        } catch (e: Exception) {
-            error = e.message ?: e.toString()
-            log.log("learning", "ERROR: $error")
+
+            // 🟡/🔴 o verde caído: intento por árbol de UI + supervisión de Gemini para aprender
+            voice.narrate(narrationFor(step))
+            val performed = ui.perform(step, value)
+            delay(500)
+            if (!performed && step.branch.isNotBlank()) {
+                log.log("ejecucion", "step ${step.order} (rama ${step.branch}) no aplica ahora → 🟡")
+                advanced++; i++; continue
+            }
+            val sup = supervisor ?: brain().also { supervisor = it }
+            val verdict = if (!performed) Verdict(false, "el árbol de UI no encontró o no pudo ejecutar el elemento")
+            else sup.judge(lesson.goal, step, true, ui.state())
+            if (!verdict.applicable && step.branch.isNotBlank()) {
+                log.log("ejecucion", "step ${step.order} (rama ${step.branch}) no aplicable → 🟡")
+                advanced++; i++; continue
+            }
+            if (verdict.valid) {
+                steps[i] = step.copy(status = StepStatus.CONFIRMED)
+                log.log("ejecucion", "step ${step.order} CONSOLIDADO 🟢 ${describe(step, value)}")
+                emit(i, "aprendido-verde")
+            } else {
+                steps[i] = step.copy(status = StepStatus.LLM)
+                log.log("ejecucion", "step ${step.order} 🔴 (${verdict.reason.take(70)}) → el agente toma el control")
+                emit(i, "reparando-rojo")
+                voice.narrate("Mmm, esto no salió; déjame intentarlo yo 🤔")
+                val r = runner ?: AgentRunner(sup, ui, user, voice, log).also { runner = it }
+                r.instruct(lesson, intro,
+                    "El paso ${step.order} (${describe(step, value)}) falló: ${verdict.reason}. " +
+                        "Si la pantalla quedó mal retrocede primero y hazlo tú. Al terminar responde solo texto.")
+                emit(i, "rojo")
+            }
+            persist(i + 1)
+            advanced++; i++
+            delay(300)
         }
-        save()
+
+        val done = i >= steps.size
+        persist(if (done) 0 else i) // al terminar, el cursor vuelve al inicio
         val green = steps.count { it.status == StepStatus.CONFIRMED }
-        val red = steps.count { it.status == StepStatus.LLM }
-        log.log("learning", "consolidación: 🟢 $green · 🔴 $red · ⚪ ${steps.size - green - red}" +
-            (error?.let { " (interrumpido)" } ?: ""))
-        return draft.copy(steps = steps, variables = Workflow.deriveVariables(steps))
+        val result = "OK · $advanced steps ejecutados · ${green * 100 / maxOf(1, steps.size)}% aprendido" +
+            (if (!done) " · pausado en step ${i + 1} (usa --depth para continuar)" else "") + " (${wf0.id})"
+        log.log("ejecucion", "■ $result")
+        voice.narrate(if (done) "¡Listo! 🎉" else "Pausa por profundidad ✋")
+        emit(if (done) 0 else i, "fin")
+        return result
+    }
+
+    private fun narrationFor(step: Step): String {
+        val what = step.label.ifBlank { step.selector.short() }
+        return when (step.action) {
+            ActionType.LAUNCH -> "Abriendo $what 📲"
+            ActionType.CLICK -> "Toco \"$what\" 👆"
+            ActionType.INPUT -> "Escribo en \"$what\" ⌨️"
+            ActionType.SCROLL -> "Deslizo para ver más 📜"
+            ActionType.KEY -> "Tecla $what"
+            ActionType.WAIT -> "Espero un momento ⏳"
+        }
     }
 
     /* ---------- modo libre (lecciones sin borrador): el agente ejecuta y se graba ---------- */
 
     private suspend fun freeRun(lesson: Lesson): Workflow = coroutineScope {
-        log.log("learning", "modo libre: sin workflow borrador para la lección")
+        log.log("ejecucion", "modo libre: sin workflow borrador para la lección")
+        val brain = brain()
         val steps = mutableListOf<Step>()
         val agentKeys = ArrayDeque<String>()
         val demoCaptured = mutableListOf<Step>()
@@ -228,12 +316,9 @@ class LearningStage(
             val s = step.copy(order = steps.size + 1, source = source)
             steps += s
             if (source == StepSource.AGENT) {
-                agentKeys.addLast(key(s))
-                if (agentKeys.size > 24) agentKeys.removeFirst()
+                agentKeys.addLast(key(s)); if (agentKeys.size > 24) agentKeys.removeFirst()
             }
-            log.log("learning", "step ${s.order} [${source.name}] ${s.action} " +
-                s.label.ifBlank { s.selector.short() } +
-                if (s.value.isNotBlank()) " = \"${s.value.take(40)}\"" else "")
+            log.log("ejecucion", "step ${s.order} [${source.name}] ${s.action} ${s.label.ifBlank { s.selector.short() }}")
         }
 
         ui.setCapturing(true)
@@ -254,11 +339,13 @@ class LearningStage(
             var turns = 0
             while (turns++ < maxTurns) {
                 val turn = brain.next(ui.state(), results)
+                if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
+                if (turn.speech != null) voice.speak(turn.speech)
                 if (turn.text.isNotBlank()) summary = turn.text
-                if (turn.done) { log.log("learning", "fin del agente: ${turn.text.take(120)}"); break }
-
+                if (turn.done) break
                 val out = mutableListOf<String>()
-                for (action in turn.actions) {
+                turn.actions.forEachIndexed { idx, action ->
+                    turn.intents.getOrNull(idx)?.takeIf { it.isNotBlank() }?.let { voice.narrate(it) }
                     val step = when (action) {
                         is AgentAction.ClickAt -> ui.tapAt(action.x, action.y)
                         is AgentAction.TypeAt -> ui.typeAt(action.x, action.y, action.text)
@@ -273,108 +360,32 @@ class LearningStage(
                         "ok" else "no se encontró un elemento para la acción"
                 }
                 results = out
-
                 turn.question?.let { question ->
-                    log.log("learning", "pregunta del agente: $question")
-                    val answer = user.ask(question)
+                    voice.speak(question)
+                    val answer = user?.ask(question) ?: Answer("usa tu mejor criterio")
                     if (answer.demo) {
-                        demoCaptured.clear()
-                        demoMode = true
-                        user.awaitDemoEnd()
-                        ui.setCapturing(false)
-                        ui.setCapturing(true)
-                        delay(300)
-                        demoMode = false
-                        brain.inform(
-                            "El usuario lo demostró en pantalla. Pasos capturados: " +
-                                demoCaptured.joinToString("; ") { "${it.action} ${it.label.ifBlank { it.selector.short() }}" }
-                                    .ifBlank { "(ninguno)" } +
-                                ". Continúa desde el estado actual de la pantalla."
-                        )
-                    } else {
-                        log.log("learning", "respuesta del usuario: ${answer.text.take(80)}")
-                        brain.inform("Respuesta del usuario: ${answer.text}")
-                    }
+                        demoCaptured.clear(); demoMode = true
+                        user?.awaitDemoEnd()
+                        ui.setCapturing(false); ui.setCapturing(true); delay(300); demoMode = false
+                        brain.inform("El usuario lo demostró: " +
+                            demoCaptured.joinToString("; ") { "${it.action} ${it.label.ifBlank { it.selector.short() }}" }.ifBlank { "(nada)" } +
+                            ". Continúa desde el estado actual.")
+                    } else brain.inform("Respuesta del usuario: ${answer.text}")
                 }
                 delay(600)
             }
         } catch (e: Exception) {
-            error = e.message ?: e.toString()
-            log.log("learning", "ERROR: $error")
+            error = e.message ?: e.toString(); log.log("ejecucion", "ERROR: $error")
         }
-        ui.setCapturing(false)
-        delay(300)
-        collector.cancel()
-
+        ui.setCapturing(false); delay(300); collector.cancel()
         if (steps.isEmpty() && error != null) throw IllegalStateException(error)
         val workflow = Workflow(
-            id = newId(),
-            name = lesson.goal.take(60),
+            id = newId(), name = lesson.goal.take(60),
             purpose = summary.ifBlank { lesson.goal } + (error?.let { " (interrumpido: ${it.take(80)})" } ?: ""),
-            lessonId = lesson.id,
-            steps = steps,
-            variables = Workflow.deriveVariables(steps),
+            lessonId = lesson.id, steps = steps, variables = Workflow.deriveVariables(steps),
         )
         workflows.save(workflow)
-        log.log("learning", "workflow ${workflow.id} guardado: ${steps.size} steps DRAFT")
+        log.log("ejecucion", "workflow ${workflow.id} guardado: ${steps.size} steps DRAFT")
         workflow
-    }
-}
-
-/**
- * Etapa 3 · SUBCONSCIENTE: los steps verdes (CONFIRMED) y los borradores se reproducen por árbol
- * de UI, sin LLM; los rojos (LLM) se delegan puntualmente a Gemini computer use.
- */
-class SubconsciousStage(
-    private val ui: UiSurface,
-    private val workflows: WorkflowRepository,
-    private val brainFactory: (() -> ComputerUseBrain)? = null,
-    private val log: GraphLog = NO_LOG,
-) {
-    suspend fun run(id: String, inputs: Map<String, String> = emptyMap(), branches: Set<String> = emptySet()): String {
-        val workflow = workflows.get(id) ?: return "Workflow $id no encontrado"
-        branches.firstOrNull { name -> workflow.branches.none { it.name == name } }
-            ?.let { return "Rama '$it' no existe. Uso: ${workflow.usage()}" }
-        val red = workflow.steps.count { it.status == StepStatus.LLM }
-        log.log("subconsciente", "ejecutando ${workflow.id}: ${workflow.steps.size} steps ($red rojos)" +
-            if (branches.isEmpty()) " · solo tronco" else " · ramas activas: ${branches.joinToString(",")}")
-        var runner: AgentRunner? = null
-        var executed = 0
-        for (step in workflow.steps) {
-            if (step.branch.isNotBlank() && step.branch !in branches) continue // rama desactivada
-            executed++
-            val value = if (step.action == ActionType.INPUT)
-                inputs["input_${step.order}"]
-                    ?: workflow.variables.firstOrNull { it.name == "input_${step.order}" }?.default
-                    ?: step.value
-            else step.value
-
-            if (step.status == StepStatus.LLM) {
-                val factory = brainFactory
-                    ?: return "Step ${step.order} requiere Gemini y no hay modelo configurado"
-                val r = runner ?: AgentRunner(factory(), ui, null, log).also { runner = it }
-                log.log("subconsciente", "step ${step.order} rojo → delegado a Gemini: ${describe(step, value)}")
-                r.instruct(
-                    Lesson(id = workflow.id, goal = workflow.name, summary = workflow.purpose),
-                    "Ejecutas pasos puntuales de un workflow ya aprendido en un teléfono Android real. " +
-                        "Haz SOLO lo que se te pida en cada mensaje y devuelve el control respondiendo únicamente con texto.",
-                    "Ejecuta este paso: ${describe(step, value)}. Al terminar responde solo texto.",
-                )
-                delay(250)
-                continue
-            }
-
-            var ok = false
-            var tries = 0
-            while (!ok && tries++ < 8) {
-                ok = ui.perform(step, value)
-                if (!ok) delay(600)
-            }
-            log.log("subconsciente", "step ${step.order} ${step.action} ${step.label.ifBlank { step.selector.short() }} → ${if (ok) "ok" else "FALLO tras $tries intentos"}")
-            if (!ok) return "Fallo en step ${step.order}: ${step.action} ${step.label.ifBlank { step.selector.short() }}"
-            delay(250)
-        }
-        return "OK · $executed steps ejecutados (${workflow.id})" +
-            if (branches.isNotEmpty()) " con ramas ${branches.joinToString(",")}" else ""
     }
 }

@@ -65,11 +65,18 @@ data class Workflow(
     val steps: List<Step> = emptyList(),
     val variables: List<Variable> = emptyList(),
     val branches: List<Branch> = emptyList(),
+    /** Índice del próximo step a ejecutar (para --depth: ejecuciones por tramos). 0 = desde el inicio. */
+    val cursor: Int = 0,
 ) {
-    /** Firma de uso en terminal, p.ej.: graph run wf_x [--branch configurar_direccion] --input_3="..." */
+    /** Firma de uso en terminal, p.ej.: graph run wf_x [--branch configurar_direccion] --depth 5 --input_3="..." */
     fun usage() = "graph run $id" +
         branches.joinToString("") { " [--branch ${it.name}]" } +
+        " [--depth N]" +
         variables.joinToString("") { " --${it.name}=\"...\"" }
+
+    /** % consolidado de forma subconsciente (steps verdes sobre el total). */
+    fun learnedPct() = if (steps.isEmpty()) 0
+    else steps.count { it.status == StepStatus.CONFIRMED } * 100 / steps.size
 
     companion object {
         /** Igual que en Graph: cada INPUT se vuelve una variable `input_<order>` parametrizable desde la CLI. */

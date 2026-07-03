@@ -5,8 +5,10 @@ import android.content.SharedPreferences
 import com.zevcorp.graph.platform.*
 import graph.core.application.*
 import graph.core.domain.Lesson
+import graph.core.domain.RunReporter
 import graph.core.domain.UiSurface
 import graph.core.domain.UserChannel
+import graph.core.domain.Voice
 import graph.core.domain.Workflow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -37,36 +39,55 @@ class GraphApp : Application() {
             .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
     })
 
+    private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
+    // Voz dinámica: siempre reenvía a la burbuja viva del momento (o no-op si no hay).
+    private val voice = object : Voice {
+        override fun narrate(text: String) { bubble?.narrate(text) }
+        override fun speak(text: String) { bubble?.speak(text) }
+    }
+    val dashboard by lazy { DashboardSync(prefs, scope) }
+    private val reporter = RunReporter { wf, active, note -> dashboard.report(wf, active, note) }
+
     val teaching by lazy {
         TeachingStage(DroidScreenRecorder(this), GeminiTutorialAnalyzer(apiKey, model),
-            lessons, workflows, { ui }, newId, GeminiCurator(apiKey, model), LogBus)
+            lessons, workflows, { ui }, newId, GeminiCurator(apiKey, model),
+            brain = ::newBrain, voice = voice, user = bubble, log = LogBus)
     }
 
-    private fun bubbleCompanion(on: Boolean) = (ui as? GraphAccessibilityService)?.bubble?.companion(on)
+    private fun execution(user: UserChannel?) = ExecutionStage(
+        brain = ::newBrain,
+        ui = requireNotNull(ui) { "Servicio de accesibilidad inactivo" },
+        user = user,
+        workflows = workflows,
+        newId = newId,
+        voice = voice,
+        report = reporter,
+        log = LogBus,
+    )
 
-    /** Etapa 2 con la burbuja en modo acompañante (vuela a cada clic, pass-through, se restaura al final). */
+    private fun bubbleCompanion(on: Boolean) = bubble?.companion(on)
+
+    /** Ejecuta la lección (con burbuja acompañante). Aprende en vivo sobre el workflow. */
     suspend fun runLearning(lesson: Lesson, user: UserChannel): Workflow {
-        val stage = LearningStage(
-            brain = newBrain(),
-            ui = requireNotNull(ui) { "Servicio de accesibilidad inactivo" },
-            user = user,
-            workflows = workflows,
-            newId = newId,
-            log = LogBus,
-        )
         bubbleCompanion(true)
         try {
-            return stage.run(lesson)
+            return execution(user).runLesson(lesson)
         } finally {
             bubbleCompanion(false)
         }
     }
 
-    suspend fun runWorkflow(id: String, inputs: Map<String, String>, branches: Set<String> = emptySet()): String {
-        val surface = ui ?: return "Servicio de accesibilidad inactivo: actívalo en Ajustes"
+    /** Ejecución unificada por id (terminal/UI): verdes por árbol de UI, no-verdes con Gemini. */
+    suspend fun runWorkflow(
+        id: String,
+        inputs: Map<String, String>,
+        branches: Set<String> = emptySet(),
+        depth: Int = Int.MAX_VALUE,
+    ): String {
+        if (ui == null) return "Servicio de accesibilidad inactivo: actívalo en Ajustes"
         bubbleCompanion(true)
         try {
-            return SubconsciousStage(surface, workflows, ::newBrain, LogBus).run(id, inputs, branches)
+            return execution(bubble).execute(id, inputs, branches, depth)
         } finally {
             bubbleCompanion(false)
         }

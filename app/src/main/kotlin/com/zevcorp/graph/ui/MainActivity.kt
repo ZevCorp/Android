@@ -82,6 +82,16 @@ class MainActivity : Activity(), UserChannel {
         setup.addView(setupRow)
         setup.gap(dp(6))
         setup.addView(caption("Al activar accesibilidad aparece la burbuja flotante: Graph te acompaña en cualquier app."))
+        if (app.dashboard.enabled) {
+            setup.gap(dp(8))
+            setup.addView(button("📊 Dashboard en vivo") {
+                val url = app.dashboard.shareUrl
+                val cm = getSystemService(android.content.ClipboardManager::class.java)
+                cm.setPrimaryClip(android.content.ClipData.newPlainText("graph-dashboard", url))
+                startActivity(Intent(Intent.ACTION_VIEW, android.net.Uri.parse(url)))
+                Toast.makeText(this, "URL copiada · ábrela en tu PC para ver la ejecución en vivo", Toast.LENGTH_LONG).show()
+            })
+        }
         root.addView(setup)
         root.gap(dp(14))
 

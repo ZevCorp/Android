@@ -67,6 +67,12 @@ class BrainTurn(
     val question: String? = null,
     val done: Boolean = false,
     val text: String = "",
+    /** Narración con personalidad de lo que hará/piensa (globo de diálogo de la carita). */
+    val narration: String = "",
+    /** Frase que el asistente quiere DECIR en voz alta (solo cosas importantes). */
+    val speech: String? = null,
+    /** intent por acción, para narrar en tiempo real cada paso. */
+    val intents: List<String> = emptyList(),
 )
 
 class Verdict(val valid: Boolean, val reason: String = "", val applicable: Boolean = true)
@@ -79,6 +85,28 @@ interface ComputerUseBrain {
     fun inform(message: String)
     /** Supervisor del learning: juzga si un step reproducido por árbol de UI quedó bien aplicado. */
     suspend fun judge(goal: String, step: Step, performed: Boolean, state: ScreenState): Verdict
+    /**
+     * Observador en vivo durante el Teaching: mira la pantalla mientras el usuario enseña y puede
+     * hablar (speak) o preguntar algo importante (ask_user). No ejecuta acciones. Devuelve null si no
+     * tiene nada que decir en este momento.
+     */
+    suspend fun observe(lesson: Lesson, state: ScreenState, recentActions: List<String>): BrainTurn?
+}
+
+/**
+ * Canal de voz/narración del asistente hacia el usuario (TTS + globo de diálogo).
+ * Disponible en cualquier etapa; la voz se usa solo para lo importante.
+ */
+interface Voice {
+    /** Globo de diálogo silencioso (narración con personalidad del paso actual). */
+    fun narrate(text: String)
+    /** Habla en voz alta (y también muestra el globo). */
+    fun speak(text: String)
+}
+
+/** Reporta el estado de la ejecución en vivo (dashboard en tiempo real + narración). */
+fun interface RunReporter {
+    fun report(workflow: Workflow, activeOrder: Int, note: String)
 }
 
 /* ---------- Feedback del usuario durante Learning ---------- */
