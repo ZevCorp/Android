@@ -45,14 +45,18 @@ class FileWorkflowRepo(private val root: File) : WorkflowRepository {
             }
             if (w.variables.isNotEmpty()) {
                 appendLine("\n### Variables")
-                w.variables.forEach { appendLine("- `${it.name}`: field=\"${it.field}\" (default: `${it.default}`)") }
+                w.variables.forEach {
+                    val opts = if (it.options.isNotEmpty()) " · options: ${it.options.joinToString(", ")}" else " (free text)"
+                    appendLine("- `${it.name}`: field=\"${it.field}\" (default: `${it.default}`)$opts")
+                }
             }
             appendLine("\n### Steps")
             w.steps.forEach { s ->
                 val value = if (s.value.isNotBlank()) " | value=\"${s.value}\"" else ""
                 val status = when (s.status) { StepStatus.CONFIRMED -> "🟢"; StepStatus.LLM -> "🔴"; StepStatus.DRAFT -> "🟡" }
                 val branch = if (s.branch.isNotBlank()) " | rama=${s.branch}" else ""
-                appendLine("- ${s.order}. $status ${s.action} ${s.selector.short()} | label=\"${s.label}\"$value$branch | screen=${s.screen} | source=${s.source}")
+                val peers = if (s.peers.isNotEmpty()) " | pick_${s.order} entre: ${s.peers.joinToString(", ")}" else ""
+                appendLine("- ${s.order}. $status ${s.action} ${s.selector.short()} | label=\"${s.label}\"$value$branch$peers | screen=${s.screen} | source=${s.source}")
             }
         }
     }

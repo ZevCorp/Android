@@ -49,14 +49,27 @@ data class Step(
     val status: StepStatus = StepStatus.DRAFT,
     /** "" = tronco (siempre se ejecuta); nombre de rama = solo si la rama se activa (--branch <name>). */
     val branch: String = "",
+    /**
+     * Elementos "paralelos"/variantes del mismo tipo vistos en el mismo contenedor al grabar
+     * (como los alternativeTargets de Graph): los otros números de la calculadora, los otros
+     * sabores de pizza… Si no está vacío, este CLICK es un punto de selección: se puede pedir
+     * otra de estas etiquetas y se ejecuta con la misma velocidad aprendida.
+     */
+    val peers: List<String> = emptyList(),
 )
 
 /** Rama opcional/situacional del workflow (bifurcación que se reincorpora al tronco). */
 @Serializable
 data class Branch(val name: String, val description: String = "")
 
+/** Variable de la CLI: si `options` no está vacío es una SELECCIÓN (pick) entre paralelos; si no, texto libre (input). */
 @Serializable
-data class Variable(val name: String, val field: String, val default: String)
+data class Variable(
+    val name: String,
+    val field: String,
+    val default: String,
+    val options: List<String> = emptyList(),
+)
 
 @Serializable
 data class Workflow(
@@ -81,10 +94,23 @@ data class Workflow(
     else steps.count { it.status == StepStatus.CONFIRMED } * 100 / steps.size
 
     companion object {
-        /** Igual que en Graph: cada INPUT se vuelve una variable `input_<order>` parametrizable desde la CLI. */
-        fun deriveVariables(steps: List<Step>) = steps
-            .filter { it.action == ActionType.INPUT }
-            .map { Variable("input_${it.order}", it.label.ifBlank { it.selector.short() }, it.value) }
+        /**
+         * Variables parametrizables desde la CLI, como en Graph:
+         *  - cada INPUT → `input_<order>` (texto libre).
+         *  - cada CLICK con paralelos → `pick_<order>` (selección: default = lo aprendido, options = peers).
+         */
+        fun deriveVariables(steps: List<Step>): List<Variable> = steps.mapNotNull { s ->
+            when {
+                s.action == ActionType.INPUT ->
+                    Variable("input_${s.order}", s.label.ifBlank { s.selector.short() }, s.value)
+                s.action == ActionType.CLICK && s.peers.isNotEmpty() -> {
+                    val chosen = s.label.ifBlank { s.selector.short() }
+                    val options = (listOf(chosen) + s.peers).filter { it.isNotBlank() }.distinct()
+                    Variable("pick_${s.order}", chosen, chosen, options)
+                }
+                else -> null
+            }
+        }
     }
 }
 

@@ -144,7 +144,36 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         value = value,
         label = node?.let { labelOf(it) } ?: "",
         screen = currentScreen(),
+        peers = if (action == ActionType.CLICK && node != null) collectPeers(node) else emptyList(),
     )
+
+    /**
+     * Elementos "paralelos" del nodo clickeado (como collectAlternativeTargets de Graph): sube por
+     * los ancestros y, cuando un contenedor tiene ≥2 hijos clickeables del MISMO tipo (className),
+     * devuelve sus etiquetas. Así "5" trae ["0".."9","+","−","×","="] y "pepperoni" trae los otros sabores.
+     */
+    private fun collectPeers(node: AccessibilityNodeInfo): List<String> {
+        val cls = node.className?.toString() ?: return emptyList()
+        val mine = labelOf(node)
+        var ancestor = node.parent
+        var depth = 0
+        while (ancestor != null && depth < 5) {
+            val siblings = LinkedHashSet<String>()
+            fun scan(n: AccessibilityNodeInfo?) {
+                n ?: return
+                if (n.className?.toString() == cls && (n.isClickable || n.parent?.isClickable == true)) {
+                    val l = labelOf(n)
+                    if (l.isNotBlank() && l != mine) siblings += l
+                }
+                for (i in 0 until n.childCount) scan(n.getChild(i))
+            }
+            scan(ancestor)
+            if (siblings.size >= 2) return siblings.take(24).toList()
+            ancestor = ancestor.parent
+            depth++
+        }
+        return emptyList()
+    }
 
     /* ---------- Búsqueda en el árbol ---------- */
 
@@ -164,6 +193,21 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         }
         walk(root)
         return byDesc
+    }
+
+    /** Localiza un paralelo por su etiqueta (texto o contentDesc), para ejecutar una variante. */
+    private fun findByLabel(label: String): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        root.findAccessibilityNodeInfosByText(label)?.firstOrNull { it.text?.toString() == label }?.let { return it }
+        var byDesc: AccessibilityNodeInfo? = null
+        fun walk(n: AccessibilityNodeInfo?) {
+            n ?: return
+            if (byDesc == null && (n.contentDescription?.toString() == label ||
+                    n.viewIdResourceName?.substringAfterLast('/') == label)) byDesc = n
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return byDesc ?: root.findAccessibilityNodeInfosByText(label)?.firstOrNull()
     }
 
     private fun nodeAt(x: Int, y: Int): AccessibilityNodeInfo? {
@@ -262,8 +306,10 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     override suspend fun perform(step: Step, value: String): Boolean = when (step.action) {
         ActionType.LAUNCH -> launch(step.selector.pkg.ifBlank { step.label }) != null
         ActionType.CLICK -> {
-            // Solo por árbol de UI: si no se encuentra el nodo, falla (se degrada / lo hace Gemini).
-            val target = clickableAncestor(find(step.selector)) ?: find(step.selector)
+            // value = variante pedida (pick): se localiza ese paralelo por su etiqueta en el árbol vivo.
+            // Sin value, se usa el selector aprendido. Nunca por coordenadas guardadas.
+            val found = if (value.isNotBlank() && value != step.label) findByLabel(value) else find(step.selector)
+            val target = clickableAncestor(found) ?: found
             if (target == null) false
             else {
                 val r = Rect().also { target.getBoundsInScreen(it) }

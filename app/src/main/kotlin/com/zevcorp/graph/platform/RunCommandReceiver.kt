@@ -40,20 +40,24 @@ class RunCommandReceiver : BroadcastReceiver() {
                 Log.i(TAG, "aprendido: ${w.learnedPct()}% subconsciente (verde) · cursor en step ${w.cursor + 1}")
                 Log.i(TAG, "uso: ${w.usage()}")
                 w.branches.forEach { Log.i(TAG, "rama --branch ${it.name}: ${it.description}") }
-                w.variables.forEach { Log.i(TAG, "variable --${it.name}: ${it.field} (default: \"${it.default}\")") }
+                w.variables.forEach {
+                    val opts = if (it.options.isNotEmpty()) " · opciones: ${it.options.joinToString(", ")}" else " (texto libre)"
+                    Log.i(TAG, "variable --${it.name}: ${it.field} (default: \"${it.default}\")$opts")
+                }
                 w.steps.forEach { s ->
                     val status = when (s.status) {
                         graph.core.domain.StepStatus.CONFIRMED -> "verde"; graph.core.domain.StepStatus.LLM -> "rojo"; else -> "draft"
                     }
+                    val pick = if (s.peers.isNotEmpty()) " [pick_${s.order}: ${s.peers.take(8).joinToString(",")}${if (s.peers.size > 8) "…" else ""}]" else ""
                     Log.i(TAG, "step ${s.order} [$status]${if (s.branch.isNotBlank()) " [rama ${s.branch}]" else ""}: " +
-                        "${s.action} ${s.label.ifBlank { s.selector.short() }}")
+                        "${s.action} ${s.label.ifBlank { s.selector.short() }}$pick")
                 }
             }
 
             "com.zevcorp.graph.RUN" -> {
                 val id = intent.getStringExtra("id") ?: return
                 val inputs = intent.extras?.keySet().orEmpty()
-                    .filter { it.startsWith("input_") }
+                    .filter { it.startsWith("input_") || it.startsWith("pick_") }
                     .associateWith { intent.getStringExtra(it) ?: "" }
                 val branches = intent.getStringExtra("branches")?.split(',')
                     ?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()

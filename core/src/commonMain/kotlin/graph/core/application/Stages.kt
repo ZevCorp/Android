@@ -236,11 +236,16 @@ class ExecutionStage(
             if (step.branch.isNotBlank() && step.branch !in branches) { i++; continue } // rama desactivada
             emit(i, "ejecutando")
 
-            val value = if (step.action == ActionType.INPUT)
-                inputs["input_${step.order}"]
-                    ?: wf0.variables.firstOrNull { it.name == "input_${step.order}" }?.default
-                    ?: step.value
-            else step.value
+            val value = when {
+                step.action == ActionType.INPUT ->
+                    inputs["input_${step.order}"]
+                        ?: wf0.variables.firstOrNull { it.name == "input_${step.order}" }?.default
+                        ?: step.value
+                // CLICK con paralelos: si se pide una variante (pick_N) se ejecuta ESA; si no, la aprendida.
+                step.action == ActionType.CLICK && step.peers.isNotEmpty() ->
+                    inputs["pick_${step.order}"] ?: step.label
+                else -> step.value
+            }
 
             // 🟢 subconsciente: árbol de UI sin LLM
             if (step.status == StepStatus.CONFIRMED) {

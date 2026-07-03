@@ -26,6 +26,16 @@ cli/graph run wf_1778724462696 --branch configurar_direccion --input_5="pizza"  
 
 Los steps 🟢 corren por árbol de UI sin LLM; los 🔴 se delegan puntualmente a Gemini 3.5 Flash.
 
+## Variantes con `pick_N` (paralelos)
+
+Cada CLICK sobre un elemento que tiene "paralelos" (otros del mismo tipo en el mismo contenedor: números, sabores, tallas) genera una variable de selección `pick_<order>`. `graph info` lista sus opciones; puedes ejecutar cualquier variante con la misma velocidad aprendida:
+
+```bash
+cli/graph info wf_calc
+#   variable --pick_3: 5 (default: "5") · opciones: 5, 0, 1, 2, 3, 4, 6, 7, 8, 9, +, −, ×, =
+cli/graph run wf_calc --pick_1=3 --pick_2=× --pick_3=9   # ejecuta 3×9 aunque enseñaste 5+6+7
+```
+
 ## Otros comandos
 
 ```bash

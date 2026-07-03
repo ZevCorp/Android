@@ -6,6 +6,17 @@ Es el mismo principio del repo [Graph](https://github.com/Joseph1356K/Graph) (ex
 
 > **Una sola ejecución, estado por step.** Ya no hay "consciente" vs "subconsciente" como modos separados: es **una sola ejecución** donde conviven ambos según el ESTADO de cada step. 🟢 verde = se hace por árbol de UI sin LLM (subconsciente); 🟡🔴 = Gemini 3.5 Flash lo hace y, si sale bien, pasa a verde. La primera vez que grabas está 100% en borrador; cada corrida sube el % aprendido. Puedes verlo en vivo en el **dashboard**.
 
+## Variantes: una acción, muchas ejecuciones (como Graph)
+
+Cada CLICK guarda también sus **paralelos**: los elementos del mismo tipo vistos en el mismo contenedor del árbol de UI (los otros números de la calculadora, los otros sabores de pizza). Igual que los `alternativeTargets` de Graph. Así un step deja de ser "clic en el 5" y se vuelve un **punto de selección** `pick_<order>`: puedes ejecutar cualquier variante con la **misma velocidad aprendida**, sin volver a enseñar.
+
+```bash
+cli/graph info wf_calc      # muestra pick_3: opciones 0,1,…,9,+,−,×,= (default 5)
+cli/graph run wf_calc --pick_1=3 --pick_2=× --pick_3=9   # 3×9 aunque enseñaste 5+6+7
+```
+
+En ejecución, el paralelo pedido se localiza por su etiqueta en el árbol de UI vivo (nunca por coordenadas). Un LLM que opere la terminal lee `graph info`, ve las opciones y mapea "haz 3×9" a los `--pick_N` — el mismo patrón guide→LLM de Graph.
+
 ## Pídele algo (sin video)
 
 Además de enseñarle grabando, puedes **pedirle directamente lo que quieras** por texto o voz desde la barra de chat de la burbuja (o de la app). No cambia el motor: se ejecuta con Gemini 3.5 Flash computer use y, como cualquier ejecución, va **alimentando el aprendizaje por workflow** (graba steps que un learning posterior consolida en verde). La burbuja tiene: barra de chat, 🎤 micrófono para dictar el prompt y ✏️ un botón pequeño para enseñarle con la pantalla.
