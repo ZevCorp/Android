@@ -12,6 +12,7 @@ import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zevcorp.graph.GraphApp
+import com.zevcorp.graph.ui.FloatingBubble
 import graph.core.domain.*
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
@@ -32,12 +33,16 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     @Volatile private var capturing = false
     private val pendingInputs = LinkedHashMap<String, Step>()
 
+    private var bubble: FloatingBubble? = null
+
     override fun onServiceConnected() {
         GraphApp.instance.ui = this
+        bubble = FloatingBubble(this).also { it.show() }
     }
 
     override fun onDestroy() {
         if (GraphApp.instance.ui === this) GraphApp.instance.ui = null
+        bubble?.destroy()
         super.onDestroy()
     }
 

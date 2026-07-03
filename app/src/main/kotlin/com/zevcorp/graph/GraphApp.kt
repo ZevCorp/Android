@@ -19,7 +19,10 @@ class GraphApp : Application() {
     /** La superficie de UI viva mientras el servicio de accesibilidad esté activo. */
     @Volatile var ui: UiSurface? = null
 
-    private val apiKey = { prefs.getString("apiKey", "") ?: "" }
+    /** Grabación de tutorial en curso (compartido entre la app y la burbuja flotante). */
+    @Volatile var teachingActive = false
+
+    private val apiKey = { prefs.getString("apiKey", DEFAULT_API_KEY)?.ifBlank { DEFAULT_API_KEY } ?: DEFAULT_API_KEY }
     private val model = { prefs.getString("model", "gemini-3.5-flash") ?: "gemini-3.5-flash" }
 
     val lessons by lazy { FileLessonRepo(filesDir) }
@@ -49,5 +52,10 @@ class GraphApp : Application() {
         prefs = getSharedPreferences("graph", MODE_PRIVATE)
     }
 
-    companion object { lateinit var instance: GraphApp }
+    companion object {
+        lateinit var instance: GraphApp
+
+        /** API key por defecto (proyecto "Devable AI"), inyectada al compilar desde apikey.properties — nunca vive en git. */
+        const val DEFAULT_API_KEY = BuildConfig.DEFAULT_API_KEY
+    }
 }

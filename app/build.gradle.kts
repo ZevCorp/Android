@@ -3,6 +3,12 @@ plugins {
     kotlin("android")
 }
 
+// API key por defecto embebida en el APK (nunca en git): apikey.properties o env GRAPH_API_KEY.
+val defaultApiKey = rootProject.file("apikey.properties")
+    .takeIf { it.exists() }
+    ?.readLines()?.firstOrNull { it.startsWith("apiKey=") }?.substringAfter("=")?.trim()
+    ?: System.getenv("GRAPH_API_KEY") ?: ""
+
 android {
     namespace = "com.zevcorp.graph"
     compileSdk = 35
@@ -10,9 +16,11 @@ android {
         applicationId = "com.zevcorp.graph"
         minSdk = 30
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1"
+        versionCode = 2
+        versionName = "0.2"
+        buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
     }
+    buildFeatures { buildConfig = true }
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17

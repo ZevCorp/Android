@@ -20,12 +20,21 @@ Es el mismo principio del repo [Graph](https://github.com/Joseph1356K/Graph) (ex
        --es id wf_1778724462696 --es input_3 "Juan"
    ```
 
+## La burbuja flotante
+
+Al activar el servicio de accesibilidad aparece **la carita de Graph** (la misma del asistente del repo Graph) como burbuja flotante permanente sobre cualquier app — es un overlay de accesibilidad (`TYPE_ACCESSIBILITY_OVERLAY`), sin permisos extra. Es arrastrable y desde ella se maneja todo:
+
+- ⏺ **grabar/detener** un tutorial (Teaching)
+- 🎓 lanzar el **Learning** de una lección
+- ⚡ ejecutar **workflows** subconscientes
+- Durante el Learning la burbuja se oculta (para no salir en las capturas del agente) y reaparece cuando el asistente tiene una duda: respondes por texto, **voz** (SpeechRecognizer, sin abrir la app) o **demostrándolo**; en modo demo, tocar la burbuja ✅ marca que terminaste.
+
 ## Puesta en marcha
 
-1. Compila e instala: `./gradlew :app:assembleDebug && adb install app/build/outputs/apk/debug/app-debug.apk` (o `gradle` si no usas wrapper).
-2. Abre **Graph**, pega tu **Gemini API key** (o `cli/graph set-key <KEY>`).
-3. Activa el **servicio de accesibilidad** de Graph (botón en la app).
-4. Etapa 1: graba un tutorial → Etapa 2: tócale *Aprender* → Etapa 3: ejecútalo desde la terminal.
+1. Compila e instala: `./gradlew :app:assembleDebug && adb install app/build/outputs/apk/debug/app-debug.apk`.
+2. Abre **Graph**: trae una API key por defecto (proyecto *Devable AI*); puedes reemplazarla en la app o con `cli/graph set-key <KEY>`.
+3. Activa el **servicio de accesibilidad** de Graph (botón en la app) → aparece la burbuja.
+4. Etapa 1: graba un tutorial → Etapa 2: tócale *Aprender* → Etapa 3: ejecútalo desde la terminal o la burbuja.
 
 El catálogo legible de workflows (formato `WORKFLOWS.md`, como en Graph) se regenera en cada guardado:
 `adb shell run-as com.zevcorp.graph cat files/WORKFLOWS.md`

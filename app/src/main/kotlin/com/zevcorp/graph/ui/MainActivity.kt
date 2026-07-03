@@ -3,14 +3,17 @@ package com.zevcorp.graph.ui
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
-import android.graphics.Typeface
 import android.media.projection.MediaProjectionManager
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
 import android.text.InputType
 import android.view.View
-import android.widget.*
+import android.widget.EditText
+import android.widget.LinearLayout
+import android.widget.ScrollView
+import android.widget.TextView
+import android.widget.Toast
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.RecorderService
 import graph.core.domain.Answer
@@ -27,71 +30,122 @@ class MainActivity : Activity(), UserChannel {
     private lateinit var logView: TextView
     private lateinit var lessonsPanel: LinearLayout
     private lateinit var workflowsPanel: LinearLayout
-    private lateinit var btnTeach: Button
-    private lateinit var btnEndDemo: Button
-    private var teaching = false
+    private lateinit var btnTeach: TextView
+    private lateinit var btnEndDemo: View
     private var demoEnd: CompletableDeferred<Unit>? = null
     private var voiceCallback: ((String) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        val pad = (16 * resources.displayMetrics.density).toInt()
-        val root = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(pad, pad, pad, pad) }
-        fun section(text: String) = root.addView(TextView(this).apply {
-            this.text = text; textSize = 16f; setTypeface(null, Typeface.BOLD); setPadding(0, pad, 0, 8)
-        })
+        window.statusBarColor = Palette.bg
+        window.navigationBarColor = Palette.bg
 
+        val root = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Palette.bg)
+            setPadding(dp(18), dp(24), dp(18), dp(24))
+        }
+
+        // Header: carita + nombre
+        val header = row()
+        header.addView(FaceView(this), LinearLayout.LayoutParams(dp(56), dp(56)))
+        val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0) }
+        titles.addView(title("Graph", 22f))
+        titles.addView(caption("Te ve enseñar · aprende haciendo · lo hace en automático"))
+        header.addView(titles)
+        root.addView(header)
+        root.gap(dp(16))
+
+        // Card 0: configuración
+        val setup = card()
         val keyInput = EditText(this).apply {
             hint = "Gemini API key"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(app.prefs.getString("apiKey", ""))
+            setText(app.prefs.getString("apiKey", GraphApp.DEFAULT_API_KEY))
+            setTextColor(Palette.text)
+            setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
         }
-        root.addView(keyInput)
-        root.addView(Button(this).apply {
-            text = "Guardar API key"
-            setOnClickListener {
-                app.prefs.edit().putString("apiKey", keyInput.text.toString().trim()).apply()
-                log("API key guardada")
-            }
-        })
-        root.addView(Button(this).apply {
-            text = "Activar servicio de accesibilidad"
-            setOnClickListener { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)) }
-        })
+        setup.addView(keyInput)
+        setup.gap(dp(8))
+        val setupRow = row()
+        setupRow.addView(button("Guardar key") {
+            app.prefs.edit().putString("apiKey", keyInput.text.toString().trim()).apply()
+            log("API key guardada")
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        setupRow.addView(View(this), LinearLayout.LayoutParams(dp(8), 1))
+        setupRow.addView(button("Accesibilidad") {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }, LinearLayout.LayoutParams(0, -2, 1f))
+        setup.addView(setupRow)
+        setup.gap(dp(6))
+        setup.addView(caption("Al activar accesibilidad aparece la burbuja flotante: Graph te acompaña en cualquier app."))
+        root.addView(setup)
+        root.gap(dp(14))
 
-        section("1 · Teaching — enséñale grabando tu pantalla")
-        btnTeach = Button(this).apply { text = "⏺ Grabar tutorial"; setOnClickListener { toggleTeach() } }
-        root.addView(btnTeach)
+        // Card 1: Teaching
+        root.addView(stageCard("1", "Teaching", "Graba tu pantalla y nárralo: Graph entiende qué enseñaste.") { c ->
+            btnTeach = button("⏺ Grabar tutorial", primary = true) { toggleTeach() }
+            c.addView(btnTeach)
+        })
+        root.gap(dp(14))
 
-        section("2 · Learning — Gemini lo ejecuta y aprende el workflow")
-        lessonsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(lessonsPanel)
-        btnEndDemo = Button(this).apply {
-            text = "✅ Terminar demostración"
-            visibility = View.GONE
-            setOnClickListener {
-                visibility = View.GONE
+        // Card 2: Learning
+        root.addView(stageCard("2", "Learning", "Gemini 3.5 Flash lo ejecuta con computer use y graba el workflow. Si duda, te pregunta (texto, voz o demo).") { c ->
+            lessonsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            c.addView(lessonsPanel)
+            btnEndDemo = button("✅ Terminar demostración", primary = true) {
+                (btnEndDemo as View).visibility = View.GONE
                 moveTaskToBack(true)
                 scope.launch { delay(400); demoEnd?.complete(Unit) }
-            }
-        }
-        root.addView(btnEndDemo)
-
-        section("3 · Subconsciente — ejecuta workflows sin LLM")
-        workflowsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
-        root.addView(workflowsPanel)
-        root.addView(TextView(this).apply {
-            textSize = 12f
-            text = "Desde la terminal: cli/graph run <wf_id> --input_N=\"valor\" (ver CLI.md)"
+            }.apply { visibility = View.GONE }
+            c.addView(btnEndDemo)
         })
+        root.gap(dp(14))
 
-        section("Registro")
-        logView = TextView(this).apply { textSize = 12f }
-        root.addView(logView)
+        // Card 3: Subconsciente
+        root.addView(stageCard("3", "Subconsciente", "Workflows aprendidos, sin LLM: rápidos, baratos y confiables. También desde la terminal (CLI.md).") { c ->
+            workflowsPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+            c.addView(workflowsPanel)
+        })
+        root.gap(dp(14))
 
-        setContentView(ScrollView(this).apply { addView(root) })
+        // Registro
+        val logCard = card()
+        logCard.addView(caption("REGISTRO"))
+        logCard.gap(dp(6))
+        logView = TextView(this).apply { textSize = 12f; setTextColor(Palette.textDim) }
+        logCard.addView(logView)
+        root.addView(logCard)
+
+        setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
         requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO, android.Manifest.permission.POST_NOTIFICATIONS), 3)
         refresh()
+        handleIntent(intent)
+    }
+
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        handleIntent(intent)
+    }
+
+    /** La burbuja flotante pide iniciar la grabación (el consentimiento de MediaProjection exige una Activity). */
+    private fun handleIntent(intent: Intent?) {
+        if (intent?.getStringExtra("action") == "teach" && !app.teachingActive) toggleTeach()
+    }
+
+    private fun stageCard(number: String, name: String, description: String, content: (LinearLayout) -> Unit): LinearLayout {
+        val c = card()
+        val head = row()
+        head.addView(pill(" $number "))
+        head.addView(title(name).apply { setPadding(dp(8), 0, 0, 0) })
+        c.addView(head)
+        c.gap(dp(4))
+        c.addView(caption(description))
+        c.gap(dp(10))
+        content(c)
+        return c
     }
 
     private fun log(message: String) = runOnUiThread {
@@ -102,32 +156,30 @@ class MainActivity : Activity(), UserChannel {
         val lessons = withContext(Dispatchers.IO) { app.lessons.list() }
         val workflows = withContext(Dispatchers.IO) { app.workflows.list() }
         lessonsPanel.removeAllViews()
-        lessons.forEach { lesson ->
-            lessonsPanel.addView(Button(this@MainActivity).apply {
-                text = "🎓 Aprender: ${lesson.goal.take(48)}"
-                setOnClickListener { learn(lesson) }
-            })
+        lessons.reversed().forEach { lesson ->
+            lessonsPanel.addView(button("🎓 ${lesson.goal.take(44)}") { learn(lesson) })
+            lessonsPanel.gap(dp(8))
         }
+        if (lessons.isEmpty()) lessonsPanel.addView(caption("Aún no hay lecciones: graba tu primer tutorial."))
         workflowsPanel.removeAllViews()
-        workflows.forEach { w ->
-            workflowsPanel.addView(Button(this@MainActivity).apply {
-                text = "⚡ ${w.id} · ${w.name.take(38)}"
-                setOnClickListener {
-                    moveTaskToBack(true)
-                    scope.launch { log(app.runWorkflow(w.id, emptyMap())) }
-                }
+        workflows.reversed().forEach { w ->
+            workflowsPanel.addView(button("⚡ ${w.name.take(40)} · ${w.steps.size} steps") {
+                moveTaskToBack(true)
+                scope.launch { log(app.runWorkflow(w.id, emptyMap())) }
             })
+            workflowsPanel.gap(dp(8))
         }
+        if (workflows.isEmpty()) workflowsPanel.addView(caption("Los workflows aparecen al completar un Learning."))
     }
 
     /* ---------- Etapa 1 ---------- */
 
     private fun toggleTeach() {
-        if (!teaching) {
+        if (!app.teachingActive) {
             startActivityForResult(
                 getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent(), 1)
         } else {
-            teaching = false
+            app.teachingActive = false
             btnTeach.text = "⏺ Grabar tutorial"
             scope.launch {
                 log("Analizando el video con Gemini…")
@@ -144,9 +196,9 @@ class MainActivity : Activity(), UserChannel {
                 RecorderService.grantCode = resultCode
                 RecorderService.grantData = data
                 app.teaching.startRecording()
-                teaching = true
+                app.teachingActive = true
                 btnTeach.text = "⏹ Detener y analizar"
-                log("Grabando. Enseña la tarea y vuelve aquí para detener.")
+                Toast.makeText(this, "Grabando: enseña la tarea y detén desde aquí o desde la burbuja", Toast.LENGTH_LONG).show()
                 moveTaskToBack(true)
             }
             2 -> {
@@ -155,6 +207,12 @@ class MainActivity : Activity(), UserChannel {
                 voiceCallback = null
             }
         }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::btnTeach.isInitialized)
+            btnTeach.text = if (app.teachingActive) "⏹ Detener y analizar" else "⏺ Grabar tutorial"
     }
 
     /* ---------- Etapa 2 ---------- */
@@ -198,7 +256,7 @@ class MainActivity : Activity(), UserChannel {
                 }
                 .setNeutralButton("👋 Te lo muestro") { _, _ ->
                     demoEnd = CompletableDeferred()
-                    btnEndDemo.visibility = View.VISIBLE
+                    (btnEndDemo as View).visibility = View.VISIBLE
                     Toast.makeText(this, "Hazlo tú en el teléfono y vuelve a Graph → Terminar demostración", Toast.LENGTH_LONG).show()
                     cont.resume(Answer(demo = true))
                 }
