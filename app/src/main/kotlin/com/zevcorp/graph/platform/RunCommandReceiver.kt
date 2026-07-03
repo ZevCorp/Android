@@ -24,8 +24,28 @@ class RunCommandReceiver : BroadcastReceiver() {
                 val all = app.workflows.list()
                 if (all.isEmpty()) Log.i(TAG, "No hay workflows aprendidos todavía")
                 all.forEach { w ->
-                    Log.i(TAG, "${w.id} · ${w.name} · ${w.steps.size} steps · " +
-                        "graph run ${w.id} ${w.variables.joinToString(" ") { "--${it.name}=\"${it.default}\"" }}")
+                    Log.i(TAG, "${w.id} · ${w.name} · ${w.steps.size} steps · ${w.branches.size} ramas · ${w.usage()}")
+                }
+            }
+
+            // "man page" del workflow: pensado para que un LLM en terminal decida qué ramas activar
+            "com.zevcorp.graph.INFO" -> app.scope.launch {
+                val w = app.workflows.get(intent.getStringExtra("id") ?: "")
+                if (w == null) {
+                    Log.i(TAG, "workflow no encontrado")
+                    return@launch
+                }
+                Log.i(TAG, "## ${w.id} — ${w.name}")
+                Log.i(TAG, "proposito: ${w.purpose}")
+                Log.i(TAG, "uso: ${w.usage()}")
+                w.branches.forEach { Log.i(TAG, "rama --branch ${it.name}: ${it.description}") }
+                w.variables.forEach { Log.i(TAG, "variable --${it.name}: ${it.field} (default: \"${it.default}\")") }
+                w.steps.forEach { s ->
+                    val status = when (s.status) {
+                        graph.core.domain.StepStatus.CONFIRMED -> "verde"; graph.core.domain.StepStatus.LLM -> "rojo"; else -> "draft"
+                    }
+                    Log.i(TAG, "step ${s.order} [$status]${if (s.branch.isNotBlank()) " [rama ${s.branch}]" else ""}: " +
+                        "${s.action} ${s.label.ifBlank { s.selector.short() }}")
                 }
             }
 
@@ -34,9 +54,11 @@ class RunCommandReceiver : BroadcastReceiver() {
                 val inputs = intent.extras?.keySet().orEmpty()
                     .filter { it.startsWith("input_") }
                     .associateWith { intent.getStringExtra(it) ?: "" }
-                LogBus.log("cli", "RUN $id ${inputs.keys.joinToString(",")}")
+                val branches = intent.getStringExtra("branches")?.split(',')
+                    ?.map { it.trim() }?.filter { it.isNotBlank() }?.toSet() ?: emptySet()
+                LogBus.log("cli", "RUN $id inputs=${inputs.keys.joinToString(",")} ramas=${branches.joinToString(",")}")
                 app.scope.launch {
-                    val result = app.runWorkflow(id, inputs)
+                    val result = app.runWorkflow(id, inputs, branches)
                     Log.i(TAG, result)
                     LogBus.log("cli", result)
                 }

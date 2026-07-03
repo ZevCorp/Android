@@ -6,19 +6,20 @@ Es el mismo principio del repo [Graph](https://github.com/Joseph1356K/Graph) (ex
 
 ## Las tres etapas
 
-1. **Teaching** — Tocas *Grabar tutorial* y muestras la tarea en tu teléfono (puedes narrar por voz). Mientras grabas, **tus clics y tecleos se capturan del árbol de UI** como workflow **borrador** (steps 🟡 DRAFT). Al detener, el video se sube a Gemini, que lo analiza como tutorial y lo destila en una `Lesson` ligada a ese borrador.
+1. **Teaching** — Tocas *Grabar tutorial* y muestras la tarea en tu teléfono (puedes narrar por voz). Mientras grabas, **tus clics y tecleos se capturan del árbol de UI** como workflow **borrador** (steps 🟡 DRAFT). Al detener, el video se sube a Gemini, que lo analiza como tutorial y lo destila en una `Lesson` ligada a ese borrador. Antes de guardar entra la **capa de inteligencia (curador)**: con el contexto del video — incluida tu narración sobre qué es opcional — Gemini separa el **tronco** (pasos centrales) de las **ramas** situacionales (p.ej. `configurar_direccion`: solo la primera vez o al cambiar de lugar), bifurcaciones que se reincorporan al tronco y se activan por parámetro en la terminal.
 
 2. **Learning (consciente)** — Consolidación supervisada, como el aprendizaje humano: el sistema avanza **un step a la vez ejecutando el workflow por árbol de UI** (no por capturas); tras cada step se toma una captura y **Gemini 3.5 Flash la juzga**. Si el step quedó bien → se marca 🟢 **CONFIRMED** (definitivo, parte de la "red neuronal"). Si falló → **computer use toma el control**, retrocede si hace falta, lo hace él mismo, y el step queda 🔴 **LLM**; el siguiente step vuelve al árbol de UI. Re-ejecutar el learning reintenta los rojos. Si el modelo duda, te pregunta (texto, **voz** o demostración). Las lecciones sin borrador corren el modo libre clásico (el agente ejecuta todo y se graba como DRAFT).
 
 3. **Subconsciente** — Ejecución híbrida: los steps 🟢 y 🟡 corren **sin LLM** sobre accesibilidad; los 🔴 se **delegan puntualmente a Gemini 3.5 Flash**. Activado por terminal:
 
    ```bash
-   cli/graph list
-   cli/graph run wf_1778724462696 --input_3="Juan" --input_5="Pérez"
-   # o directamente:
-   adb shell am broadcast -a com.zevcorp.graph.RUN -n com.zevcorp.graph/.platform.RunCommandReceiver \
-       --es id wf_1778724462696 --es input_3 "Juan"
+   cli/graph list                                   # descubrir workflows
+   cli/graph info wf_1778724462696                  # mapear su red: ramas, variables, estado por step
+   cli/graph run wf_1778724462696 --input_5="pizza"                                # tronco
+   cli/graph run wf_1778724462696 --branch configurar_direccion --input_5="pizza"  # con rama
    ```
+
+   Los workflows son **terminal-first**: `info` es el "man page" que un LLM lee para decidir qué ramas activar y con qué variables — ejecución modular de caminos dentro de la misma red. Ver [CLI.md](CLI.md).
 
 ## La burbuja flotante
 

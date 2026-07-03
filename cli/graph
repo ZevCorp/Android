@@ -1,34 +1,53 @@
 #!/usr/bin/env bash
 # Graph CLI — etapa subconsciente desde la terminal (requiere adb y el teléfono conectado).
+# Diseñada para que un LLM la opere: `list` para descubrir, `info` para mapear la red
+# (ramas y variables) de un workflow, `run` con flags para ejecutar caminos modulares.
+#
 #   graph list
-#   graph run <wf_id> [--input_3="valor" ...]
+#   graph info <wf_id>
+#   graph run <wf_id> [--branch <rama>]... [--input_N="valor"]...
 #   graph set-key <GEMINI_API_KEY>
 set -e
 PKG=com.zevcorp.graph
+RECEIVER=$PKG/.platform.RunCommandReceiver
 since=$(adb shell date '+%m-%d\ %H:%M:%S.000')
+
+logs() { sleep "$1"; adb logcat -d -t "$since" -s GraphCLI:I | sed 's/.*GraphCLI: //'; }
 
 case "$1" in
   list)
-    adb shell am broadcast -a $PKG.LIST -n $PKG/.platform.RunCommandReceiver >/dev/null
-    sleep 1
-    adb logcat -d -t "$since" -s GraphCLI:I | sed 's/.*GraphCLI: //'
+    adb shell am broadcast -a $PKG.LIST -n $RECEIVER >/dev/null
+    logs 1
+    ;;
+  info)
+    adb shell am broadcast -a $PKG.INFO -n $RECEIVER --es id "$2" >/dev/null
+    logs 1
     ;;
   run)
     id=$2; shift 2
-    args=()
-    for kv in "$@"; do
-      k=${kv%%=*}; k=${k#--}; v=${kv#*=}
-      args+=(--es "$k" "$v")
+    args=(); branches=""
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --branch) branches="${branches:+$branches,}$2"; shift 2 ;;
+        --branch=*) branches="${branches:+$branches,}${1#--branch=}"; shift ;;
+        --*=*) k=${1%%=*}; k=${k#--}; v=${1#*=}; args+=(--es "$k" "$v"); shift ;;
+        *) shift ;;
+      esac
     done
-    adb shell am broadcast -a $PKG.RUN -n $PKG/.platform.RunCommandReceiver --es id "$id" "${args[@]}" >/dev/null
-    echo "Ejecutando $id… (subconsciente: sin LLM, sobre accesibilidad)"
-    adb logcat -T "$since" -s GraphCLI:I | sed 's/.*GraphCLI: //' | head -1
+    [ -n "$branches" ] && args+=(--es branches "$branches")
+    adb shell am broadcast -a $PKG.RUN -n $RECEIVER --es id "$id" "${args[@]}" >/dev/null
+    echo "Ejecutando $id… (subconsciente: verdes por árbol de UI, rojos con Gemini)"
+    adb logcat -T "$since" -s GraphCLI:I | sed 's/.*GraphCLI: //' | grep -m1 -E "^(OK|Fallo|Rama|Workflow|Step)" || true
     ;;
   set-key)
-    adb shell am broadcast -a $PKG.SET_KEY -n $PKG/.platform.RunCommandReceiver --es key "$2" >/dev/null
+    adb shell am broadcast -a $PKG.SET_KEY -n $RECEIVER --es key "$2" >/dev/null
     echo "API key configurada"
     ;;
   *)
-    echo "Uso: graph list | graph run <wf_id> [--input_N=\"valor\"...] | graph set-key <key>"
+    echo "Uso:"
+    echo "  graph list                                        # workflows disponibles"
+    echo "  graph info <wf_id>                                # ramas, variables y steps"
+    echo "  graph run <wf_id> [--branch <rama>]... [--input_N=\"valor\"]..."
+    echo "  graph set-key <KEY>"
     ;;
 esac

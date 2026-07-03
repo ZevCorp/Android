@@ -68,9 +68,11 @@ class NeuralGraphView(context: Context, private val steps: List<Step>) : View(co
             canvas.drawText("Sin steps todavía", pad.toFloat(), pad * 2f, sub)
             return
         }
-        val cx = width * 0.22f
-        val amp = width * 0.10f
-        fun px(i: Int) = cx + amp * sin(i * 1.15).toFloat()
+        val cx = width * 0.20f
+        val amp = width * 0.09f
+        // los pasos de rama se bifurcan a la derecha del tronco
+        fun px(i: Int) = cx + amp * sin(i * 1.15).toFloat() +
+            (if (steps[i].branch.isNotBlank()) context.dp(34).toFloat() else 0f)
         fun py(i: Int) = (pad + i * rowH + rowH / 2).toFloat()
 
         // sinapsis
@@ -96,9 +98,10 @@ class NeuralGraphView(context: Context, private val steps: List<Step>) : View(co
             canvas.drawCircle(x, y, rCore, core)
             canvas.drawText("${step.order}", x, y + num.textSize * 0.36f, num)
             val tx = x + rGlow + context.dp(12)
-            val title = "${step.action} ${step.label.ifBlank { step.selector.short() }}".take(30)
+            val title = "${step.action} ${step.label.ifBlank { step.selector.short() }}".take(28)
             canvas.drawText(title, tx, y - context.dp(2), label)
-            canvas.drawText(statusText(step), tx, y + context.dp(14), sub)
+            val detail = (step.branch.takeIf { it.isNotBlank() }?.let { "⑂ $it · " } ?: "") + statusText(step)
+            canvas.drawText(detail.take(42), tx, y + context.dp(14), sub)
         }
     }
 }

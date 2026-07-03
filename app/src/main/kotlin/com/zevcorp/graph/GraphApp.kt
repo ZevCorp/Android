@@ -39,7 +39,7 @@ class GraphApp : Application() {
 
     val teaching by lazy {
         TeachingStage(DroidScreenRecorder(this), GeminiTutorialAnalyzer(apiKey, model),
-            lessons, workflows, { ui }, newId, LogBus)
+            lessons, workflows, { ui }, newId, GeminiCurator(apiKey, model), LogBus)
     }
 
     private fun bubbleCompanion(on: Boolean) = (ui as? GraphAccessibilityService)?.bubble?.companion(on)
@@ -62,11 +62,11 @@ class GraphApp : Application() {
         }
     }
 
-    suspend fun runWorkflow(id: String, inputs: Map<String, String>): String {
+    suspend fun runWorkflow(id: String, inputs: Map<String, String>, branches: Set<String> = emptySet()): String {
         val surface = ui ?: return "Servicio de accesibilidad inactivo: actívalo en Ajustes"
         bubbleCompanion(true)
         try {
-            return SubconsciousStage(surface, workflows, ::newBrain, LogBus).run(id, inputs)
+            return SubconsciousStage(surface, workflows, ::newBrain, LogBus).run(id, inputs, branches)
         } finally {
             bubbleCompanion(false)
         }

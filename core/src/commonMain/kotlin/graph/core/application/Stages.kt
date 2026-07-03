@@ -28,6 +28,7 @@ class TeachingStage(
     private val workflows: WorkflowRepository,
     private val ui: () -> UiSurface?,
     private val newId: () -> String,
+    private val curator: WorkflowCurator? = null,
     private val log: GraphLog = NO_LOG,
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
@@ -56,7 +57,7 @@ class TeachingStage(
             val steps = captured.mapIndexed { i, s ->
                 s.copy(order = i + 1, source = StepSource.USER_DEMO, status = StepStatus.DRAFT)
             }
-            val draft = Workflow(
+            var draft = Workflow(
                 id = newId(),
                 name = lesson.goal.take(60),
                 purpose = lesson.summary.ifBlank { lesson.goal },
@@ -64,8 +65,14 @@ class TeachingStage(
                 steps = steps,
                 variables = Workflow.deriveVariables(steps),
             )
+            // Capa de inteligencia previa al guardado: el contexto del video decide tronco vs ramas.
+            curator?.let { c ->
+                draft = runCatching { c.curate(lesson, draft) }
+                    .getOrElse { e -> log.log("teaching", "curación falló (${e.message?.take(80)}), se guarda sin ramas"); draft }
+            }
             workflows.save(draft)
-            log.log("teaching", "workflow borrador ${draft.id}: ${steps.size} steps DRAFT")
+            log.log("teaching", "workflow ${draft.id}: ${draft.steps.count { it.branch.isBlank() }} steps de tronco · " +
+                "${draft.branches.size} ramas ${draft.branches.joinToString { it.name }}")
         }
         log.log("teaching", "lección: ${lesson.goal}")
         return lesson
@@ -170,8 +177,18 @@ class LearningStage(
                 }
                 val performed = ui.perform(step, step.value)
                 delay(500)
+                // Un paso de rama que no encuentra su elemento probablemente no aplica en esta
+                // ejecución (p.ej. configuración de primera vez): se conserva sin castigo.
+                if (!performed && step.branch.isNotBlank()) {
+                    log.log("learning", "step ${step.order} (rama ${step.branch}) no aplica ahora → se mantiene 🟡")
+                    continue
+                }
                 val verdict = if (!performed) Verdict(false, "el árbol de UI no encontró o no pudo ejecutar el elemento")
                 else brain.judge(lesson.goal, step, true, ui.state())
+                if (!verdict.applicable && step.branch.isNotBlank()) {
+                    log.log("learning", "step ${step.order} (rama ${step.branch}) no aplicable según el supervisor → 🟡")
+                    continue
+                }
                 if (verdict.valid) {
                     steps[i] = step.copy(status = StepStatus.CONFIRMED)
                     log.log("learning", "step ${step.order} CONFIRMADO 🟢 ${describe(step)}")
@@ -314,12 +331,18 @@ class SubconsciousStage(
     private val brainFactory: (() -> ComputerUseBrain)? = null,
     private val log: GraphLog = NO_LOG,
 ) {
-    suspend fun run(id: String, inputs: Map<String, String> = emptyMap()): String {
+    suspend fun run(id: String, inputs: Map<String, String> = emptyMap(), branches: Set<String> = emptySet()): String {
         val workflow = workflows.get(id) ?: return "Workflow $id no encontrado"
+        branches.firstOrNull { name -> workflow.branches.none { it.name == name } }
+            ?.let { return "Rama '$it' no existe. Uso: ${workflow.usage()}" }
         val red = workflow.steps.count { it.status == StepStatus.LLM }
-        log.log("subconsciente", "ejecutando ${workflow.id}: ${workflow.steps.size} steps ($red rojos)")
+        log.log("subconsciente", "ejecutando ${workflow.id}: ${workflow.steps.size} steps ($red rojos)" +
+            if (branches.isEmpty()) " · solo tronco" else " · ramas activas: ${branches.joinToString(",")}")
         var runner: AgentRunner? = null
+        var executed = 0
         for (step in workflow.steps) {
+            if (step.branch.isNotBlank() && step.branch !in branches) continue // rama desactivada
+            executed++
             val value = if (step.action == ActionType.INPUT)
                 inputs["input_${step.order}"]
                     ?: workflow.variables.firstOrNull { it.name == "input_${step.order}" }?.default
@@ -351,6 +374,7 @@ class SubconsciousStage(
             if (!ok) return "Fallo en step ${step.order}: ${step.action} ${step.label.ifBlank { step.selector.short() }}"
             delay(250)
         }
-        return "OK · ${workflow.steps.size} steps ejecutados (${workflow.id})"
+        return "OK · $executed steps ejecutados (${workflow.id})" +
+            if (branches.isNotEmpty()) " con ramas ${branches.joinToString(",")}" else ""
     }
 }

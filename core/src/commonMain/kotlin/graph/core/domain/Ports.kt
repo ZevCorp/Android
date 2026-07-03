@@ -14,6 +14,14 @@ interface TutorialAnalyzer {
     suspend fun analyze(videoPath: String): Lesson
 }
 
+/**
+ * Capa de inteligencia previa al guardado: con el contexto del video (incluida la narración del
+ * usuario sobre qué es opcional) organiza los steps capturados en TRONCO y RAMAS situacionales.
+ */
+interface WorkflowCurator {
+    suspend fun curate(lesson: Lesson, workflow: Workflow): Workflow
+}
+
 /* ---------- Superficie de UI (una implementación por plataforma) ---------- */
 
 class ScreenState(
@@ -61,7 +69,7 @@ class BrainTurn(
     val text: String = "",
 )
 
-class Verdict(val valid: Boolean, val reason: String = "")
+class Verdict(val valid: Boolean, val reason: String = "", val applicable: Boolean = true)
 
 /** El modelo con computer use (Gemini 3.5 Flash en Android). Mantiene su propia conversación. */
 interface ComputerUseBrain {

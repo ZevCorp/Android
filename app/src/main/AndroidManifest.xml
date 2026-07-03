@@ -47,6 +47,7 @@
             <intent-filter>
                 <action android:name="com.zevcorp.graph.RUN" />
                 <action android:name="com.zevcorp.graph.LIST" />
+                <action android:name="com.zevcorp.graph.INFO" />
                 <action android:name="com.zevcorp.graph.SET_KEY" />
             </intent-filter>
         </receiver>

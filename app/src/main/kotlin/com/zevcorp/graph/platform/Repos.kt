@@ -38,7 +38,11 @@ class FileWorkflowRepo(private val root: File) : WorkflowRepository {
         for (w in all) {
             appendLine("\n## ${w.id}\n")
             appendLine("- Purpose: ${w.purpose}")
-            appendLine("- CLI: `graph run ${w.id} ${w.variables.joinToString(" ") { "--${it.name}=\"...\"" }}`")
+            appendLine("- CLI: `${w.usage()}`")
+            if (w.branches.isNotEmpty()) {
+                appendLine("\n### Branches (ramas opcionales, se activan con --branch)")
+                w.branches.forEach { appendLine("- `${it.name}`: ${it.description}") }
+            }
             if (w.variables.isNotEmpty()) {
                 appendLine("\n### Variables")
                 w.variables.forEach { appendLine("- `${it.name}`: field=\"${it.field}\" (default: `${it.default}`)") }
@@ -47,7 +51,8 @@ class FileWorkflowRepo(private val root: File) : WorkflowRepository {
             w.steps.forEach { s ->
                 val value = if (s.value.isNotBlank()) " | value=\"${s.value}\"" else ""
                 val status = when (s.status) { StepStatus.CONFIRMED -> "🟢"; StepStatus.LLM -> "🔴"; StepStatus.DRAFT -> "🟡" }
-                appendLine("- ${s.order}. $status ${s.action} ${s.selector.short()} | label=\"${s.label}\"$value | screen=${s.screen} | source=${s.source}")
+                val branch = if (s.branch.isNotBlank()) " | rama=${s.branch}" else ""
+                appendLine("- ${s.order}. $status ${s.action} ${s.selector.short()} | label=\"${s.label}\"$value$branch | screen=${s.screen} | source=${s.source}")
             }
         }
     }

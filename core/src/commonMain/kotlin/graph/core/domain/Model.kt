@@ -45,7 +45,13 @@ data class Step(
     val screen: String = "",
     val source: StepSource = StepSource.AGENT,
     val status: StepStatus = StepStatus.DRAFT,
+    /** "" = tronco (siempre se ejecuta); nombre de rama = solo si la rama se activa (--branch <name>). */
+    val branch: String = "",
 )
+
+/** Rama opcional/situacional del workflow (bifurcación que se reincorpora al tronco). */
+@Serializable
+data class Branch(val name: String, val description: String = "")
 
 @Serializable
 data class Variable(val name: String, val field: String, val default: String)
@@ -58,7 +64,13 @@ data class Workflow(
     val lessonId: String = "",
     val steps: List<Step> = emptyList(),
     val variables: List<Variable> = emptyList(),
+    val branches: List<Branch> = emptyList(),
 ) {
+    /** Firma de uso en terminal, p.ej.: graph run wf_x [--branch configurar_direccion] --input_3="..." */
+    fun usage() = "graph run $id" +
+        branches.joinToString("") { " [--branch ${it.name}]" } +
+        variables.joinToString("") { " --${it.name}=\"...\"" }
+
     companion object {
         /** Igual que en Graph: cada INPUT se vuelve una variable `input_<order>` parametrizable desde la CLI. */
         fun deriveVariables(steps: List<Step>) = steps

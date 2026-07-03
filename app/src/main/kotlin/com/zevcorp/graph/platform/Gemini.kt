@@ -108,7 +108,68 @@ class GeminiTutorialAnalyzer(
 
     private companion object {
         const val ANALYZE_PROMPT = """Este video es un tutorial que un usuario grabó con la pantalla de su teléfono Android (el audio puede incluir su narración). Analiza QUÉ quiso enseñar, como si fuera una clase.
-Responde SOLO con JSON: {"goal": "objetivo de la tarea en una frase", "app": "app o apps usadas", "summary": "resumen de lo enseñado", "steps": ["paso 1", "paso 2", ...]}. Los steps deben ser accionables y en orden."""
+MUY IMPORTANTE: si el usuario indica (por narración o por contexto) que alguna parte es opcional, situacional o de primera vez (p.ej. "esto solo se configura una vez", diálogos que no siempre aparecen), dilo explícitamente en summary y en el step correspondiente.
+Responde SOLO con JSON: {"goal": "objetivo de la tarea en una frase", "app": "app o apps usadas", "summary": "resumen de lo enseñado (incluye qué partes son opcionales/situacionales)", "steps": ["paso 1", "paso 2 (opcional: cuándo)", ...]}. Los steps deben ser accionables y en orden."""
+    }
+}
+
+/**
+ * Capa de inteligencia previa al guardado: con la lección (incluida la narración del video) organiza
+ * los steps capturados en TRONCO (siempre) y RAMAS situacionales que se activan con --branch en la CLI.
+ */
+class GeminiCurator(
+    private val apiKey: () -> String,
+    private val model: () -> String,
+) : WorkflowCurator {
+
+    override suspend fun curate(lesson: Lesson, workflow: Workflow): Workflow = withContext(Dispatchers.IO) {
+        val stepsText = workflow.steps.joinToString("\n") {
+            "- order=${it.order} ${it.action} label=\"${it.label}\"" +
+                (if (it.value.isNotBlank()) " value=\"${it.value.take(40)}\"" else "") +
+                " screen=\"${it.screen}\""
+        }
+        val prompt = """
+            Eres el organizador de workflows de Graph. Un usuario enseñó una tarea en video y estos son los pasos capturados del árbol de UI de Android.
+            CONTEXTO DEL TUTORIAL (análisis del video, incluye lo que el usuario narró):
+            META: ${lesson.goal}
+            RESUMEN: ${lesson.summary}
+            PASOS NARRADOS: ${lesson.steps.joinToString(" | ")}
+            PASOS CAPTURADOS:
+            $stepsText
+            Identifica el TRONCO (pasos centrales, siempre necesarios) y las RAMAS opcionales/situacionales: configuraciones de primera vez, diálogos que no siempre aparecen, decisiones según contexto (p.ej. "configurar_direccion" en una app de comida). Una rama agrupa pasos consecutivos y luego el flujo se reincorpora al tronco. Solo crea ramas con evidencia real; si todo es central, no crees ninguna.
+            Responde SOLO JSON:
+            {"branches": [{"name": "snake_case_corto", "description": "cuándo activarla"}],
+             "assignments": {"<order>": "nombre_de_rama"}}
+            En assignments incluye SOLO los steps que pertenecen a una rama (los demás son tronco).
+        """.trimIndent()
+
+        val req = jo(
+            "contents" to JsonArray(listOf(jo("role" to js("user"), "parts" to JsonArray(listOf(jtext(prompt)))))),
+            "generationConfig" to jo("responseMimeType" to js("application/json")),
+        )
+        val res = http(
+            "POST", "$BASE/v1beta/models/${model()}:generateContent",
+            mapOf("Content-Type" to "application/json", "x-goog-api-key" to apiKey()),
+            Json.encodeToString(JsonObject.serializer(), req).toByteArray(),
+        ).orThrow()
+        val text = Json.parseToJsonElement(res.body).jsonObject["candidates"]!!.jsonArray[0]
+            .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
+            .firstNotNullOf { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
+        val obj = Json.parseToJsonElement(text).jsonObject
+
+        val branches = obj["branches"]?.jsonArray.orEmpty().map { it.jsonObject }
+            .mapNotNull { b -> b.str("name").takeIf { it.isNotBlank() }?.let { Branch(it, b.str("description")) } }
+        val assignments = obj["assignments"]?.jsonObject.orEmpty()
+            .mapNotNull { (k, v) -> k.toIntOrNull()?.let { it to (v.jsonPrimitive.contentOrNull ?: "") } }
+            .toMap()
+        val valid = branches.map { it.name }.toSet()
+        LogBus.log("curador", "ramas: ${branches.joinToString { "${it.name} (${assignments.count { a -> a.value == it.name }} steps)" }.ifBlank { "ninguna" }}")
+        workflow.copy(
+            branches = branches,
+            steps = workflow.steps.map { s ->
+                s.copy(branch = assignments[s.order]?.takeIf { it in valid } ?: "")
+            },
+        )
     }
 }
 
@@ -282,9 +343,12 @@ class GeminiComputerUse(
                 }
                 parts += jtext(
                     "Tarea: $goal. Se acaba de ejecutar por accesibilidad el paso ${step.order}: $desc " +
-                        "(resultado técnico: ${if (performed) "ejecutado" else "falló"}). Observa la captura: " +
-                        "¿el paso quedó aplicado correctamente y la pantalla está en el estado esperado para continuar? " +
-                        """Responde SOLO JSON: {"valid": true|false, "reason": "por qué"}"""
+                        "(resultado técnico: ${if (performed) "ejecutado" else "falló"})." +
+                        (step.branch.takeIf { it.isNotBlank() }
+                            ?.let { " Este paso pertenece a la rama opcional \"$it\" y puede no aplicar en esta ejecución." } ?: "") +
+                        " Observa la captura: ¿el paso quedó aplicado correctamente y la pantalla está en el estado esperado para continuar? " +
+                        "Si el paso simplemente no aplica en este contexto (p.ej. un diálogo de primera vez que no apareció), marca applicable=false. " +
+                        """Responde SOLO JSON: {"valid": true|false, "applicable": true|false, "reason": "por qué"}"""
                 )
                 val req = jo(
                     "contents" to JsonArray(listOf(jo("role" to js("user"), "parts" to JsonArray(parts)))),
@@ -299,7 +363,11 @@ class GeminiComputerUse(
                     .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
                     .firstNotNullOf { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
                 val obj = Json.parseToJsonElement(text).jsonObject
-                Verdict(obj["valid"]?.jsonPrimitive?.booleanOrNull ?: performed, obj.str("reason"))
+                Verdict(
+                    obj["valid"]?.jsonPrimitive?.booleanOrNull ?: performed,
+                    obj.str("reason"),
+                    obj["applicable"]?.jsonPrimitive?.booleanOrNull ?: true,
+                )
             }.getOrElse { Verdict(performed, "supervisor no disponible: ${it.message?.take(80)}") }
                 .also { LogBus.log("gemini", "judge step ${step.order} → ${if (it.valid) "válido" else "inválido"} · ${it.reason.take(80)}") }
         }

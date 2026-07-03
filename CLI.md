@@ -1,24 +1,44 @@
 # CLI — etapa subconsciente desde la terminal
 
-Requiere `adb` con el teléfono conectado y la app Graph instalada (con el servicio de accesibilidad activo).
+Los workflows de Graph son **terminal-first**: están diseñados para que un LLM (o tú) los descubra, mapee y ejecute con comandos. Requiere `adb` con el teléfono conectado y el servicio de accesibilidad de Graph activo.
+
+## El flujo típico de un asistente operando la terminal
 
 ```bash
-# Listar workflows aprendidos (id, nombre, steps y comando de ejecución)
+# 1. Descubrir qué sabe hacer el teléfono
 cli/graph list
+#   wf_1778… · Pedir comida en DiDi · 14 steps · 1 ramas · graph run wf_1778… [--branch configurar_direccion] --input_5="..."
 
-# Ejecutar un workflow con variables (los input_N salen de `list` o de WORKFLOWS.md)
-cli/graph run wf_1778724462696 --input_3="Juan" --input_5="Pérez"
+# 2. Mapear la red de un workflow: ramas (cuándo activarlas), variables y estado de cada step
+cli/graph info wf_1778724462696
+#   proposito: Pedir comida a domicilio en DiDi Food
+#   uso: graph run wf_1778… [--branch configurar_direccion] --input_5="..."
+#   rama --branch configurar_direccion: primera vez o cuando cambia el lugar de entrega
+#   variable --input_5: Buscar restaurante (default: "salchipapa")
+#   step 1 [verde]: LAUNCH DiDi Food
+#   step 2 [draft] [rama configurar_direccion]: CLICK Agregar dirección
+#   ...
 
-# Configurar la API key de Gemini sin abrir la app
-cli/graph set-key AIza...
+# 3. Ejecutar el camino que aplique (modular: el tronco siempre, las ramas según contexto)
+cli/graph run wf_1778724462696 --input_5="pizza"                                  # caso normal
+cli/graph run wf_1778724462696 --branch configurar_direccion --input_5="pizza"    # en casa de un amigo
 ```
 
-Equivalentes crudos con adb:
+Los steps 🟢 corren por árbol de UI sin LLM; los 🔴 se delegan puntualmente a Gemini 3.5 Flash.
+
+## Otros comandos
+
+```bash
+cli/graph set-key AIza...        # configurar la API key sin abrir la app
+```
+
+## Equivalentes crudos con adb
 
 ```bash
 adb shell am broadcast -a com.zevcorp.graph.LIST -n com.zevcorp.graph/.platform.RunCommandReceiver
+adb shell am broadcast -a com.zevcorp.graph.INFO -n com.zevcorp.graph/.platform.RunCommandReceiver --es id wf_X
 adb shell am broadcast -a com.zevcorp.graph.RUN  -n com.zevcorp.graph/.platform.RunCommandReceiver \
-    --es id wf_1778724462696 --es input_3 "Juan"
-adb logcat -s GraphCLI:I          # resultados
-adb shell run-as com.zevcorp.graph cat files/WORKFLOWS.md   # catálogo legible
+    --es id wf_X --es branches "configurar_direccion" --es input_5 "pizza"
+adb logcat -s GraphCLI:I                                     # resultados
+adb shell run-as com.zevcorp.graph cat files/WORKFLOWS.md    # catálogo completo
 ```
