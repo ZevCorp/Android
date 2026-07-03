@@ -9,6 +9,15 @@ enum class ActionType { LAUNCH, CLICK, INPUT, SCROLL, KEY, WAIT }
 enum class StepSource { AGENT, USER_DEMO }
 
 /**
+ * Estado de consolidación de cada step — la "red neuronal" del workflow:
+ * DRAFT     capturado (del video o de un learning libre), aún sin confirmar
+ * CONFIRMED aprendido: se ejecuta por árbol de UI, validado por el supervisor (verde)
+ * LLM       no se logró consolidar: lo ejecuta Gemini computer use (rojo)
+ */
+@Serializable
+enum class StepStatus { DRAFT, CONFIRMED, LLM }
+
+/**
  * Localizador semántico sobre cualquier árbol de UI.
  * Equivalencias por plataforma: DOM (navegador), AXAccessibility (macOS), UIA (Windows), Accessibility (Android).
  * viewId ≈ data-testid/#id · text ≈ label · contentDesc ≈ aria-label · className ≈ tagName · pkg+bounds = fallback.
@@ -35,6 +44,7 @@ data class Step(
     val label: String = "",
     val screen: String = "",
     val source: StepSource = StepSource.AGENT,
+    val status: StepStatus = StepStatus.DRAFT,
 )
 
 @Serializable
@@ -45,6 +55,7 @@ data class Workflow(
     val id: String,
     val name: String,
     val purpose: String = "",
+    val lessonId: String = "",
     val steps: List<Step> = emptyList(),
     val variables: List<Variable> = emptyList(),
 ) {

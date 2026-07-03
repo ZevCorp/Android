@@ -61,12 +61,16 @@ class BrainTurn(
     val text: String = "",
 )
 
+class Verdict(val valid: Boolean, val reason: String = "")
+
 /** El modelo con computer use (Gemini 3.5 Flash en Android). Mantiene su propia conversación. */
 interface ComputerUseBrain {
-    fun begin(lesson: Lesson)
+    fun begin(lesson: Lesson, instructions: String = "")
     suspend fun next(state: ScreenState, actionResults: List<String>): BrainTurn
     /** Respuesta del usuario (texto/voz) o resumen de su demostración. */
     fun inform(message: String)
+    /** Supervisor del learning: juzga si un step reproducido por árbol de UI quedó bien aplicado. */
+    suspend fun judge(goal: String, step: Step, performed: Boolean, state: ScreenState): Verdict
 }
 
 /* ---------- Feedback del usuario durante Learning ---------- */

@@ -29,22 +29,29 @@ class GraphApp : Application() {
 
     val lessons by lazy { FileLessonRepo(filesDir) }
     val workflows by lazy { FileWorkflowRepo(filesDir) }
-    val teaching by lazy { TeachingStage(DroidScreenRecorder(this), GeminiTutorialAnalyzer(apiKey, model), lessons, LogBus) }
+    private val newId = { "wf_${System.currentTimeMillis()}" }
+
+    private fun newBrain() = GeminiComputerUse(apiKey, model, listApps = {
+        packageManager.getInstalledApplications(0)
+            .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+            .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
+    })
+
+    val teaching by lazy {
+        TeachingStage(DroidScreenRecorder(this), GeminiTutorialAnalyzer(apiKey, model),
+            lessons, workflows, { ui }, newId, LogBus)
+    }
 
     private fun bubbleCompanion(on: Boolean) = (ui as? GraphAccessibilityService)?.bubble?.companion(on)
 
     /** Etapa 2 con la burbuja en modo acompañante (vuela a cada clic, pass-through, se restaura al final). */
     suspend fun runLearning(lesson: Lesson, user: UserChannel): Workflow {
         val stage = LearningStage(
-            brain = GeminiComputerUse(apiKey, model, listApps = {
-                packageManager.getInstalledApplications(0)
-                    .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
-                    .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
-            }),
+            brain = newBrain(),
             ui = requireNotNull(ui) { "Servicio de accesibilidad inactivo" },
             user = user,
             workflows = workflows,
-            newId = { "wf_${System.currentTimeMillis()}" },
+            newId = newId,
             log = LogBus,
         )
         bubbleCompanion(true)
@@ -59,7 +66,7 @@ class GraphApp : Application() {
         val surface = ui ?: return "Servicio de accesibilidad inactivo: actívalo en Ajustes"
         bubbleCompanion(true)
         try {
-            return SubconsciousStage(surface, workflows, LogBus).run(id, inputs)
+            return SubconsciousStage(surface, workflows, ::newBrain, LogBus).run(id, inputs)
         } finally {
             bubbleCompanion(false)
         }

@@ -46,7 +46,8 @@ class FileWorkflowRepo(private val root: File) : WorkflowRepository {
             appendLine("\n### Steps")
             w.steps.forEach { s ->
                 val value = if (s.value.isNotBlank()) " | value=\"${s.value}\"" else ""
-                appendLine("- ${s.order}. ${s.action} ${s.selector.short()} | label=\"${s.label}\"$value | screen=${s.screen} | source=${s.source}")
+                val status = when (s.status) { StepStatus.CONFIRMED -> "🟢"; StepStatus.LLM -> "🔴"; StepStatus.DRAFT -> "🟡" }
+                appendLine("- ${s.order}. $status ${s.action} ${s.selector.short()} | label=\"${s.label}\"$value | screen=${s.screen} | source=${s.source}")
             }
         }
     }

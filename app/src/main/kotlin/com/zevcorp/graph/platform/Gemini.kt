@@ -135,9 +135,11 @@ class GeminiComputerUse(
     private val internalResults = HashMap<String, JsonObject>() // resultados resueltos localmente (list_apps)
     private var informText = ""
     private var lesson: Lesson? = null
+    private var instructions = ""
 
-    override fun begin(lesson: Lesson) {
+    override fun begin(lesson: Lesson, instructions: String) {
         this.lesson = lesson
+        this.instructions = instructions
         previousId = ""
         pending = emptyList()
         internalResults.clear()
@@ -158,6 +160,11 @@ class GeminiComputerUse(
         if (previousId.isBlank()) {
             input += jo("type" to js("text"), "text" to js(goalPrompt(lesson!!, state)))
             state.screenshotPng?.let { input += image(it) }
+        } else if (pending.isEmpty()) {
+            // sin function-calls pendientes: mensaje de instrucción (repair / step delegado)
+            input += jo("type" to js("text"), "text" to js(informText.ifBlank { "Continúa." }))
+            state.screenshotPng?.let { input += image(it) }
+            informText = ""
         } else {
             pending.forEachIndexed { i, call ->
                 val payload = when {
@@ -262,6 +269,41 @@ class GeminiComputerUse(
         return BrainTurn(actions, question, done = calls.isEmpty(), text = text)
     }
 
+    /** Supervisor del learning: mira la captura tras un step del workflow y decide si quedó bien. */
+    override suspend fun judge(goal: String, step: Step, performed: Boolean, state: ScreenState): Verdict =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val desc = "${step.action} \"${step.label.ifBlank { step.selector.short() }}\"" +
+                    if (step.value.isNotBlank()) " con valor \"${step.value.take(60)}\"" else ""
+                val parts = mutableListOf<JsonElement>()
+                state.screenshotPng?.let {
+                    parts += jo("inlineData" to jo("mimeType" to js("image/png"),
+                        "data" to js(Base64.encodeToString(it, Base64.NO_WRAP))))
+                }
+                parts += jtext(
+                    "Tarea: $goal. Se acaba de ejecutar por accesibilidad el paso ${step.order}: $desc " +
+                        "(resultado técnico: ${if (performed) "ejecutado" else "falló"}). Observa la captura: " +
+                        "¿el paso quedó aplicado correctamente y la pantalla está en el estado esperado para continuar? " +
+                        """Responde SOLO JSON: {"valid": true|false, "reason": "por qué"}"""
+                )
+                val req = jo(
+                    "contents" to JsonArray(listOf(jo("role" to js("user"), "parts" to JsonArray(parts)))),
+                    "generationConfig" to jo("responseMimeType" to js("application/json")),
+                )
+                val res = http(
+                    "POST", "$BASE/v1beta/models/${model()}:generateContent",
+                    mapOf("Content-Type" to "application/json", "x-goog-api-key" to apiKey()),
+                    Json.encodeToString(JsonObject.serializer(), req).toByteArray(),
+                ).orThrow()
+                val text = Json.parseToJsonElement(res.body).jsonObject["candidates"]!!.jsonArray[0]
+                    .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
+                    .firstNotNullOf { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
+                val obj = Json.parseToJsonElement(text).jsonObject
+                Verdict(obj["valid"]?.jsonPrimitive?.booleanOrNull ?: performed, obj.str("reason"))
+            }.getOrElse { Verdict(performed, "supervisor no disponible: ${it.message?.take(80)}") }
+                .also { LogBus.log("gemini", "judge step ${step.order} → ${if (it.valid) "válido" else "inválido"} · ${it.reason.take(80)}") }
+        }
+
     private fun goalPrompt(lesson: Lesson, state: ScreenState) = """
         Controlas un teléfono Android REAL. Tu objetivo es reproducir este tutorial que el usuario enseñó en video:
         META: ${lesson.goal}
@@ -270,6 +312,7 @@ class GeminiComputerUse(
         PASOS: ${lesson.steps.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString(" ")}
         Usa open_app para abrir apps. Si tienes una duda real sobre cómo continuar, usa ask_user (el usuario puede responderte por texto, voz o demostrándotelo en pantalla).
         Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones) describiendo el resultado.
+        ${instructions.takeIf { it.isNotBlank() }?.let { "MODO ESPECIAL: $it" } ?: ""}
         Pantalla actual: ${state.screen}
     """.trimIndent()
 }

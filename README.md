@@ -6,11 +6,11 @@ Es el mismo principio del repo [Graph](https://github.com/Joseph1356K/Graph) (ex
 
 ## Las tres etapas
 
-1. **Teaching** — Tocas *Grabar tutorial* y muestras la tarea en tu teléfono (puedes narrar por voz). Al detener, el video se sube a Gemini, que lo analiza como tutorial y lo destila en una `Lesson` (meta, app, resumen, pasos).
+1. **Teaching** — Tocas *Grabar tutorial* y muestras la tarea en tu teléfono (puedes narrar por voz). Mientras grabas, **tus clics y tecleos se capturan del árbol de UI** como workflow **borrador** (steps 🟡 DRAFT). Al detener, el video se sube a Gemini, que lo analiza como tutorial y lo destila en una `Lesson` ligada a ese borrador.
 
-2. **Learning (consciente)** — La `Lesson` pasa como contexto a **Gemini 3.5 Flash con computer use** (Interactions API, entorno `mobile`), que ejecuta la tarea en tu teléfono real (capturas de pantalla → `click`/`type`/`open_app`/… → gestos y accesibilidad). Cada acción se resuelve contra el árbol de UI de accesibilidad y se graba como **step semántico** (viewId ≈ `data-testid`, contentDesc ≈ `aria-label`…), formando un `Workflow` modular con variables `input_N` derivadas de los campos escritos. Si el modelo tiene dudas, **te pregunta**: respondes por texto, por **voz**, o **demostrándolo en pantalla** — tu demo también se graba como steps del workflow, como si las hubiera hecho el asistente.
+2. **Learning (consciente)** — Consolidación supervisada, como el aprendizaje humano: el sistema avanza **un step a la vez ejecutando el workflow por árbol de UI** (no por capturas); tras cada step se toma una captura y **Gemini 3.5 Flash la juzga**. Si el step quedó bien → se marca 🟢 **CONFIRMED** (definitivo, parte de la "red neuronal"). Si falló → **computer use toma el control**, retrocede si hace falta, lo hace él mismo, y el step queda 🔴 **LLM**; el siguiente step vuelve al árbol de UI. Re-ejecutar el learning reintenta los rojos. Si el modelo duda, te pregunta (texto, **voz** o demostración). Las lecciones sin borrador corren el modo libre clásico (el agente ejecuta todo y se graba como DRAFT).
 
-3. **Subconsciente** — El workflow aprendido se ejecuta **sin LLM**, directamente sobre accesibilidad, activado por comandos de terminal:
+3. **Subconsciente** — Ejecución híbrida: los steps 🟢 y 🟡 corren **sin LLM** sobre accesibilidad; los 🔴 se **delegan puntualmente a Gemini 3.5 Flash**. Activado por terminal:
 
    ```bash
    cli/graph list
@@ -27,6 +27,7 @@ Al activar el servicio de accesibilidad aparece **la carita de Graph** (la misma
 - ⏺ **grabar/detener** un tutorial (Teaching)
 - 🎓 lanzar el **Learning** de una lección
 - ⚡ ejecutar **workflows** subconscientes
+- 🧠 en la app, cada workflow muestra su **red neuronal**: el grafo step a step (🟢 aprendido por árbol de UI · 🔴 aún con Gemini · 🟡 por consolidar), que se va pintando en vivo durante el learning
 - Durante el Learning la burbuja se oculta (para no salir en las capturas del agente) y reaparece cuando el asistente tiene una duda: respondes por texto, **voz** (SpeechRecognizer, sin abrir la app) o **demostrándolo**; en modo demo, tocar la burbuja ✅ marca que terminaste.
 
 ## Puesta en marcha

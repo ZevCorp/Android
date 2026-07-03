@@ -191,13 +191,43 @@ class MainActivity : Activity(), UserChannel {
         if (lessons.isEmpty()) lessonsPanel.addView(caption("Aún no hay lecciones: graba tu primer tutorial."))
         workflowsPanel.removeAllViews()
         workflows.reversed().forEach { w ->
-            workflowsPanel.addView(button("⚡ ${w.name.take(40)} · ${w.steps.size} steps") {
+            val green = w.steps.count { it.status == graph.core.domain.StepStatus.CONFIRMED }
+            val r = row()
+            r.addView(button("⚡ ${w.name.take(30)} · ${w.steps.size} steps") {
                 moveTaskToBack(true)
                 scope.launch { log(app.runWorkflow(w.id, emptyMap())) }
-            })
+            }, LinearLayout.LayoutParams(0, -2, 1f))
+            r.addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(6), 1))
+            r.addView(button("🧠 $green/${w.steps.size}") { showGraph(w.id) })
+            workflowsPanel.addView(r)
             workflowsPanel.gap(dp(8))
         }
         if (workflows.isEmpty()) workflowsPanel.addView(caption("Los workflows aparecen al completar un Learning."))
+    }
+
+    /** Grafo de la red neuronal del workflow: 🟢 aprendido por árbol de UI · 🔴 lo hace Gemini · 🟡 por consolidar. */
+    private fun showGraph(id: String) {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setBackgroundColor(Palette.bg)
+            setPadding(dp(18), dp(18), dp(18), dp(12))
+        }
+        fun render() {
+            val w = app.workflows.get(id) ?: return
+            container.removeAllViews()
+            container.addView(title(w.name.take(48), 17f))
+            val green = w.steps.count { it.status == graph.core.domain.StepStatus.CONFIRMED }
+            val red = w.steps.count { it.status == graph.core.domain.StepStatus.LLM }
+            container.addView(caption("🟢 $green aprendidos · 🔴 $red con Gemini · 🟡 ${w.steps.size - green - red} por consolidar"))
+            container.gap(dp(10))
+            container.addView(ScrollView(this).apply { addView(NeuralGraphView(this@MainActivity, w.steps)) },
+                LinearLayout.LayoutParams(-1, dp(430)))
+        }
+        render()
+        val dialog = android.app.AlertDialog.Builder(this).setView(container).setPositiveButton("Cerrar", null).create()
+        val refresher = scope.launch { LogBus.lines.collect { render() } } // se redibuja mientras el learning consolida
+        dialog.setOnDismissListener { refresher.cancel() }
+        dialog.show()
     }
 
     /* ---------- Etapa 1 ---------- */
