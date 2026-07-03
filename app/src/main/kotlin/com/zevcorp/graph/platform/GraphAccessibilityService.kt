@@ -120,18 +120,15 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
 
     /* ---------- Selectores semánticos (≈ buildElementSelector del content script) ---------- */
 
-    private fun selectorOf(node: AccessibilityNodeInfo): Selector {
-        val rect = Rect().also { node.getBoundsInScreen(it) }
-        return Selector(
-            viewId = node.viewIdResourceName ?: "",
-            // en campos editables el texto es el valor tecleado: no sirve como localizador
-            text = if (node.isEditable) "" else node.text?.toString()?.take(60) ?: "",
-            contentDesc = node.contentDescription?.toString() ?: "",
-            className = node.className?.toString() ?: "",
-            pkg = node.packageName?.toString() ?: "",
-            bounds = rect.toShortString(),
-        )
-    }
+    private fun selectorOf(node: AccessibilityNodeInfo) = Selector(
+        viewId = node.viewIdResourceName ?: "",
+        // en campos editables el texto es el valor tecleado: no sirve como localizador
+        text = if (node.isEditable) "" else node.text?.toString()?.take(60) ?: "",
+        contentDesc = node.contentDescription?.toString() ?: "",
+        className = node.className?.toString() ?: "",
+        pkg = node.packageName?.toString() ?: "",
+        // NUNCA se guardan coordenadas: los workflows se reproducen solo por árbol de UI.
+    )
 
     private fun labelOf(node: AccessibilityNodeInfo): String = sequenceOf(
         node.hintText,
@@ -151,24 +148,22 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
 
     /* ---------- Búsqueda en el árbol ---------- */
 
+    /** Localiza el nodo SOLO por localizadores semánticos del árbol de UI (nunca por coordenadas). */
     private fun find(sel: Selector): AccessibilityNodeInfo? {
         val root = rootInActiveWindow ?: return null
         if (sel.viewId.isNotBlank())
             root.findAccessibilityNodeInfosByViewId(sel.viewId)?.firstOrNull()?.let { return it }
         if (sel.text.isNotBlank())
             root.findAccessibilityNodeInfosByText(sel.text)?.firstOrNull()?.let { return it }
+        if (sel.contentDesc.isBlank()) return null
         var byDesc: AccessibilityNodeInfo? = null
-        var byClass: AccessibilityNodeInfo? = null
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
-            if (byDesc == null && sel.contentDesc.isNotBlank() &&
-                n.contentDescription?.toString() == sel.contentDesc) byDesc = n
-            if (byClass == null && sel.className.isNotBlank() && n.className?.toString() == sel.className &&
-                Rect().also { n.getBoundsInScreen(it) }.toShortString() == sel.bounds) byClass = n
+            if (byDesc == null && n.contentDescription?.toString() == sel.contentDesc) byDesc = n
             for (i in 0 until n.childCount) walk(n.getChild(i))
         }
         walk(root)
-        return byDesc ?: byClass
+        return byDesc
     }
 
     private fun nodeAt(x: Int, y: Int): AccessibilityNodeInfo? {
@@ -204,9 +199,8 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         LogBus.log("ui", "tap($x,$y) → " +
             (resolved?.let { "${it.viewIdResourceName ?: it.className}" } ?: "sin nodo, gesto directo") + " · ok=$ok")
         if (!ok) return null
-        val step = stepFor(ActionType.CLICK, resolved)
-        return if (step.selector.isEmpty())
-            step.copy(selector = step.selector.copy(bounds = "[$x,$y][$x,$y]")) else step
+        // El step se graba SIN coordenadas: si no hubo nodo semántico, queda rojo (lo hará Gemini en vivo).
+        return stepFor(ActionType.CLICK, resolved)
     }
 
     override suspend fun typeAt(x: Int, y: Int, text: String): Step? {
@@ -268,18 +262,14 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     override suspend fun perform(step: Step, value: String): Boolean = when (step.action) {
         ActionType.LAUNCH -> launch(step.selector.pkg.ifBlank { step.label }) != null
         ActionType.CLICK -> {
-            val node = find(step.selector)
-            val target = clickableAncestor(node) ?: node
-            val center = target?.let { n -> Rect().also { n.getBoundsInScreen(it) } }
-                ?.let { it.centerX() to it.centerY() }
-                ?: boundsCenter(step.selector.bounds)
-            center?.let { (x, y) -> bubble?.flyTo(x, y) }
-            when {
-                target?.isClickable == true ->
-                    target.performAction(AccessibilityNodeInfo.ACTION_CLICK) ||
-                        (center != null && tapGesture(center.first, center.second))
-                center != null -> tapGesture(center.first, center.second)
-                else -> false
+            // Solo por árbol de UI: si no se encuentra el nodo, falla (se degrada / lo hace Gemini).
+            val target = clickableAncestor(find(step.selector)) ?: find(step.selector)
+            if (target == null) false
+            else {
+                val r = Rect().also { target.getBoundsInScreen(it) }
+                bubble?.flyTo(r.centerX(), r.centerY())
+                // clic al nodo; si no es clickable, gesto sobre su posición VIVA (no una coordenada guardada)
+                target.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tapGesture(r.centerX(), r.centerY())
             }
         }
         ActionType.INPUT -> {
@@ -301,11 +291,6 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
         }
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
-    }
-
-    private fun boundsCenter(bounds: String): Pair<Int, Int>? {
-        val n = Regex("-?\\d+").findAll(bounds).map { it.value.toInt() }.toList()
-        return if (n.size >= 4) (n[0] + n[2]) / 2 to (n[1] + n[3]) / 2 else null
     }
 
     private suspend fun tapGesture(x: Int, y: Int) =

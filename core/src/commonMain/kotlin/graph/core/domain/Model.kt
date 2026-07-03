@@ -20,7 +20,8 @@ enum class StepStatus { DRAFT, CONFIRMED, LLM }
 /**
  * Localizador semántico sobre cualquier árbol de UI.
  * Equivalencias por plataforma: DOM (navegador), AXAccessibility (macOS), UIA (Windows), Accessibility (Android).
- * viewId ≈ data-testid/#id · text ≈ label · contentDesc ≈ aria-label · className ≈ tagName · pkg+bounds = fallback.
+ * viewId ≈ data-testid/#id · text ≈ label · contentDesc ≈ aria-label · className ≈ tagName.
+ * NUNCA contiene coordenadas: los workflows se localizan y reproducen solo por el árbol de UI.
  */
 @Serializable
 data class Selector(
@@ -29,7 +30,6 @@ data class Selector(
     val contentDesc: String = "",
     val className: String = "",
     val pkg: String = "",
-    val bounds: String = "",
 ) {
     fun isEmpty() = viewId.isBlank() && text.isBlank() && contentDesc.isBlank() && className.isBlank()
     fun short() = viewId.ifBlank { contentDesc.ifBlank { text.ifBlank { className } } }

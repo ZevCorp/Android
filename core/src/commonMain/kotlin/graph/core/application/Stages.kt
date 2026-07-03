@@ -323,7 +323,7 @@ class ExecutionStage(
         val agentKeys = ArrayDeque<String>()
         val demoCaptured = mutableListOf<Step>()
         var demoMode = false
-        fun key(s: Step) = "${s.action}|${s.selector.viewId}|${s.selector.bounds}"
+        fun key(s: Step) = "${s.action}|${s.selector.viewId}|${s.selector.contentDesc}|${s.selector.text}|${s.label}"
         fun snapshot() = Workflow(id = wfId, name = lesson.goal.take(60), purpose = lesson.summary.ifBlank { lesson.goal },
             lessonId = lesson.id, steps = steps, variables = Workflow.deriveVariables(steps))
         fun record(step: Step?, source: StepSource = StepSource.AGENT) {
