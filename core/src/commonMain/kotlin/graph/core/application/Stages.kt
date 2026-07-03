@@ -16,6 +16,15 @@ private val NO_VOICE = object : Voice {
     override fun speak(text: String) {}
 }
 
+/**
+ * Estado con el que nace un step recién registrado, sea el ejecutor Gemini o el usuario (demo en video):
+ * 🟢 verde si es reproducible sin LLM (selector sólido del árbol de UI, o abrir app/escribir),
+ * 🔴 rojo si solo se pudo por coordenadas crudas. No hay paso de borrador: se aprende desde el registro.
+ */
+internal fun learnedStatus(step: Step): StepStatus =
+    if (step.action == ActionType.LAUNCH || step.action == ActionType.INPUT || step.selector.solid())
+        StepStatus.CONFIRMED else StepStatus.LLM
+
 private fun describe(step: Step, value: String = step.value) =
     "${step.action} \"${step.label.ifBlank { step.selector.short() }}\"" +
         (if (value.isNotBlank()) " valor=\"${value.take(60)}\"" else "") +
@@ -81,10 +90,12 @@ class TeachingStage(
         val lesson = analyzer.analyze(video)
         lessons.save(lesson)
         if (captured.isNotEmpty()) {
+            // El usuario es el ejecutor: sus acciones del árbol de UI se registran YA aprendidas
+            // (verdes), igual que cuando ejecuta Gemini. Sin paso de borrador.
             val steps = captured.mapIndexed { i, s ->
-                s.copy(order = i + 1, source = StepSource.USER_DEMO, status = StepStatus.DRAFT)
+                s.copy(order = i + 1, source = StepSource.USER_DEMO, status = learnedStatus(s))
             }
-            var draft = Workflow(
+            var wf = Workflow(
                 id = newId(),
                 name = lesson.goal.take(60),
                 purpose = lesson.summary.ifBlank { lesson.goal },
@@ -92,13 +103,14 @@ class TeachingStage(
                 steps = steps,
                 variables = Workflow.deriveVariables(steps),
             )
+            // Capa de inteligencia: acomoda tronco/ramas y elimina pasos que sobren.
             curator?.let { c ->
-                draft = runCatching { c.curate(lesson, draft) }
-                    .getOrElse { e -> log.log("teaching", "curación falló (${e.message?.take(80)}), se guarda sin ramas"); draft }
+                wf = runCatching { c.curate(lesson, wf) }
+                    .getOrElse { e -> log.log("teaching", "curación falló (${e.message?.take(80)}), se guarda sin curar"); wf }
             }
-            workflows.save(draft)
-            log.log("teaching", "workflow ${draft.id}: ${draft.steps.count { it.branch.isBlank() }} steps de tronco · " +
-                "${draft.branches.size} ramas ${draft.branches.joinToString { it.name }}")
+            workflows.save(wf)
+            log.log("teaching", "workflow ${wf.id}: ${wf.steps.size} steps (${wf.learnedPct()}% aprendido) · " +
+                "${wf.branches.size} ramas ${wf.branches.joinToString { it.name }}")
         }
         log.log("teaching", "lección: ${lesson.goal}")
         return lesson
@@ -316,16 +328,15 @@ class ExecutionStage(
             lessonId = lesson.id, steps = steps, variables = Workflow.deriveVariables(steps))
         fun record(step: Step?, source: StepSource = StepSource.AGENT) {
             step ?: return
-            // verde si es reproducible por árbol de UI (selector sólido); rojo si solo por coordenadas.
-            val solid = step.action == ActionType.LAUNCH || step.action == ActionType.INPUT || step.selector.solid()
-            val status = if (solid) StepStatus.CONFIRMED else StepStatus.LLM
+            val status = learnedStatus(step)
+            val green = status == StepStatus.CONFIRMED
             val s = step.copy(order = steps.size + 1, source = source, status = status)
             steps += s
             if (source == StepSource.AGENT) {
                 agentKeys.addLast(key(s)); if (agentKeys.size > 24) agentKeys.removeFirst()
             }
-            log.log("ejecucion", "step ${s.order} ${if (solid) "🟢" else "🔴"} [${source.name}] ${s.action} ${s.label.ifBlank { s.selector.short() }}")
-            report.report(snapshot(), s.order, if (solid) "aprendido-verde" else "rojo")
+            log.log("ejecucion", "step ${s.order} ${if (green) "🟢" else "🔴"} [${source.name}] ${s.action} ${s.label.ifBlank { s.selector.short() }}")
+            report.report(snapshot(), s.order, if (green) "aprendido-verde" else "rojo")
         }
 
         ui.setCapturing(true)

@@ -136,11 +136,15 @@ class GeminiCurator(
             PASOS NARRADOS: ${lesson.steps.joinToString(" | ")}
             PASOS CAPTURADOS:
             $stepsText
-            Identifica el TRONCO (pasos centrales, siempre necesarios) y las RAMAS opcionales/situacionales: configuraciones de primera vez, diálogos que no siempre aparecen, decisiones según contexto (p.ej. "configurar_direccion" en una app de comida). Una rama agrupa pasos consecutivos y luego el flujo se reincorpora al tronco. Solo crea ramas con evidencia real; si todo es central, no crees ninguna.
+            Tres tareas:
+            1) TRONCO vs RAMAS: identifica los pasos centrales (siempre necesarios) y las RAMAS opcionales/situacionales: configuraciones de primera vez, diálogos que no siempre aparecen, decisiones según contexto (p.ej. "configurar_direccion" en una app de comida). Una rama agrupa pasos consecutivos y luego el flujo se reincorpora al tronco. Solo crea ramas con evidencia real.
+            2) ELIMINAR: quita pasos que sean ruido o error del usuario y no aporten a la tarea: toques accidentales, idas y vueltas sin efecto, abrir algo por error, pasos duplicados. Sé conservador: elimina solo lo que claramente sobra.
+            3) No inventes pasos nuevos; solo clasifica/elimina los existentes.
             Responde SOLO JSON:
             {"branches": [{"name": "snake_case_corto", "description": "cuándo activarla"}],
-             "assignments": {"<order>": "nombre_de_rama"}}
-            En assignments incluye SOLO los steps que pertenecen a una rama (los demás son tronco).
+             "assignments": {"<order>": "nombre_de_rama"},
+             "remove": [<order de pasos a eliminar>]}
+            En assignments incluye SOLO los steps que pertenecen a una rama (los demás son tronco). remove puede ir vacío.
         """.trimIndent()
 
         val req = jo(
@@ -163,12 +167,16 @@ class GeminiCurator(
             .mapNotNull { (k, v) -> k.toIntOrNull()?.let { it to (v.jsonPrimitive.contentOrNull ?: "") } }
             .toMap()
         val valid = branches.map { it.name }.toSet()
-        LogBus.log("curador", "ramas: ${branches.joinToString { "${it.name} (${assignments.count { a -> a.value == it.name }} steps)" }.ifBlank { "ninguna" }}")
+        val remove = obj["remove"]?.jsonArray.orEmpty().mapNotNull { it.jsonPrimitive.intOrNull }.toSet()
+        // aplica ramas por order original, elimina los marcados y renumera de forma consecutiva
+        val kept = workflow.steps
+            .filter { it.order !in remove }
+            .mapIndexed { i, s -> s.copy(order = i + 1, branch = assignments[s.order]?.takeIf { it in valid } ?: "") }
+        LogBus.log("curador", "ramas: ${branches.joinToString { it.name }.ifBlank { "ninguna" }} · eliminados: ${remove.size} · ${kept.size} steps finales")
         workflow.copy(
             branches = branches,
-            steps = workflow.steps.map { s ->
-                s.copy(branch = assignments[s.order]?.takeIf { it in valid } ?: "")
-            },
+            steps = kept,
+            variables = Workflow.deriveVariables(kept),
         )
     }
 }
