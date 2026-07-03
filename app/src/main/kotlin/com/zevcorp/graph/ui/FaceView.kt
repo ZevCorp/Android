@@ -23,12 +23,12 @@ class FaceView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
-        color = Color.WHITE
+        color = Color.parseColor("#0B0E12") // líneas del rostro negras
     }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
     private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
-        color = Color.argb(46, 255, 255, 255)
+        color = Color.argb(28, 0, 0, 0)
     }
     private val path = Path()
 
@@ -41,7 +41,7 @@ class FaceView(context: Context) : View(context) {
 
         fill.shader = LinearGradient(
             0f, 0f, width.toFloat(), height.toFloat(),
-            Color.parseColor("#1B2836"), Color.parseColor("#0D141C"), Shader.TileMode.CLAMP)
+            Color.WHITE, Color.parseColor("#EEF2F6"), Shader.TileMode.CLAMP) // fill blanco
         canvas.drawCircle(cx, cy, minOf(width, height) / 2f - s, fill)
         border.strokeWidth = 1.5f * s
         canvas.drawCircle(cx, cy, minOf(width, height) / 2f - s, border)

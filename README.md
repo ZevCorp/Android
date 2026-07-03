@@ -6,6 +6,10 @@ Es el mismo principio del repo [Graph](https://github.com/Joseph1356K/Graph) (ex
 
 > **Una sola ejecución, estado por step.** Ya no hay "consciente" vs "subconsciente" como modos separados: es **una sola ejecución** donde conviven ambos según el ESTADO de cada step. 🟢 verde = se hace por árbol de UI sin LLM (subconsciente); 🟡🔴 = Gemini 3.5 Flash lo hace y, si sale bien, pasa a verde. La primera vez que grabas está 100% en borrador; cada corrida sube el % aprendido. Puedes verlo en vivo en el **dashboard**.
 
+## Pídele algo (sin video)
+
+Además de enseñarle grabando, puedes **pedirle directamente lo que quieras** por texto o voz desde la barra de chat de la burbuja (o de la app). No cambia el motor: se ejecuta con Gemini 3.5 Flash computer use y, como cualquier ejecución, va **alimentando el aprendizaje por workflow** (graba steps que un learning posterior consolida en verde). La burbuja tiene: barra de chat, 🎤 micrófono para dictar el prompt y ✏️ un botón pequeño para enseñarle con la pantalla.
+
 ## Las tres etapas
 
 1. **Teaching** — Tocas *Grabar tutorial* y muestras la tarea en tu teléfono (puedes narrar por voz). Mientras grabas, **tus clics y tecleos se capturan del árbol de UI** como workflow **borrador** (steps 🟡 DRAFT). Al detener, el video se sube a Gemini, que lo analiza como tutorial y lo destila en una `Lesson` ligada a ese borrador. Antes de guardar entra la **capa de inteligencia (curador)**: con el contexto del video — incluida tu narración sobre qué es opcional — Gemini separa el **tronco** (pasos centrales) de las **ramas** situacionales (p.ej. `configurar_direccion`: solo la primera vez o al cambiar de lugar), bifurcaciones que se reincorporan al tronco y se activan por parámetro en la terminal.

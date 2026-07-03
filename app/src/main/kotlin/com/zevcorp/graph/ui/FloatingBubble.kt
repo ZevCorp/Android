@@ -274,28 +274,63 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         val body = LinearLayout(c).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(Palette.bg, c.dp(22).toFloat(), Palette.cardBorder)
-            setPadding(c.dp(16), c.dp(16), c.dp(16), c.dp(16))
+            setPadding(c.dp(14), c.dp(14), c.dp(14), c.dp(12))
         }
 
         val header = c.row()
-        header.addView(FaceView(c), LinearLayout.LayoutParams(c.dp(40), c.dp(40)))
+        header.addView(FaceView(c), LinearLayout.LayoutParams(c.dp(38), c.dp(38)))
         val titles = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(c.dp(10), 0, 0, 0) }
-        titles.addView(c.title("Graph", 17f))
-        titles.addView(c.caption(if (app.ui != null) "Aprendo lo que me enseñas" else "Activa accesibilidad"))
+        titles.addView(c.title("Graph", 16f))
+        titles.addView(c.caption(if (app.ui != null) "Pídeme algo o enséñame ✏️" else "Activa accesibilidad"))
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(c.button("✕") { closePanel() })
+        header.addView(iconButton("✕") { closePanel() })
         body.addView(header)
-        body.gap(c.dp(12))
+        body.gap(c.dp(10))
 
-        body.addView(c.button(if (app.teachingActive) "⏹ Detener y analizar tutorial" else "⏺ Enseñarle grabando la pantalla", primary = true) {
+        // Accesos rápidos: lecciones y workflows recientes
+        val lessons = app.lessons.list().takeLast(3).reversed()
+        val workflows = app.workflows.list().takeLast(3).reversed()
+        if (workflows.isNotEmpty() || lessons.isNotEmpty()) {
+            workflows.forEach { w ->
+                body.addView(c.button("⚡ ${w.name.take(38)} · ${w.learnedPct()}%") {
+                    closePanel()
+                    scope.launch { toast(withContext(Dispatchers.Default) { app.runWorkflow(w.id, emptyMap()) }) }
+                })
+                body.gap(c.dp(6))
+            }
+            lessons.forEach { lesson ->
+                body.addView(c.button("🎓 ${lesson.goal.take(38)}") { closePanel(); learn(lesson) })
+                body.gap(c.dp(6))
+            }
+            body.gap(c.dp(4))
+        }
+
+        // Barra de chat: lápiz (enseñar) · input · micrófono · enviar
+        val input = EditText(c).apply {
+            hint = "Pídeme algo…"
+            setHintTextColor(Palette.textDim)
+            setTextColor(Palette.text)
+            textSize = 14f
+            background = rounded(Palette.card, c.dp(22).toFloat(), Palette.cardBorder)
+            setPadding(c.dp(14), c.dp(10), c.dp(14), c.dp(10))
+            maxLines = 4
+        }
+        fun submit(text: String) {
+            val prompt = text.trim()
+            if (prompt.isBlank()) return
+            closePanel()
+            runPrompt(prompt)
+        }
+        input.setOnEditorActionListener { _, _, _ -> submit(input.text.toString()); true }
+
+        val bar = c.row()
+        bar.addView(iconButton("✏️") {
             if (!app.teachingActive) {
                 closePanel()
                 c.startActivity(Intent(c, MainActivity::class.java)
                     .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("action", "teach"))
             } else {
-                closePanel()
-                app.teachingActive = false
-                toast("Analizando el tutorial…")
+                closePanel(); app.teachingActive = false; toast("Analizando el tutorial…")
                 scope.launch {
                     runCatching { withContext(Dispatchers.Default) { app.teaching.stopAndAnalyze() } }
                         .onSuccess { toast("Lección aprendida: ${it.goal}") }
@@ -303,44 +338,51 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 }
             }
         })
-        body.gap(c.dp(10))
-
-        val lessons = app.lessons.list().takeLast(4).reversed()
-        val workflows = app.workflows.list().takeLast(4).reversed()
-        if (lessons.isNotEmpty()) {
-            body.addView(c.caption("LECCIONES · toca para que las ejecute y aprenda"))
-            body.gap(c.dp(6))
-            lessons.forEach { lesson ->
-                body.addView(c.button("🎓 ${lesson.goal.take(42)}") { closePanel(); learn(lesson) })
-                body.gap(c.dp(6))
-            }
-        }
-        if (workflows.isNotEmpty()) {
-            body.gap(c.dp(4))
-            body.addView(c.caption("WORKFLOWS · ejecución subconsciente, sin LLM"))
-            body.gap(c.dp(6))
-            workflows.forEach { w ->
-                body.addView(c.button("⚡ ${w.name.take(42)}") {
-                    closePanel()
-                    scope.launch { toast(withContext(Dispatchers.Default) { app.runWorkflow(w.id, emptyMap()) }) }
-                })
-                body.gap(c.dp(6))
-            }
-        }
-        body.gap(c.dp(4))
-        body.addView(c.button("Abrir la app completa") {
-            closePanel()
-            c.startActivity(Intent(c, MainActivity::class.java).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
+        bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
+        bar.addView(iconButton("🎤") {
+            listen { heard -> if (heard != null) submit(heard) else toast("No te escuché") }
         })
+        bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
+        bar.addView(iconButton("➤", primary = true) { submit(input.text.toString()) })
+        body.addView(bar)
 
         val scroll = ScrollView(c).apply { addView(body); elevation = 16f }
-        val params = overlayParams(c.dp(300), -2, focusable = false).apply {
+        val params = overlayParams(c.dp(316), -2, focusable = true).apply {
             gravity = Gravity.TOP or Gravity.START
-            x = (bubbleParams.x - c.dp(305)).coerceAtLeast(c.dp(4))
+            x = (bubbleParams.x - c.dp(322)).coerceAtLeast(c.dp(4))
             y = bubbleParams.y.coerceAtMost(service.resources.displayMetrics.heightPixels - c.dp(420))
+            softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
         }
         wm.addView(scroll, params)
         panel = scroll
+    }
+
+    /** Botón-ícono circular (fill blanco si es primary). */
+    private fun iconButton(glyph: String, primary: Boolean = false, onClick: () -> Unit) =
+        TextView(service).apply {
+            text = glyph
+            textSize = 16f
+            gravity = Gravity.CENTER
+            setTextColor(if (primary) Palette.bg else Palette.text)
+            val d = service.dp(42)
+            minWidth = d; minHeight = d
+            setPadding(service.dp(10), service.dp(8), service.dp(10), service.dp(8))
+            background = rounded(if (primary) android.graphics.Color.WHITE else Palette.card,
+                service.dp(21).toFloat(), if (primary) 0 else Palette.cardBorder)
+            setOnClickListener { onClick() }
+        }
+
+    /** Ejecuta un prompt libre con el motor de ejecución (Gemini computer use + aprendizaje por workflow). */
+    private fun runPrompt(prompt: String) {
+        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
+        narrate("¡Vamos! $prompt")
+        scope.launch {
+            runCatching { withContext(Dispatchers.Default) { app.runPrompt(prompt, this@FloatingBubble) } }
+                .onSuccess { toast("Hecho · ${it.steps.size} steps (workflow ${it.id})") }
+                .onFailure { toast("Error: ${it.message}") }
+        }
     }
 
     private fun closePanel() {

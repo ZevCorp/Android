@@ -95,10 +95,47 @@ class MainActivity : Activity(), UserChannel {
         root.addView(setup)
         root.gap(dp(14))
 
-        // Card 1: Teaching
-        root.addView(stageCard("1", "Teaching", "Graba tu pantalla y nárralo: Graph entiende qué enseñaste.") { c ->
-            btnTeach = button("⏺ Grabar tutorial", primary = true) { toggleTeach() }
-            c.addView(btnTeach)
+        // Card 1: pídele algo por texto/voz, o enséñale con la pantalla (lápiz)
+        root.addView(stageCard("1", "Pídeme algo", "Escribe o dicta lo que quieres que haga; o enséñale grabando la pantalla ✏️.") { c ->
+            val promptInput = EditText(this).apply {
+                hint = "Pídeme algo…"
+                setHintTextColor(Palette.textDim); setTextColor(Palette.text); textSize = 14f
+                background = rounded(Palette.bg, dp(22).toFloat(), Palette.cardBorder)
+                setPadding(dp(14), dp(10), dp(14), dp(10)); maxLines = 4
+            }
+            fun submitPrompt() {
+                val p = promptInput.text.toString().trim()
+                if (p.isBlank()) return
+                promptInput.setText("")
+                runPromptFromApp(p)
+            }
+            promptInput.setOnEditorActionListener { _, _, _ -> submitPrompt(); true }
+            val bar = row()
+            btnTeach = TextView(this).apply {
+                text = "✏️"; textSize = 18f; gravity = android.view.Gravity.CENTER
+                setTextColor(Palette.text)
+                background = rounded(Palette.card, dp(21).toFloat(), Palette.cardBorder)
+                minWidth = dp(44); minHeight = dp(44)
+                setOnClickListener { toggleTeach() }
+            }
+            bar.addView(btnTeach)
+            bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+            bar.addView(promptInput, LinearLayout.LayoutParams(0, -2, 1f))
+            bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+            bar.addView(TextView(this).apply {
+                text = "🎤"; textSize = 18f; gravity = android.view.Gravity.CENTER
+                setTextColor(Palette.text)
+                background = rounded(Palette.card, dp(21).toFloat(), Palette.cardBorder)
+                minWidth = dp(44); minHeight = dp(44)
+                setOnClickListener {
+                    voiceCallback = { t -> if (t.isNotBlank()) runPromptFromApp(t) }
+                    startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                        .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
+                }
+            })
+            bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+            bar.addView(button("➤", primary = true) { submitPrompt() })
+            c.addView(bar)
         })
         root.gap(dp(14))
 
@@ -248,7 +285,7 @@ class MainActivity : Activity(), UserChannel {
                 getSystemService(MediaProjectionManager::class.java).createScreenCaptureIntent(), 1)
         } else {
             app.teachingActive = false
-            btnTeach.text = "⏺ Grabar tutorial"
+            btnTeach.text = "✏️"
             scope.launch {
                 log("Analizando el video con Gemini…")
                 runCatching { app.teaching.stopAndAnalyze() }
@@ -265,7 +302,7 @@ class MainActivity : Activity(), UserChannel {
                 RecorderService.grantData = data
                 app.teaching.startRecording()
                 app.teachingActive = true
-                btnTeach.text = "⏹ Detener y analizar"
+                btnTeach.text = "⏹"
                 Toast.makeText(this, "Grabando: enseña la tarea y detén desde aquí o desde la burbuja", Toast.LENGTH_LONG).show()
                 moveTaskToBack(true)
             }
@@ -280,10 +317,25 @@ class MainActivity : Activity(), UserChannel {
     override fun onResume() {
         super.onResume()
         if (::btnTeach.isInitialized)
-            btnTeach.text = if (app.teachingActive) "⏹ Detener y analizar" else "⏺ Grabar tutorial"
+            btnTeach.text = if (app.teachingActive) "⏹" else "✏️"
     }
 
     /* ---------- Etapa 2 ---------- */
+
+    /** Ejecuta un prompt libre con el motor de ejecución (Gemini computer use + aprendizaje por workflow). */
+    private fun runPromptFromApp(prompt: String) {
+        if (app.ui == null) {
+            log("Activa el servicio de accesibilidad de Graph")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return
+        }
+        log("Pídeme: $prompt")
+        moveTaskToBack(true)
+        scope.launch {
+            runCatching { app.runPrompt(prompt, this@MainActivity) }
+                .onSuccess { log("Hecho: ${it.name} · ${it.steps.size} steps (${it.id})"); refresh() }
+                .onFailure { log("Error: ${it.message}") }
+        }
+    }
 
     private fun learn(lesson: Lesson) {
         if (app.ui == null) {

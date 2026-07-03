@@ -58,12 +58,14 @@ fun Context.button(text: String, primary: Boolean = false, onClick: () -> Unit):
         this.text = text
         isAllCaps = false
         textSize = 14f
-        setTextColor(if (primary) Color.WHITE else Palette.text)
+        // primary ahora es fill BLANCO con texto oscuro; secundario tarjeta con borde
+        setTextColor(if (primary) Palette.bg else Palette.text)
         typeface = Typeface.DEFAULT_BOLD
         stateListAnimator = null
-        val base = rounded(if (primary) Palette.accent else Palette.card, dp(14).toFloat(),
+        val base = rounded(if (primary) Color.WHITE else Palette.card, dp(14).toFloat(),
             if (primary) 0 else Palette.cardBorder)
-        background = RippleDrawable(ColorStateList.valueOf(Palette.accentDark), base, null)
+        val ripple = if (primary) Color.parseColor("#33000000") else Palette.accentDark
+        background = RippleDrawable(ColorStateList.valueOf(ripple), base, null)
         setPadding(dp(16), dp(12), dp(16), dp(12))
         setOnClickListener { onClick() }
     }

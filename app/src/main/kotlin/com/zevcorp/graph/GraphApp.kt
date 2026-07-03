@@ -77,6 +77,22 @@ class GraphApp : Application() {
         }
     }
 
+    /**
+     * Pídele algo por texto/voz SIN video previo: se ejecuta con el mismo motor (Gemini computer use)
+     * y, como cualquier ejecución, va alimentando el aprendizaje por workflow (steps DRAFT que un
+     * learning posterior consolida). Solo cambia la UX: el prompt reemplaza al tutorial en video.
+     */
+    suspend fun runPrompt(prompt: String, user: UserChannel): Workflow {
+        val lesson = Lesson(id = "ask_${System.currentTimeMillis()}", goal = prompt, summary = prompt)
+        lessons.save(lesson)
+        bubbleCompanion(true)
+        try {
+            return execution(user).runLesson(lesson)
+        } finally {
+            bubbleCompanion(false)
+        }
+    }
+
     /** Ejecución unificada por id (terminal/UI): verdes por árbol de UI, no-verdes con Gemini. */
     suspend fun runWorkflow(
         id: String,
