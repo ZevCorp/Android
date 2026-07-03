@@ -78,6 +78,11 @@ interface UserChannel {
     suspend fun awaitDemoEnd()
 }
 
+/** Log estructurado del núcleo; cada plataforma decide dónde mostrarlo (panel de desarrollador en Android). */
+fun interface GraphLog {
+    fun log(tag: String, message: String)
+}
+
 /* ---------- Persistencia ---------- */
 
 interface WorkflowRepository {

@@ -34,7 +34,12 @@ class RunCommandReceiver : BroadcastReceiver() {
                 val inputs = intent.extras?.keySet().orEmpty()
                     .filter { it.startsWith("input_") }
                     .associateWith { intent.getStringExtra(it) ?: "" }
-                app.scope.launch { Log.i(TAG, app.runWorkflow(id, inputs)) }
+                LogBus.log("cli", "RUN $id ${inputs.keys.joinToString(",")}")
+                app.scope.launch {
+                    val result = app.runWorkflow(id, inputs)
+                    Log.i(TAG, result)
+                    LogBus.log("cli", result)
+                }
             }
         }
     }

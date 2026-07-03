@@ -16,10 +16,12 @@ import com.zevcorp.graph.ui.FloatingBubble
 import graph.core.domain.*
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 /**
  * Superficie de UI de Android: el análogo del recorder DOM de la extensión de Chrome de Graph.
@@ -33,11 +35,13 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     @Volatile private var capturing = false
     private val pendingInputs = LinkedHashMap<String, Step>()
 
-    private var bubble: FloatingBubble? = null
+    var bubble: FloatingBubble? = null
+        private set
 
     override fun onServiceConnected() {
         GraphApp.instance.ui = this
         bubble = FloatingBubble(this).also { it.show() }
+        LogBus.log("ui", "servicio de accesibilidad conectado · burbuja visible")
     }
 
     override fun onDestroy() {
@@ -55,7 +59,11 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
                 flushInputs()
-                event.source?.let { _userActions.tryEmit(stepFor(ActionType.CLICK, it)) }
+                event.source?.let {
+                    val step = stepFor(ActionType.CLICK, it)
+                    LogBus.log("uitree", "evento CLICK ${step.selector.short()}")
+                    _userActions.tryEmit(step)
+                }
             }
             // Como en Graph: los eventos de tecleo se funden y gana el último valor por selector.
             AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
@@ -80,6 +88,8 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     /* ---------- Estado de pantalla ---------- */
 
     override suspend fun state(): ScreenState {
+        withContext(Dispatchers.Main) { bubble?.hideForShot() } // fuera de la captura del agente
+        delay(120)
         val metrics = resources.displayMetrics
         return ScreenState(currentScreen(), metrics.widthPixels, metrics.heightPixels, screenshot())
     }
@@ -186,18 +196,30 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     /* ---------- Ejecución ---------- */
 
     override suspend fun tapAt(x: Int, y: Int): Step? {
+        bubble?.flyTo(x, y)
         val node = nodeAt(x, y)
         val clickable = clickableAncestor(node)
-        val ok = clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) ?: tapGesture(x, y)
+        val ok = clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true || tapGesture(x, y)
+        val resolved = clickable ?: node
+        LogBus.log("ui", "tap($x,$y) → " +
+            (resolved?.let { "${it.viewIdResourceName ?: it.className}" } ?: "sin nodo, gesto directo") + " · ok=$ok")
         if (!ok) return null
-        val step = stepFor(ActionType.CLICK, clickable ?: node)
+        val step = stepFor(ActionType.CLICK, resolved)
         return if (step.selector.isEmpty())
             step.copy(selector = step.selector.copy(bounds = "[$x,$y][$x,$y]")) else step
     }
 
     override suspend fun typeAt(x: Int, y: Int, text: String): Step? {
-        val node = editableSelf(nodeAt(x, y)) ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return null
-        return if (setText(node, text)) stepFor(ActionType.INPUT, node, text) else null
+        val node = editableSelf(nodeAt(x, y)) ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
+        if (node == null) {
+            LogBus.log("ui", "type($x,$y): sin campo editable ni foco")
+            return null
+        }
+        val r = Rect().also { node.getBoundsInScreen(it) }
+        bubble?.flyTo(r.centerX(), r.centerY())
+        val ok = setText(node, text)
+        LogBus.log("ui", "type(${node.viewIdResourceName ?: node.className}) = \"${text.take(30)}\" · ok=$ok")
+        return if (ok) stepFor(ActionType.INPUT, node, text) else null
     }
 
     override suspend fun launch(query: String): Step? {
@@ -214,6 +236,7 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
             ?: return null
         val intent = pm.getLaunchIntentForPackage(match.packageName) ?: return null
         startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+        LogBus.log("ui", "launch: ${match.packageName}")
         delay(1500)
         return Step(0, ActionType.LAUNCH, Selector(pkg = match.packageName),
             label = pm.getApplicationLabel(match).toString(), screen = currentScreen())
@@ -246,17 +269,27 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         ActionType.LAUNCH -> launch(step.selector.pkg.ifBlank { step.label }) != null
         ActionType.CLICK -> {
             val node = find(step.selector)
-            val clickable = clickableAncestor(node)
+            val target = clickableAncestor(node) ?: node
+            val center = target?.let { n -> Rect().also { n.getBoundsInScreen(it) } }
+                ?.let { it.centerX() to it.centerY() }
+                ?: boundsCenter(step.selector.bounds)
+            center?.let { (x, y) -> bubble?.flyTo(x, y) }
             when {
-                clickable != null -> clickable.performAction(AccessibilityNodeInfo.ACTION_CLICK)
-                node != null -> {
-                    val r = Rect().also { node.getBoundsInScreen(it) }
-                    tapGesture(r.centerX(), r.centerY())
-                }
-                else -> boundsCenter(step.selector.bounds)?.let { (x, y) -> tapGesture(x, y) } ?: false
+                target?.isClickable == true ->
+                    target.performAction(AccessibilityNodeInfo.ACTION_CLICK) ||
+                        (center != null && tapGesture(center.first, center.second))
+                center != null -> tapGesture(center.first, center.second)
+                else -> false
             }
         }
-        ActionType.INPUT -> editableSelf(find(step.selector))?.let { setText(it, value) } ?: false
+        ActionType.INPUT -> {
+            val node = editableSelf(find(step.selector))
+            if (node != null) {
+                val r = Rect().also { node.getBoundsInScreen(it) }
+                bubble?.flyTo(r.centerX(), r.centerY())
+                setText(node, value)
+            } else false
+        }
         ActionType.SCROLL -> scroll(value != "up")
         ActionType.KEY -> pressKey(value)
         ActionType.WAIT -> { delay(value.toLongOrNull() ?: 500); true }

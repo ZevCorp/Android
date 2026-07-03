@@ -203,7 +203,9 @@ class GeminiComputerUse(
             "POST", "$BASE/v1beta/interactions",
             mapOf("Content-Type" to "application/json", "x-goog-api-key" to apiKey()),
             Json.encodeToString(JsonObject.serializer(), JsonObject(fields.toMap())).toByteArray(),
-        ).orThrow()
+        )
+        if (res.code >= 300) LogBus.log("gemini", "HTTP ${res.code}: ${res.body.take(300)}")
+        res.orThrow()
         parseTurn(Json.parseToJsonElement(res.body).jsonObject, state)
     }
 
@@ -255,6 +257,8 @@ class GeminiComputerUse(
             }
         }
         pending = calls
+        LogBus.log("gemini", if (calls.isEmpty()) "turno final: ${text.take(120)}"
+        else "turno: ${calls.joinToString(", ") { it.name }}" + (question?.let { " · pregunta" } ?: ""))
         return BrainTurn(actions, question, done = calls.isEmpty(), text = text)
     }
 

@@ -4,8 +4,10 @@ import android.app.Application
 import android.content.SharedPreferences
 import com.zevcorp.graph.platform.*
 import graph.core.application.*
+import graph.core.domain.Lesson
 import graph.core.domain.UiSurface
 import graph.core.domain.UserChannel
+import graph.core.domain.Workflow
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -27,23 +29,40 @@ class GraphApp : Application() {
 
     val lessons by lazy { FileLessonRepo(filesDir) }
     val workflows by lazy { FileWorkflowRepo(filesDir) }
-    val teaching by lazy { TeachingStage(DroidScreenRecorder(this), GeminiTutorialAnalyzer(apiKey, model), lessons) }
+    val teaching by lazy { TeachingStage(DroidScreenRecorder(this), GeminiTutorialAnalyzer(apiKey, model), lessons, LogBus) }
 
-    fun learning(user: UserChannel) = LearningStage(
-        brain = GeminiComputerUse(apiKey, model, listApps = {
-            packageManager.getInstalledApplications(0)
-                .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
-                .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
-        }),
-        ui = requireNotNull(ui) { "Servicio de accesibilidad inactivo" },
-        user = user,
-        workflows = workflows,
-        newId = { "wf_${System.currentTimeMillis()}" },
-    )
+    private fun bubbleCompanion(on: Boolean) = (ui as? GraphAccessibilityService)?.bubble?.companion(on)
+
+    /** Etapa 2 con la burbuja en modo acompañante (vuela a cada clic, pass-through, se restaura al final). */
+    suspend fun runLearning(lesson: Lesson, user: UserChannel): Workflow {
+        val stage = LearningStage(
+            brain = GeminiComputerUse(apiKey, model, listApps = {
+                packageManager.getInstalledApplications(0)
+                    .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+                    .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
+            }),
+            ui = requireNotNull(ui) { "Servicio de accesibilidad inactivo" },
+            user = user,
+            workflows = workflows,
+            newId = { "wf_${System.currentTimeMillis()}" },
+            log = LogBus,
+        )
+        bubbleCompanion(true)
+        try {
+            return stage.run(lesson)
+        } finally {
+            bubbleCompanion(false)
+        }
+    }
 
     suspend fun runWorkflow(id: String, inputs: Map<String, String>): String {
         val surface = ui ?: return "Servicio de accesibilidad inactivo: actívalo en Ajustes"
-        return SubconsciousStage(surface, workflows).run(id, inputs)
+        bubbleCompanion(true)
+        try {
+            return SubconsciousStage(surface, workflows, LogBus).run(id, inputs)
+        } finally {
+            bubbleCompanion(false)
+        }
     }
 
     override fun onCreate() {

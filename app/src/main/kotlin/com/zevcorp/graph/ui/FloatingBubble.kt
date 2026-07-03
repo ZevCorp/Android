@@ -1,7 +1,11 @@
 package com.zevcorp.graph.ui
 
 import android.accessibilityservice.AccessibilityService
+import android.animation.Animator
+import android.animation.AnimatorListenerAdapter
+import android.animation.ValueAnimator
 import android.content.Intent
+import android.view.animation.AccelerateInterpolator
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.os.Bundle
@@ -83,6 +87,68 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel {
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
         demoBadge?.let { runCatching { wm.removeView(it) } }
+    }
+
+    /* ---------- Modo acompañante: la carita vuela hacia donde se va a hacer clic ---------- */
+
+    /**
+     * Vuela suave hacia el objetivo con curva de velocidad ascendente (ease-in:
+     * arranca lento y llega rápido). Se queda flotando justo encima del punto.
+     * En este modo la burbuja es pass-through: los taps del agente la atraviesan.
+     */
+    suspend fun flyTo(targetX: Int, targetY: Int) = withContext(Dispatchers.Main) {
+        setPassThrough(true)
+        bubble.visibility = View.VISIBLE
+        bubble.thinking = true
+        val m = service.resources.displayMetrics
+        val destX = (targetX - bubbleParams.width / 2).coerceIn(0, m.widthPixels - bubbleParams.width)
+        val destY = (targetY - bubbleParams.height - service.dp(14)).coerceIn(0, m.heightPixels - bubbleParams.height)
+        val startX = bubbleParams.x
+        val startY = bubbleParams.y
+        suspendCancellableCoroutine { cont ->
+            ValueAnimator.ofFloat(0f, 1f).apply {
+                duration = 480
+                interpolator = AccelerateInterpolator(1.7f) // curva de velocidad: despacio → rápido
+                addUpdateListener { a ->
+                    val f = a.animatedValue as Float
+                    bubbleParams.x = (startX + (destX - startX) * f).toInt()
+                    bubbleParams.y = (startY + (destY - startY) * f).toInt()
+                    runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+                }
+                addListener(object : AnimatorListenerAdapter() {
+                    override fun onAnimationEnd(animation: Animator) {
+                        if (cont.isActive) cont.resume(Unit)
+                    }
+                })
+                start()
+            }
+        }
+        delay(60) // un respiro sobre el objetivo antes del clic
+    }
+
+    /** Se oculta justo antes de cada captura de pantalla del agente. */
+    fun hideForShot() {
+        bubble.visibility = View.INVISIBLE
+    }
+
+    /** on=true durante Learning/subconsciente (pass-through); on=false restaura la burbuja normal. */
+    fun companion(on: Boolean) {
+        scope.launch {
+            setPassThrough(on)
+            if (!on) {
+                bubble.visibility = View.VISIBLE
+                bubble.thinking = false
+            }
+        }
+    }
+
+    private fun setPassThrough(on: Boolean) {
+        val flag = WindowManager.LayoutParams.FLAG_NOT_TOUCHABLE
+        val flags = if (on) bubbleParams.flags or flag else bubbleParams.flags and flag.inv()
+        if (flags != bubbleParams.flags) {
+            bubbleParams.flags = flags
+            runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+        }
     }
 
     private fun overlayParams(w: Int, h: Int, focusable: Boolean) = WindowManager.LayoutParams(
@@ -178,13 +244,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel {
     private fun learn(lesson: Lesson) {
         if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
         toast("Aprendiendo: ${lesson.goal.take(40)}")
-        bubble.visibility = View.GONE // fuera de las capturas del agente
         scope.launch {
-            runCatching { withContext(Dispatchers.Default) { app.learning(this@FloatingBubble).run(lesson) } }
+            runCatching { withContext(Dispatchers.Default) { app.runLearning(lesson, this@FloatingBubble) } }
                 .onSuccess { toast("Workflow aprendido: ${it.name.take(32)} (${it.steps.size} steps)") }
                 .onFailure { toast("Error en learning: ${it.message}") }
-            bubble.visibility = View.VISIBLE
-            bubble.thinking = false
         }
     }
 
@@ -230,6 +293,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel {
             actions.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
             actions.addView(c.button("👋 Te lo muestro") {
                 demoEnd = CompletableDeferred()
+                setPassThrough(false) // la burbuja vuelve a ser tocable: es el botón de "terminé"
                 showDemoBadge()
                 toast("Hazlo tú; cuando termines toca la burbuja ✅")
                 finish(Answer(demo = true))
@@ -248,7 +312,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel {
 
     override suspend fun awaitDemoEnd() {
         demoEnd?.await()
-        withContext(Dispatchers.Main) { bubble.visibility = View.GONE }
+        demoEnd = null
+        withContext(Dispatchers.Main) { setPassThrough(true) } // el agente retoma el control
     }
 
     private fun showDemoBadge() {

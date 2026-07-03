@@ -15,6 +15,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
+import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.RecorderService
 import graph.core.domain.Answer
 import graph.core.domain.Lesson
@@ -111,16 +112,45 @@ class MainActivity : Activity(), UserChannel {
         })
         root.gap(dp(14))
 
-        // Registro
-        val logCard = card()
-        logCard.addView(caption("REGISTRO"))
-        logCard.gap(dp(6))
-        logView = TextView(this).apply { textSize = 12f; setTextColor(Palette.textDim) }
-        logCard.addView(logView)
-        root.addView(logCard)
+        // Panel de desarrollador: logs en vivo de todas las etapas
+        val dev = card()
+        val devHead = row()
+        devHead.addView(pill(" 🐞 "))
+        devHead.addView(title("Desarrollador").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        devHead.addView(button("Copiar") {
+            val cm = getSystemService(android.content.ClipboardManager::class.java)
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("graph-logs", LogBus.dump()))
+            Toast.makeText(this, "Logs copiados", Toast.LENGTH_SHORT).show()
+        })
+        devHead.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+        devHead.addView(button("Limpiar") { LogBus.clear(); logView.text = "" })
+        dev.addView(devHead)
+        dev.gap(dp(8))
+        logView = TextView(this).apply {
+            textSize = 10f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextColor(Palette.textDim)
+            setTextIsSelectable(true)
+        }
+        val logScroll = ScrollView(this).apply {
+            addView(logView)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+        }
+        dev.addView(logScroll, LinearLayout.LayoutParams(-1, dp(240)))
+        root.addView(dev)
 
         setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
         requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO, android.Manifest.permission.POST_NOTIFICATIONS), 3)
+
+        logView.text = LogBus.dump()
+        scope.launch {
+            LogBus.lines.collect {
+                logView.text = LogBus.dump()
+                logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+            }
+        }
         refresh()
         handleIntent(intent)
     }
@@ -148,9 +178,7 @@ class MainActivity : Activity(), UserChannel {
         return c
     }
 
-    private fun log(message: String) = runOnUiThread {
-        logView.text = "• $message\n${logView.text}".take(4000)
-    }
+    private fun log(message: String) = LogBus.log("app", message)
 
     private fun refresh() = scope.launch {
         val lessons = withContext(Dispatchers.IO) { app.lessons.list() }
@@ -226,7 +254,7 @@ class MainActivity : Activity(), UserChannel {
         log("Learning: ${lesson.goal}")
         moveTaskToBack(true)
         scope.launch {
-            runCatching { app.learning(this@MainActivity).run(lesson) }
+            runCatching { app.runLearning(lesson, this@MainActivity) }
                 .onSuccess { log("Workflow guardado: ${it.id} · ${it.steps.size} steps · ${it.variables.size} variables"); refresh() }
                 .onFailure { log("Error en learning: ${it.message}") }
         }
