@@ -33,6 +33,8 @@ data class Selector(
 ) {
     fun isEmpty() = viewId.isBlank() && text.isBlank() && contentDesc.isBlank() && className.isBlank()
     fun short() = viewId.ifBlank { contentDesc.ifBlank { text.ifBlank { className } } }
+    /** Reproducible sin LLM: tiene un localizador semántico estable (no solo coordenadas). */
+    fun solid() = viewId.isNotBlank() || contentDesc.isNotBlank() || text.isNotBlank()
 }
 
 @Serializable

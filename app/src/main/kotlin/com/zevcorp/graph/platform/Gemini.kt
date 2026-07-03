@@ -428,6 +428,7 @@ class GeminiComputerUse(
         En el campo "intent" de cada acción escribe una frase corta y con chispa de lo que haces (ej: "Abro el reloj ⏰", "Busco la mejor pizza para ti 🍕"): eso se le narra al usuario.
         Usa speak SOLO para avisos importantes y ask_user SOLO para dudas reales (p.ej. "¿el Uber es para ti o para tu mamá?"). No hables por hablar.
         Usa open_app para abrir apps. Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones).
+        IMPORTANTE: en las capturas aparece una pequeña carita blanca flotante (el asistente Graph). IGNÓRALA por completo: no es parte de la app, nunca la toques ni interactúes con ella.
         ${instructions.takeIf { it.isNotBlank() }?.let { "MODO ESPECIAL: $it" } ?: ""}
         Pantalla actual: ${state.screen}
     """.trimIndent()

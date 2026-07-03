@@ -235,19 +235,12 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         delay(60) // un respiro sobre el objetivo antes del clic
     }
 
-    /** Se oculta justo antes de cada captura de pantalla del agente. */
-    fun hideForShot() {
-        bubble.visibility = View.INVISIBLE
-    }
-
-    /** on=true durante Learning/subconsciente (pass-through); on=false restaura la burbuja normal. */
+    /** on=true durante la ejecución (pass-through, carita pensativa siempre visible); on=false restaura. */
     fun companion(on: Boolean) {
         scope.launch {
             setPassThrough(on)
-            if (!on) {
-                bubble.visibility = View.VISIBLE
-                bubble.thinking = false
-            }
+            bubble.visibility = View.VISIBLE // siempre visible: ya no parpadea por capturas
+            bubble.thinking = on
         }
     }
 
@@ -287,23 +280,16 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         body.addView(header)
         body.gap(c.dp(10))
 
-        // Accesos rápidos: lecciones y workflows recientes
-        val lessons = app.lessons.list().takeLast(3).reversed()
-        val workflows = app.workflows.list().takeLast(3).reversed()
-        if (workflows.isNotEmpty() || lessons.isNotEmpty()) {
-            workflows.forEach { w ->
-                body.addView(c.button("⚡ ${w.name.take(38)} · ${w.learnedPct()}%") {
-                    closePanel()
-                    scope.launch { toast(withContext(Dispatchers.Default) { app.runWorkflow(w.id, emptyMap()) }) }
-                })
-                body.gap(c.dp(6))
-            }
-            lessons.forEach { lesson ->
-                body.addView(c.button("🎓 ${lesson.goal.take(38)}") { closePanel(); learn(lesson) })
-                body.gap(c.dp(6))
-            }
-            body.gap(c.dp(4))
+        // Accesos rápidos: workflows aprendidos (el % sube al re-ejecutar). Tocar = ejecutar y consolidar.
+        val workflows = app.workflows.list().takeLast(4).reversed()
+        workflows.forEach { w ->
+            body.addView(c.button("⚡ ${w.name.take(38)} · ${w.learnedPct()}%") {
+                closePanel()
+                scope.launch { toast(withContext(Dispatchers.Default) { app.runWorkflow(w.id, emptyMap()) }) }
+            })
+            body.gap(c.dp(6))
         }
+        if (workflows.isNotEmpty()) body.gap(c.dp(4))
 
         // Barra de chat: lápiz (enseñar) · input · micrófono · enviar
         val input = EditText(c).apply {
@@ -415,8 +401,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             lateinit var window: View
             fun finish(answer: Answer) {
                 runCatching { wm.removeView(window) }
-                bubble.thinking = false
-                if (!answer.demo) bubble.visibility = View.GONE
+                bubble.visibility = View.VISIBLE // la ejecución sigue: la carita se queda
                 cont.resume(answer)
             }
             val header = c.row()

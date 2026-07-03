@@ -301,24 +301,31 @@ class ExecutionStage(
         }
     }
 
-    /* ---------- modo libre (lecciones sin borrador): el agente ejecuta y se graba ---------- */
+    /* ---------- modo libre: pides algo nuevo, Gemini lo hace y construye el subconsciente ---------- */
 
     private suspend fun freeRun(lesson: Lesson): Workflow = coroutineScope {
-        log.log("ejecucion", "modo libre: sin workflow borrador para la lección")
+        log.log("ejecucion", "ejecución nueva (sin workflow previo): Gemini la hace y aprende sobre la marcha")
         val brain = brain()
+        val wfId = lesson.id.takeIf { it.startsWith("wf_") } ?: newId()
         val steps = mutableListOf<Step>()
         val agentKeys = ArrayDeque<String>()
         val demoCaptured = mutableListOf<Step>()
         var demoMode = false
         fun key(s: Step) = "${s.action}|${s.selector.viewId}|${s.selector.bounds}"
+        fun snapshot() = Workflow(id = wfId, name = lesson.goal.take(60), purpose = lesson.summary.ifBlank { lesson.goal },
+            lessonId = lesson.id, steps = steps, variables = Workflow.deriveVariables(steps))
         fun record(step: Step?, source: StepSource = StepSource.AGENT) {
             step ?: return
-            val s = step.copy(order = steps.size + 1, source = source)
+            // verde si es reproducible por árbol de UI (selector sólido); rojo si solo por coordenadas.
+            val solid = step.action == ActionType.LAUNCH || step.action == ActionType.INPUT || step.selector.solid()
+            val status = if (solid) StepStatus.CONFIRMED else StepStatus.LLM
+            val s = step.copy(order = steps.size + 1, source = source, status = status)
             steps += s
             if (source == StepSource.AGENT) {
                 agentKeys.addLast(key(s)); if (agentKeys.size > 24) agentKeys.removeFirst()
             }
-            log.log("ejecucion", "step ${s.order} [${source.name}] ${s.action} ${s.label.ifBlank { s.selector.short() }}")
+            log.log("ejecucion", "step ${s.order} ${if (solid) "🟢" else "🔴"} [${source.name}] ${s.action} ${s.label.ifBlank { s.selector.short() }}")
+            report.report(snapshot(), s.order, if (solid) "aprendido-verde" else "rojo")
         }
 
         ui.setCapturing(true)
@@ -379,13 +386,12 @@ class ExecutionStage(
         }
         ui.setCapturing(false); delay(300); collector.cancel()
         if (steps.isEmpty() && error != null) throw IllegalStateException(error)
-        val workflow = Workflow(
-            id = newId(), name = lesson.goal.take(60),
-            purpose = summary.ifBlank { lesson.goal } + (error?.let { " (interrumpido: ${it.take(80)})" } ?: ""),
-            lessonId = lesson.id, steps = steps, variables = Workflow.deriveVariables(steps),
-        )
+        val workflow = snapshot().copy(
+            purpose = summary.ifBlank { lesson.goal } + (error?.let { " (interrumpido: ${it.take(80)})" } ?: ""))
         workflows.save(workflow)
-        log.log("ejecucion", "workflow ${workflow.id} guardado: ${steps.size} steps DRAFT")
+        val green = steps.count { it.status == StepStatus.CONFIRMED }
+        log.log("ejecucion", "workflow ${workflow.id}: ${steps.size} steps · ${workflow.learnedPct()}% aprendido ($green verdes)")
+        report.report(workflow, 0, "fin")
         workflow
     }
 }

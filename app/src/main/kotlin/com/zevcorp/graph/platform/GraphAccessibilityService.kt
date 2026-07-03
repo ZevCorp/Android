@@ -88,8 +88,8 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     /* ---------- Estado de pantalla ---------- */
 
     override suspend fun state(): ScreenState {
-        withContext(Dispatchers.Main) { bubble?.hideForShot() } // fuera de la captura del agente
-        delay(120)
+        // La carita se queda visible durante la ejecución (flota sobre el objetivo, arriba del punto de
+        // clic, sin taparlo y en modo pass-through). A Gemini se le indica en el prompt que la ignore.
         val metrics = resources.displayMetrics
         return ScreenState(currentScreen(), metrics.widthPixels, metrics.heightPixels, screenshot())
     }

@@ -83,8 +83,8 @@ class GraphApp : Application() {
      * learning posterior consolida). Solo cambia la UX: el prompt reemplaza al tutorial en video.
      */
     suspend fun runPrompt(prompt: String, user: UserChannel): Workflow {
+        // No se guarda ninguna lección: para un prompt el único artefacto es el workflow.
         val lesson = Lesson(id = "ask_${System.currentTimeMillis()}", goal = prompt, summary = prompt)
-        lessons.save(lesson)
         bubbleCompanion(true)
         try {
             return execution(user).runLesson(lesson)
