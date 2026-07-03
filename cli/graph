@@ -1,0 +1,34 @@
+#!/usr/bin/env bash
+# Graph CLI — etapa subconsciente desde la terminal (requiere adb y el teléfono conectado).
+#   graph list
+#   graph run <wf_id> [--input_3="valor" ...]
+#   graph set-key <GEMINI_API_KEY>
+set -e
+PKG=com.zevcorp.graph
+since=$(adb shell date '+%m-%d\ %H:%M:%S.000')
+
+case "$1" in
+  list)
+    adb shell am broadcast -a $PKG.LIST -n $PKG/.platform.RunCommandReceiver >/dev/null
+    sleep 1
+    adb logcat -d -t "$since" -s GraphCLI:I | sed 's/.*GraphCLI: //'
+    ;;
+  run)
+    id=$2; shift 2
+    args=()
+    for kv in "$@"; do
+      k=${kv%%=*}; k=${k#--}; v=${kv#*=}
+      args+=(--es "$k" "$v")
+    done
+    adb shell am broadcast -a $PKG.RUN -n $PKG/.platform.RunCommandReceiver --es id "$id" "${args[@]}" >/dev/null
+    echo "Ejecutando $id… (subconsciente: sin LLM, sobre accesibilidad)"
+    adb logcat -T "$since" -s GraphCLI:I | sed 's/.*GraphCLI: //' | head -1
+    ;;
+  set-key)
+    adb shell am broadcast -a $PKG.SET_KEY -n $PKG/.platform.RunCommandReceiver --es key "$2" >/dev/null
+    echo "API key configurada"
+    ;;
+  *)
+    echo "Uso: graph list | graph run <wf_id> [--input_N=\"valor\"...] | graph set-key <key>"
+    ;;
+esac
