@@ -222,6 +222,12 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         return gesture(Path().apply { moveTo(x, y1); lineTo(x, y2) }, 300)
     }
 
+    override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long): Boolean =
+        gesture(Path().apply {
+            moveTo(x1.toFloat(), y1.toFloat())
+            if (x1 != x2 || y1 != y2) lineTo(x2.toFloat(), y2.toFloat())
+        }, ms.coerceIn(80, 10_000))
+
     override fun pressKey(key: String): Boolean = when {
         key.contains("back", true) -> performGlobalAction(GLOBAL_ACTION_BACK)
         key.contains("home", true) -> performGlobalAction(GLOBAL_ACTION_HOME)

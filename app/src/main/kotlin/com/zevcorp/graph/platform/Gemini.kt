@@ -39,9 +39,6 @@ private fun HttpRes.orThrow(): HttpRes =
 private fun js(s: String) = JsonPrimitive(s)
 private fun jo(vararg pairs: Pair<String, JsonElement>) = JsonObject(pairs.toMap())
 private fun jtext(t: String) = jo("text" to js(t))
-private fun jimg(png: ByteArray) = jo(
-    "inlineData" to jo("mimeType" to js("image/png"), "data" to js(Base64.encodeToString(png, Base64.NO_WRAP)))
-)
 
 private fun JsonObject.str(key: String) = this[key]?.jsonPrimitive?.contentOrNull ?: ""
 
@@ -116,24 +113,34 @@ Responde SOLO con JSON: {"goal": "objetivo de la tarea en una frase", "app": "ap
 }
 
 /**
- * Etapa 2 · Learning: Gemini 3.5 Flash con computer use controla el teléfono.
- * Protocolo: screenshot → functionCall (click_at/type_text_at/... en coordenadas 0-999) → functionResponse.
- * Se añaden funciones propias: open_app (apps Android) y ask_user (dudas → feedback del usuario).
+ * Etapa 2 · Learning: Gemini 3.5 Flash con computer use nativo (Interactions API).
+ *
+ * Protocolo (ai.google.dev/gemini-api/docs/computer-use):
+ *  - POST /v1beta/interactions con header x-goog-api-key, tool {type:"computer_use", environment:"mobile"}.
+ *  - El servidor mantiene la conversación: cada turno siguiente sólo envía previous_interaction_id
+ *    + los function_result (con call_id, url y screenshot como imagen inline).
+ *  - Funciones mobile: click/type/open_app/list_apps/drag_and_drop/long_press/press_key/go_back/wait/
+ *    take_screenshot, en coordenadas normalizadas 0-1000. Se añade ask_user como función custom.
  */
 class GeminiComputerUse(
     private val apiKey: () -> String,
     private val model: () -> String,
+    private val listApps: () -> String,
 ) : ComputerUseBrain {
 
-    private val contents = mutableListOf<JsonElement>()
-    private var pendingCalls = listOf<String>()
+    private class Call(val id: String, val name: String, val safety: Boolean)
+
+    private var previousId = ""
+    private var pending = listOf<Call>()
+    private val internalResults = HashMap<String, JsonObject>() // resultados resueltos localmente (list_apps)
     private var informText = ""
     private var lesson: Lesson? = null
 
     override fun begin(lesson: Lesson) {
         this.lesson = lesson
-        contents.clear()
-        pendingCalls = emptyList()
+        previousId = ""
+        pending = emptyList()
+        internalResults.clear()
         informText = ""
     }
 
@@ -142,93 +149,122 @@ class GeminiComputerUse(
     }
 
     override suspend fun next(state: ScreenState, actionResults: List<String>): BrainTurn = withContext(Dispatchers.IO) {
-        val parts = mutableListOf<JsonElement>()
-        if (contents.isEmpty()) {
-            parts += jtext(goalPrompt(lesson!!, state))
+        fun image(png: ByteArray) = jo(
+            "type" to js("image"), "mime_type" to js("image/png"),
+            "data" to js(Base64.encodeToString(png, Base64.NO_WRAP)),
+        )
+
+        val input = mutableListOf<JsonElement>()
+        if (previousId.isBlank()) {
+            input += jo("type" to js("text"), "text" to js(goalPrompt(lesson!!, state)))
+            state.screenshotPng?.let { input += image(it) }
         } else {
-            pendingCalls.forEachIndexed { i, name ->
-                val response = if (name == "ask_user")
-                    jo("answer" to js(informText.ifBlank { "(sin respuesta)" }))
-                else
-                    jo("url" to js(state.screen), "result" to js(actionResults.getOrElse(i) { "ok" }))
-                parts += jo("functionResponse" to jo("name" to js(name), "response" to response))
+            pending.forEachIndexed { i, call ->
+                val payload = when {
+                    call.name == "ask_user" -> jo("answer" to js(informText.ifBlank { "(sin respuesta)" }))
+                    internalResults.containsKey(call.id) -> internalResults.getValue(call.id)
+                    else -> jo("url" to js(state.screen), "result" to js(actionResults.getOrElse(i) { "ok" }))
+                }
+                val result = mutableListOf<JsonElement>(
+                    jo("type" to js("text"), "text" to js(Json.encodeToString(JsonObject.serializer(), payload))))
+                if (i == pending.lastIndex) state.screenshotPng?.let { result += image(it) }
+
+                val fields = mutableListOf(
+                    "type" to js("function_result"), "name" to js(call.name),
+                    "call_id" to js(call.id), "result" to JsonArray(result))
+                // El usuario supervisa el Learning en vivo: se confirman las acciones sensibles.
+                if (call.safety) fields += "safety_acknowledgement" to JsonPrimitive(true)
+                input += JsonObject(fields.toMap())
             }
             informText = ""
         }
-        state.screenshotPng?.let { parts += jimg(it) } ?: run { parts += jtext("(captura de pantalla no disponible)") }
-        contents += jo("role" to js("user"), "parts" to JsonArray(parts))
+        internalResults.clear()
 
-        val req = jo(
-            "contents" to JsonArray(contents),
+        val fields = mutableListOf(
+            "model" to js(model()),
+            "input" to JsonArray(input),
             "tools" to JsonArray(listOf(
-                jo("computerUse" to jo("environment" to js("ENVIRONMENT_BROWSER"))),
-                jo("functionDeclarations" to JsonArray(listOf(
-                    fn("open_app", "Abre una app de Android por nombre/paquete, o una URL", "name"),
-                    fn("ask_user", "Pregunta al usuario cuando tengas dudas sobre cómo seguir el tutorial", "question"),
-                ))),
+                jo("type" to js("computer_use"), "environment" to js("mobile")),
+                jo(
+                    "type" to js("function"),
+                    "name" to js("ask_user"),
+                    "description" to js("Pregunta al usuario cuando tengas una duda real sobre cómo seguir el tutorial. El usuario responde con texto, voz o demostrándolo en pantalla."),
+                    "parameters" to jo(
+                        "type" to js("object"),
+                        "properties" to jo("question" to jo("type" to js("string"))),
+                        "required" to JsonArray(listOf(js("question"))),
+                    ),
+                ),
             )),
         )
-        val res = http(
-            "POST", "$BASE/v1beta/models/${model()}:generateContent?key=${apiKey()}",
-            mapOf("Content-Type" to "application/json"), Json.encodeToString(JsonObject.serializer(), req).toByteArray(),
-        ).orThrow()
+        if (previousId.isNotBlank()) fields += "previous_interaction_id" to js(previousId)
 
-        val content = Json.parseToJsonElement(res.body).jsonObject["candidates"]!!.jsonArray[0]
-            .jsonObject["content"]!!.jsonObject
-        contents += content
-        parseTurn(content, state)
+        val res = http(
+            "POST", "$BASE/v1beta/interactions",
+            mapOf("Content-Type" to "application/json", "x-goog-api-key" to apiKey()),
+            Json.encodeToString(JsonObject.serializer(), JsonObject(fields.toMap())).toByteArray(),
+        ).orThrow()
+        parseTurn(Json.parseToJsonElement(res.body).jsonObject, state)
     }
 
-    private fun parseTurn(content: JsonObject, state: ScreenState): BrainTurn {
+    private fun parseTurn(body: JsonObject, state: ScreenState): BrainTurn {
+        previousId = body.str("id").ifBlank { previousId }
+        val items = (body["steps"] ?: body["outputs"] ?: body["output"])?.jsonArray.orEmpty()
+
         val actions = mutableListOf<AgentAction>()
-        val callNames = mutableListOf<String>()
+        val calls = mutableListOf<Call>()
         var question: String? = null
         var text = ""
-        for (part in content["parts"]?.jsonArray.orEmpty().map { it.jsonObject }) {
-            part["text"]?.jsonPrimitive?.contentOrNull?.let { text += it }
-            val call = part["functionCall"]?.jsonObject ?: continue
-            val name = call.str("name")
-            callNames += name
-            val args = call["args"]?.jsonObject ?: JsonObject(emptyMap())
-            fun px(key: String, size: Int) = (args[key]?.jsonPrimitive?.intOrNull ?: 0) * size / 1000
-            when (name) {
-                "click_at" -> actions += AgentAction.ClickAt(px("x", state.width), px("y", state.height))
-                "type_text_at" -> {
-                    actions += AgentAction.TypeAt(px("x", state.width), px("y", state.height), args.str("text"))
-                    if (args["press_enter"]?.jsonPrimitive?.booleanOrNull == true) actions += AgentAction.Key("enter")
+        for (item in items.map { it.jsonObject }) {
+            when (item.str("type")) {
+                "text" -> text += item.str("text")
+                "function_call" -> {
+                    val name = item.str("name")
+                    val id = item.str("call_id").ifBlank { item.str("id") }.ifBlank { "call_${calls.size}" }
+                    val args = item["arguments"]?.jsonObject ?: item["args"]?.jsonObject ?: JsonObject(emptyMap())
+                    calls += Call(id, name, args["safety_decision"] != null)
+
+                    fun px(key: String, size: Int) =
+                        args[key]?.jsonPrimitive?.intOrNull?.let { it * size / 1000 } ?: -1
+                    when (name) {
+                        "click" -> actions += AgentAction.ClickAt(px("x", state.width), px("y", state.height))
+                        "type" -> {
+                            // sin x/y escribe en el campo enfocado (px devuelve -1 → fallback en UiSurface)
+                            actions += AgentAction.TypeAt(px("x", state.width), px("y", state.height), args.str("text"))
+                            if (args["press_enter"]?.jsonPrimitive?.booleanOrNull == true) actions += AgentAction.Key("enter")
+                        }
+                        "open_app" -> actions += AgentAction.OpenApp(args.str("app_name").ifBlank { args.str("name") })
+                        "navigate" -> actions += AgentAction.OpenApp(args.str("url"))
+                        "drag_and_drop" -> actions += AgentAction.Swipe(
+                            px("start_x", state.width), px("start_y", state.height),
+                            px("end_x", state.width), px("end_y", state.height), 400)
+                        "long_press" -> {
+                            val x = px("x", state.width); val y = px("y", state.height)
+                            actions += AgentAction.Swipe(x, y, x, y,
+                                (args["seconds"]?.jsonPrimitive?.intOrNull ?: 1) * 1000L)
+                        }
+                        "scroll" -> actions += AgentAction.Scroll(args.str("direction") != "up")
+                        "press_key" -> actions += AgentAction.Key(args.str("key"))
+                        "go_back" -> actions += AgentAction.Key("back")
+                        "wait" -> actions += AgentAction.Wait((args["seconds"]?.jsonPrimitive?.intOrNull ?: 2) * 1000L)
+                        "take_screenshot" -> {} // el screenshot va en todos los function_result
+                        "list_apps" -> internalResults[id] = jo("apps" to js(listApps()))
+                        "ask_user" -> question = args.str("question")
+                    }
                 }
-                "scroll_document", "scroll_at" -> actions += AgentAction.Scroll(args.str("direction") != "up")
-                "key_combination" -> actions += AgentAction.Key(args.str("keys"))
-                "wait_5_seconds" -> actions += AgentAction.Wait(5000)
-                "go_back" -> actions += AgentAction.Key("back")
-                "navigate" -> actions += AgentAction.OpenApp(args.str("url"))
-                "open_web_browser" -> actions += AgentAction.OpenApp("https://www.google.com")
-                "open_app" -> actions += AgentAction.OpenApp(args.str("name"))
-                "ask_user" -> question = args.str("question")
             }
         }
-        pendingCalls = callNames
-        return BrainTurn(actions, question, done = callNames.isEmpty(), text = text)
+        pending = calls
+        return BrainTurn(actions, question, done = calls.isEmpty(), text = text)
     }
 
-    private fun fn(name: String, description: String, arg: String) = jo(
-        "name" to js(name),
-        "description" to js(description),
-        "parameters" to jo(
-            "type" to js("OBJECT"),
-            "properties" to jo(arg to jo("type" to js("STRING"))),
-            "required" to JsonArray(listOf(js(arg))),
-        ),
-    )
-
     private fun goalPrompt(lesson: Lesson, state: ScreenState) = """
-        Controlas un teléfono Android REAL mediante capturas de pantalla y acciones (click_at, type_text_at, scroll_document, open_app, ask_user...). Las coordenadas van normalizadas a 0-999.
-        Tu objetivo es reproducir este tutorial que el usuario enseñó en video:
+        Controlas un teléfono Android REAL. Tu objetivo es reproducir este tutorial que el usuario enseñó en video:
         META: ${lesson.goal}
         APP: ${lesson.app}
         RESUMEN: ${lesson.summary}
         PASOS: ${lesson.steps.mapIndexed { i, s -> "${i + 1}. $s" }.joinToString(" ")}
-        Usa open_app para abrir apps. Si tienes una duda real sobre cómo continuar, usa ask_user (el usuario puede responderte o demostrártelo en pantalla).
+        Usa open_app para abrir apps. Si tienes una duda real sobre cómo continuar, usa ask_user (el usuario puede responderte por texto, voz o demostrándotelo en pantalla).
         Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones) describiendo el resultado.
         Pantalla actual: ${state.screen}
     """.trimIndent()

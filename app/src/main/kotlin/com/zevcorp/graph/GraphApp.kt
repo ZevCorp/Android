@@ -27,7 +27,11 @@ class GraphApp : Application() {
     val teaching by lazy { TeachingStage(DroidScreenRecorder(this), GeminiTutorialAnalyzer(apiKey, model), lessons) }
 
     fun learning(user: UserChannel) = LearningStage(
-        brain = GeminiComputerUse(apiKey, model),
+        brain = GeminiComputerUse(apiKey, model, listApps = {
+            packageManager.getInstalledApplications(0)
+                .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+                .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
+        }),
         ui = requireNotNull(ui) { "Servicio de accesibilidad inactivo" },
         user = user,
         workflows = workflows,

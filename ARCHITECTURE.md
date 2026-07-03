@@ -49,8 +49,8 @@ Sólo Android implementa el registro de workflows vía UI-tree (requisito). Para
 
 ## Flujo de datos del Learning
 
-1. `LearningStage` pide a `ComputerUseBrain` (Gemini 3.5 Flash + computer use) la siguiente jugada con la captura de pantalla actual.
-2. Las acciones llegan en coordenadas normalizadas (0-999); `UiSurface.tapAt/typeAt` las resuelve contra el nodo real del árbol de accesibilidad y devuelve el **step semántico**, que se graba.
+1. `LearningStage` pide a `ComputerUseBrain` (Gemini 3.5 Flash + computer use nativo, [Interactions API](https://ai.google.dev/gemini-api/docs/computer-use): `POST /v1beta/interactions`, tool `{type:"computer_use", environment:"mobile"}`, estado en servidor vía `previous_interaction_id`) la siguiente jugada con la captura de pantalla actual.
+2. Las acciones (`click`, `type`, `open_app`, `drag_and_drop`, `long_press`…) llegan en coordenadas normalizadas 0-1000; `UiSurface.tapAt/typeAt` las resuelve contra el nodo real del árbol de accesibilidad y devuelve el **step semántico**, que se graba. Los resultados vuelven como `function_result` (con `call_id`, url y screenshot inline); las acciones marcadas con `safety_decision` se confirman automáticamente porque el usuario supervisa el Learning en vivo.
 3. `ask_user` → `UserChannel.ask` → respuesta por texto/voz (se informa al modelo) o demo (se activa `setCapturing`, los eventos de accesibilidad del usuario se convierten en steps `USER_DEMO` del mismo workflow).
 4. Al terminar, los INPUT se destilan como variables `input_<order>` (igual que Graph) y el workflow se persiste + se regenera `WORKFLOWS.md`.
 

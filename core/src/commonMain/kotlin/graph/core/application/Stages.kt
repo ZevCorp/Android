@@ -56,11 +56,12 @@ class LearningStage(
                     is AgentAction.TypeAt -> ui.typeAt(action.x, action.y, action.text)
                     is AgentAction.OpenApp -> ui.launch(action.name)
                     is AgentAction.Scroll -> { ui.scroll(action.down); null }
+                    is AgentAction.Swipe -> { ui.swipe(action.x1, action.y1, action.x2, action.y2, action.ms); null }
                     is AgentAction.Key -> { ui.pressKey(action.key); null }
                     is AgentAction.Wait -> { delay(action.ms); null }
                 }
                 record(step)
-                out += if (step != null || action is AgentAction.Scroll || action is AgentAction.Key || action is AgentAction.Wait)
+                out += if (step != null || action !is AgentAction.ClickAt && action !is AgentAction.TypeAt && action !is AgentAction.OpenApp)
                     "ok" else "no se encontró un elemento para la acción"
             }
             results = out

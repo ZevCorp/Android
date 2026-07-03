@@ -34,6 +34,7 @@ interface UiSurface {
     suspend fun typeAt(x: Int, y: Int, text: String): Step?
     suspend fun launch(query: String): Step?
     suspend fun scroll(down: Boolean): Boolean
+    suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long): Boolean
     fun pressKey(key: String): Boolean
 
     /** Acciones del usuario capturadas del árbol de UI (demos durante Learning). */
@@ -47,6 +48,7 @@ sealed interface AgentAction {
     class ClickAt(val x: Int, val y: Int) : AgentAction
     class TypeAt(val x: Int, val y: Int, val text: String) : AgentAction
     class Scroll(val down: Boolean) : AgentAction
+    class Swipe(val x1: Int, val y1: Int, val x2: Int, val y2: Int, val ms: Long) : AgentAction
     class OpenApp(val name: String) : AgentAction
     class Key(val key: String) : AgentAction
     class Wait(val ms: Long) : AgentAction
