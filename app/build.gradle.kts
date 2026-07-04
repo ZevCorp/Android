@@ -20,8 +20,8 @@ android {
         applicationId = "com.zevcorp.graph"
         minSdk = 30
         targetSdk = 35
-        versionCode = 11
-        versionName = "0.11"
+        versionCode = 12
+        versionName = "0.12"
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
         buildConfigField("String", "DASHBOARD_URL", "\"$dashboardUrl\"")
         buildConfigField("String", "DASHBOARD_KEY", "\"$dashboardKey\"")

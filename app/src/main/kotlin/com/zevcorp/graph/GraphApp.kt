@@ -67,15 +67,53 @@ class GraphApp : Application() {
 
     private fun bubbleCompanion(on: Boolean) = bubble?.companion(on)
 
-    /** Ejecuta la lección (con burbuja acompañante). Aprende en vivo sobre el workflow. */
-    suspend fun runLearning(lesson: Lesson, user: UserChannel): Workflow {
+    /* ---------- Detener la ejecución (botón rojo flotante, notificación, cli/graph stop) ---------- */
+
+    @Volatile private var runJob: kotlinx.coroutines.Job? = null
+
+    fun stopExecution() {
+        LogBus.log("app", "⏹ detención solicitada por el usuario")
+        runJob?.cancel(kotlinx.coroutines.CancellationException("Detenida por ti ✋"))
+    }
+
+    /** Envuelve toda ejecución: rastrea el Job para poder cancelarlo y muestra los controles de stop. */
+    private suspend fun <T> running(block: suspend () -> T): T {
+        runJob = kotlin.coroutines.coroutineContext[kotlinx.coroutines.Job]
         bubbleCompanion(true)
+        bubble?.showStop(true)
+        notifyRunning(true)
         try {
-            return execution(user).runLesson(lesson)
+            return block()
         } finally {
+            runJob = null
             bubbleCompanion(false)
+            bubble?.showStop(false)
+            notifyRunning(false)
         }
     }
+
+    private fun notifyRunning(on: Boolean) {
+        val nm = getSystemService(android.app.NotificationManager::class.java)
+        if (!on) { nm.cancel(2); return }
+        nm.createNotificationChannel(android.app.NotificationChannel(
+            "run", "Ejecución", android.app.NotificationManager.IMPORTANCE_HIGH))
+        val stop = android.app.PendingIntent.getBroadcast(
+            this, 0, android.content.Intent("com.zevcorp.graph.STOP").setPackage(packageName),
+            android.app.PendingIntent.FLAG_IMMUTABLE)
+        nm.notify(2, android.app.Notification.Builder(this, "run")
+            .setSmallIcon(android.R.drawable.ic_media_pause)
+            .setContentTitle("Graph está ejecutando")
+            .setContentText("Toca para detener")
+            .setOngoing(true)
+            .setColor(0xFFE5534B.toInt())
+            .setContentIntent(stop) // tocar la notificación completa también detiene
+            .addAction(android.app.Notification.Action.Builder(null, "⏹ Detener", stop).build())
+            .build())
+    }
+
+    /** Ejecuta la lección (con burbuja acompañante). Aprende en vivo sobre el workflow. */
+    suspend fun runLearning(lesson: Lesson, user: UserChannel): Workflow =
+        running { execution(user).runLesson(lesson) }
 
     /**
      * Pídele algo por texto/voz SIN video previo: se ejecuta con el mismo motor (Gemini computer use)
@@ -85,12 +123,7 @@ class GraphApp : Application() {
     suspend fun runPrompt(prompt: String, user: UserChannel): Workflow {
         // No se guarda ninguna lección: para un prompt el único artefacto es el workflow.
         val lesson = Lesson(id = "ask_${System.currentTimeMillis()}", goal = prompt, summary = prompt)
-        bubbleCompanion(true)
-        try {
-            return execution(user).runLesson(lesson)
-        } finally {
-            bubbleCompanion(false)
-        }
+        return running { execution(user).runLesson(lesson) }
     }
 
     /** Ejecución unificada por id (terminal/UI): verdes por árbol de UI, no-verdes con Gemini. */
@@ -101,12 +134,7 @@ class GraphApp : Application() {
         depth: Int = Int.MAX_VALUE,
     ): String {
         if (ui == null) return "Servicio de accesibilidad inactivo: actívalo en Ajustes"
-        bubbleCompanion(true)
-        try {
-            return execution(bubble).execute(id, inputs, branches, depth)
-        } finally {
-            bubbleCompanion(false)
-        }
+        return running { execution(bubble).execute(id, inputs, branches, depth) }
     }
 
     override fun onCreate() {

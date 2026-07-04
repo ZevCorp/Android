@@ -42,6 +42,10 @@ case "$1" in
     echo "Ejecutando $id… (subconsciente: verdes por árbol de UI, rojos con Gemini)"
     adb logcat -T "$since" -s GraphCLI:I | sed 's/.*GraphCLI: //' | grep -m1 -E "^(OK|Fallo|Rama|Workflow|Step)" || true
     ;;
+  stop)
+    adb shell am broadcast -a $PKG.STOP -n $RECEIVER >/dev/null
+    echo "⏹ Ejecución detenida (lo aprendido hasta ahora queda guardado)"
+    ;;
   set-key)
     adb shell am broadcast -a $PKG.SET_KEY -n $RECEIVER --es key "$2" >/dev/null
     echo "API key configurada"
@@ -52,6 +56,7 @@ case "$1" in
     echo "  graph info <wf_id>                                # ramas, variables, % aprendido, steps"
     echo "  graph run <wf_id> [--branch <rama>]... [--depth N] [--input_N=\"valor\"]..."
     echo "     --depth N: avanza solo N steps y recuerda dónde seguir (ejecución por tramos)"
+    echo "  graph stop                                        # detiene la ejecución en curso"
     echo "  graph set-key <KEY>"
     ;;
 esac

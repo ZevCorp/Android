@@ -155,6 +155,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         panel?.let { runCatching { wm.removeView(it) } }
         demoBadge?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
+        stopButton?.let { runCatching { wm.removeView(it) } }
     }
 
     /* ---------- Voz y narración (globo de diálogo + TTS) ---------- */
@@ -241,6 +242,43 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             setPassThrough(on)
             bubble.visibility = View.VISIBLE // siempre visible: ya no parpadea por capturas
             bubble.thinking = on
+        }
+    }
+
+    private var stopButton: TextView? = null
+
+    /**
+     * Botón rojo ⏹ arriba-centro de la pantalla mientras el asistente ejecuta (imita el chip de la
+     * grabación de pantalla): un solo toque detiene, sin expandir nada. Es su propia ventana
+     * TOCABLE, aunque la carita esté en pass-through y el agente esté clickeando rápido.
+     */
+    fun showStop(on: Boolean) {
+        scope.launch {
+            if (!on) {
+                stopButton?.let { runCatching { wm.removeView(it) } }
+                stopButton = null
+                return@launch
+            }
+            if (stopButton != null) return@launch
+            val button = TextView(service).apply {
+                text = "⏹ detener"
+                textSize = 13f
+                typeface = Typeface.DEFAULT_BOLD
+                setTextColor(Color.WHITE)
+                background = rounded(Palette.danger, service.dp(22).toFloat())
+                setPadding(service.dp(16), service.dp(7), service.dp(16), service.dp(7))
+                elevation = 22f
+                setOnClickListener {
+                    GraphApp.instance.stopExecution()
+                    toast("Detenido ✋")
+                }
+            }
+            val params = overlayParams(-2, -2, focusable = false).apply {
+                gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
+                y = service.dp(8) // pegado a la barra de estado, como el punto rojo de grabación
+            }
+            runCatching { wm.addView(button, params) }
+            stopButton = button
         }
     }
 
@@ -367,7 +405,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scope.launch {
             runCatching { withContext(Dispatchers.Default) { app.runPrompt(prompt, this@FloatingBubble) } }
                 .onSuccess { toast("Hecho · ${it.steps.size} steps (workflow ${it.id})") }
-                .onFailure { toast("Error: ${it.message}") }
+                .onFailure { toast(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
         }
     }
 
@@ -384,7 +422,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scope.launch {
             runCatching { withContext(Dispatchers.Default) { app.runLearning(lesson, this@FloatingBubble) } }
                 .onSuccess { toast("Workflow aprendido: ${it.name.take(32)} (${it.steps.size} steps)") }
-                .onFailure { toast("Error en learning: ${it.message}") }
+                .onFailure { toast(if (it is CancellationException) "Ejecución detenida ✋" else "Error en learning: ${it.message}") }
         }
     }
 

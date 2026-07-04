@@ -400,14 +400,19 @@ class ExecutionStage(
         } catch (e: Exception) {
             error = e.message ?: e.toString(); log.log("ejecucion", "ERROR: $error")
         }
-        ui.setCapturing(false); delay(300); collector.cancel()
+        // Guardado NO cancelable: si el usuario detiene (⏹), lo aprendido hasta aquí se conserva.
+        kotlinx.coroutines.withContext(kotlinx.coroutines.NonCancellable) {
+            ui.setCapturing(false); delay(300); collector.cancel()
+            if (steps.isNotEmpty()) {
+                val workflow = snapshot().copy(
+                    purpose = summary.ifBlank { lesson.goal } + (error?.let { " (interrumpido: ${it.take(80)})" } ?: ""))
+                workflows.save(workflow)
+                val green = steps.count { it.status == StepStatus.CONFIRMED }
+                log.log("ejecucion", "workflow ${workflow.id}: ${steps.size} steps · ${workflow.learnedPct()}% aprendido ($green verdes)")
+                report.report(workflow, 0, "fin")
+            }
+        }
         if (steps.isEmpty() && error != null) throw IllegalStateException(error)
-        val workflow = snapshot().copy(
-            purpose = summary.ifBlank { lesson.goal } + (error?.let { " (interrumpido: ${it.take(80)})" } ?: ""))
-        workflows.save(workflow)
-        val green = steps.count { it.status == StepStatus.CONFIRMED }
-        log.log("ejecucion", "workflow ${workflow.id}: ${steps.size} steps · ${workflow.learnedPct()}% aprendido ($green verdes)")
-        report.report(workflow, 0, "fin")
-        workflow
+        snapshot()
     }
 }

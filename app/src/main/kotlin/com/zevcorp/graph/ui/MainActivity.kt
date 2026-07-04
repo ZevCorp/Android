@@ -333,7 +333,7 @@ class MainActivity : Activity(), UserChannel {
         scope.launch {
             runCatching { app.runPrompt(prompt, this@MainActivity) }
                 .onSuccess { log("Hecho: ${it.name} · ${it.steps.size} steps (${it.id})"); refresh() }
-                .onFailure { log("Error: ${it.message}") }
+                .onFailure { log(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
         }
     }
 
@@ -348,7 +348,7 @@ class MainActivity : Activity(), UserChannel {
         scope.launch {
             runCatching { app.runLearning(lesson, this@MainActivity) }
                 .onSuccess { log("Workflow guardado: ${it.id} · ${it.steps.size} steps · ${it.variables.size} variables"); refresh() }
-                .onFailure { log("Error en learning: ${it.message}") }
+                .onFailure { log(if (it is CancellationException) "Ejecución detenida ✋" else "Error en learning: ${it.message}") }
         }
     }
 

@@ -17,6 +17,8 @@ class RunCommandReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
         val app = context.applicationContext as GraphApp
         when (intent.action) {
+            "com.zevcorp.graph.STOP" -> app.stopExecution()
+
             "com.zevcorp.graph.SET_KEY" ->
                 app.prefs.edit().putString("apiKey", intent.getStringExtra("key") ?: "").apply()
 
