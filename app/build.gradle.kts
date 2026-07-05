@@ -1,6 +1,7 @@
 plugins {
     id("com.android.application")
     kotlin("android")
+    kotlin("plugin.serialization")
 }
 
 // Config embebida en el APK (nunca en git): apikey.properties o variables de entorno.

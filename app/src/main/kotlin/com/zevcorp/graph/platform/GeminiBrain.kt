@@ -44,6 +44,8 @@ class GeminiBrain(
     private val model: () -> String,
     private val tools: List<McpTool>,
     private val listApps: () -> String,
+    /** Memoria del usuario (reglas/preferencias destiladas): se inyecta en el system prompt. */
+    private val memory: () -> String = { "" },
 ) : Brain {
 
     private val mcpNames = tools.map { it.name }.toSet()
@@ -187,6 +189,9 @@ class GeminiBrain(
         for (item in items.map { it.jsonObject }) {
             when (item.str("type")) {
                 "text" -> text += item.str("text")
+                // El API a veces devuelve el texto final envuelto en model_output/message:
+                // sin esto el turno parece "vacío" y el motor cae a un fallback genérico.
+                "model_output", "message", "output_text" -> text += extractText(item)
                 "function_call" -> {
                     val name = item.str("name")
                     val id = item.str("call_id").ifBlank { item.str("id") }.ifBlank { "call_${calls.size}" }
@@ -242,6 +247,17 @@ class GeminiBrain(
             narration = intents.firstOrNull { it.isNotBlank() } ?: "", speech = speech, intents = intents)
     }
 
+    /** Extrae el texto de un item envuelto (model_output/message): campo text o content anidado. */
+    private fun extractText(item: JsonObject): String {
+        item.str("text").takeIf { it.isNotBlank() }?.let { return it }
+        return when (val content = item["content"] ?: item["output"]) {
+            is JsonPrimitive -> content.contentOrNull ?: ""
+            is JsonArray -> content.joinToString("") { part -> (part as? JsonObject)?.str("text") ?: "" }
+            is JsonObject -> content.str("text")
+            else -> ""
+        }
+    }
+
     /** Regla para apps con mapa aprendido: cadena completa desde el primer turno, sin "abrir y mirar". */
     private val learnedRule: String
         get() {
@@ -281,10 +297,28 @@ class GeminiBrain(
 
         En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").
         Usa speak SOLO para avisos importantes y ask_user SOLO para dudas reales. No hables por hablar.
-        Si el usuario solo quiere saber qué puedes hacer, respóndele con TEXTO describiendo tus herramientas (sin actuar).
+
+        CÓMO HABLAS (importantísimo): eres un compañero, no un manual. Respuestas CORTAS (1-2 frases),
+        naturales y en el idioma del usuario. NUNCA enumeres tus herramientas ni uses términos técnicos
+        (MCP, computer-use, function calls, árbol de UI, Intents…): al usuario no le interesan. Si te
+        explican o enseñan algo, responde breve y humano ("¡Listo, lo tengo! 🙌"). Si preguntan qué
+        sabes hacer, dilo en lenguaje cotidiano y en UNA frase (p.ej. "abro apps, pongo música, mando
+        mensajes, te ayudo con lo que necesites en el teléfono").
+        $memoryBlock
         Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones).
         En las capturas puede aparecer una carita blanca flotante (Graph): IGNÓRALA, nunca la toques.
 
         $stateBlock
     """.trimIndent()
+
+    private val memoryBlock: String
+        get() {
+            val mem = memory()
+            if (mem.isBlank()) return ""
+            return """
+        MEMORIA DEL USUARIO (reglas y preferencias que te ha enseñado; aplícalas cuando la tarea lo
+        amerite, sin que te las repita):
+        $mem
+            """.trimIndent()
+        }
 }

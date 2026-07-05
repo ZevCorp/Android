@@ -81,13 +81,12 @@ class ExecutionEngine(
         }
 
         val secs = started.elapsedNow().inWholeSeconds
-        // Terminó con un mensaje (p.ej. "¿qué puedes hacer?"): dilo en voz alta.
+        // Terminó con un mensaje: dilo en voz alta.
         if (summary.isNotBlank()) {
             voice.speak(summary)
         } else if (actions == 0) {
-            // No dijo nada y no hizo nada: al menos enumera sus capacidades.
-            summary = "Puedo hacer estos gestos: " + mcp.tools.joinToString(", ") { it.name } +
-                "; y además tocar y escribir en la pantalla."
+            // No dijo nada y no hizo nada: una frase corta y humana, jamás un listado técnico.
+            summary = "Mmm, no estoy seguro de haberte entendido. ¿Me lo dices de otra forma?"
             voice.speak(summary)
         }
         log.log("run", "■ ${turns} turnos · $actions acciones · ${secs}s · ${summary.take(120)}")

@@ -15,10 +15,12 @@ import kotlinx.serialization.json.Json
 object CloudSync {
 
     private const val BASE = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_learned_tools"
+    private const val MEMORY = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_memory"
     private const val KEY = "sb_publishable_qroW231Ts7UYAEgr_f5cnQ_3SrW2ZrI" // publishable (cliente)
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val listSerializer = ListSerializer(LearnedTool.serializer())
+    private val memorySerializer = ListSerializer(MemoryNote.serializer())
 
     /** Sube (upsert por nombre) una herramienta. Llamar desde IO; nunca lanza. */
     fun push(tool: LearnedTool) {
@@ -34,6 +36,20 @@ object CloudSync {
     fun pull(): List<LearnedTool> = runCatching {
         json.decodeFromString(listSerializer, http("GET", "$BASE?select=name,app,description,elements"))
     }.getOrElse { LogBus.log("cloud", "☁ no pude bajar: ${it.message}"); emptyList() }
+
+    /** Sube (upsert por texto) un recuerdo de la memoria. Llamar desde IO; nunca lanza. */
+    fun pushMemory(note: MemoryNote) {
+        runCatching {
+            http("POST", "$MEMORY?on_conflict=note",
+                json.encodeToString(memorySerializer, listOf(note)),
+                "Prefer" to "resolution=merge-duplicates")
+        }.onFailure { LogBus.log("cloud", "☁ no pude subir el recuerdo: ${it.message}") }
+    }
+
+    /** Baja toda la memoria de la nube. Llamar desde IO; nunca lanza (vacío si falla). */
+    fun pullMemory(): List<MemoryNote> = runCatching {
+        json.decodeFromString(memorySerializer, http("GET", "$MEMORY?select=app,note"))
+    }.getOrElse { LogBus.log("cloud", "☁ no pude bajar la memoria: ${it.message}"); emptyList() }
 
     private fun http(method: String, url: String, body: String? = null, vararg headers: Pair<String, String>): String {
         val c = URL(url).openConnection() as HttpURLConnection

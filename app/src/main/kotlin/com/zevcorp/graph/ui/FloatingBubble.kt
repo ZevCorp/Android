@@ -56,6 +56,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
+    /** Esquinas superiores = zona de encaje para activar la escucha por voz (pipeline Graph). */
+    private val voiceDock by lazy {
+        VoiceDock(service,
+            setThinking = { bubble.thinking = it },
+            narrate = ::narrate,
+            runIntent = ::runPrompt)
+    }
+
     fun show() {
         tts = TextToSpeech(service) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -72,7 +80,20 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
         bubble.elevation = 12f
         attachDrag(size)
-        bubble.setOnClickListener { if (panel == null) openPanel() else closePanel() }
+        bubble.setOnClickListener {
+            when {
+                // Un toque lo calla: corta el TTS y esconde el globo.
+                tts?.isSpeaking == true -> {
+                    tts?.stop()
+                    speechHide?.cancel()
+                    speech?.visibility = View.GONE
+                }
+                // Durante la escucha por esquina: el toque termina la grabación y procesa.
+                voiceDock.listening -> voiceDock.stopNow()
+                panel == null -> openPanel()
+                else -> closePanel()
+            }
+        }
         wm.addView(bubble, bubbleParams)
     }
 
@@ -94,11 +115,15 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                         moved = true
                         bubbleParams.x = startX + dx; bubbleParams.y = startY + dy
                         runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+                        voiceDock.track(bubbleParams.x + size / 2, bubbleParams.y + size / 2)
                     }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!moved) v.performClick()
-                    else {
+                    else if (voiceDock.inZone(bubbleParams.x + size / 2, bubbleParams.y + size / 2)) {
+                        snapToCorner(size) // encaje en la esquina: la cuenta de 2.5 s sigue corriendo
+                    } else {
+                        voiceDock.cancel()
                         val vt = tracker
                         vt?.addMovement(e); vt?.computeCurrentVelocity(1000)
                         flingToEdge(size, vt?.xVelocity ?: 0f, vt?.yVelocity ?: 0f)
@@ -137,9 +162,31 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
     }
 
+    /** Encaja la burbuja exactamente en la esquina superior más cercana (zona de escucha). */
+    private fun snapToCorner(size: Int) {
+        val m = service.resources.displayMetrics
+        val destX = if (bubbleParams.x + size / 2 < m.widthPixels / 2) service.dp(4) else m.widthPixels - size - service.dp(4)
+        val destY = service.dp(6)
+        val fromX = bubbleParams.x; val fromY = bubbleParams.y
+        dragAnimator?.cancel()
+        dragAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 220
+            addUpdateListener { a ->
+                val f = a.animatedValue as Float
+                bubbleParams.x = (fromX + (destX - fromX) * f).toInt()
+                bubbleParams.y = (fromY + (destY - fromY) * f).toInt()
+                runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+                moveSpeechToBubble()
+            }
+            start()
+        }
+        voiceDock.track(destX + size / 2, destY + size / 2)
+    }
+
     fun destroy() {
         scope.cancel()
         dragAnimator?.cancel()
+        voiceDock.destroy()
         tts?.shutdown()
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
@@ -353,6 +400,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {
         if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
+        voiceDock.cancel() // si estaba armada en una esquina, la ejecución la desarma
         narrate("¡Vamos! $prompt")
         scope.launch {
             runCatching { withContext(Dispatchers.Default) { app.run(prompt, this@FloatingBubble) } }

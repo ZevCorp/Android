@@ -68,10 +68,24 @@ class MainActivity : Activity(), UserChannel {
         }
         setup.addView(keyInput)
         setup.gap(dp(8))
+        val deepgramInput = EditText(this).apply {
+            hint = "Deepgram API key (opcional: dictado nova-3 en las esquinas)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(app.prefs.getString("deepgramKey", ""))
+            setTextColor(Palette.text)
+            setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        setup.addView(deepgramInput)
+        setup.gap(dp(8))
         val setupRow = row()
-        setupRow.addView(button("Guardar key") {
-            app.prefs.edit().putString("apiKey", keyInput.text.toString().trim()).apply()
-            log("API key guardada")
+        setupRow.addView(button("Guardar keys") {
+            app.prefs.edit()
+                .putString("apiKey", keyInput.text.toString().trim())
+                .putString("deepgramKey", deepgramInput.text.toString().trim())
+                .apply()
+            log("API keys guardadas")
         }, LinearLayout.LayoutParams(0, -2, 1f))
         setupRow.addView(View(this), LinearLayout.LayoutParams(dp(8), 1))
         setupRow.addView(button("Accesibilidad") {

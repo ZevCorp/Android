@@ -10,6 +10,9 @@ import android.content.SharedPreferences
 import com.zevcorp.graph.platform.AndroidSystemApi
 import com.zevcorp.graph.platform.CloudSync
 import com.zevcorp.graph.platform.GeminiBrain
+import com.zevcorp.graph.platform.MemoryDistiller
+import com.zevcorp.graph.platform.MemoryStore
+import com.zevcorp.graph.voice.IntentDistiller
 import com.zevcorp.graph.platform.GeminiLearning
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LearnedToolRepo
@@ -58,6 +61,15 @@ class GraphApp : Application() {
      */
     val passive by lazy { PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus) }
 
+    /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube). */
+    val memories by lazy {
+        MemoryStore(filesDir) { note -> scope.launch(Dispatchers.IO) { CloudSync.pushMemory(note) } }
+    }
+    private val memoryDistiller by lazy { MemoryDistiller(apiKey, model) }
+
+    /** El "primer LLM" del pipeline de voz (repo Graph): destila la intención del transcript. */
+    val intentDistiller by lazy { IntentDistiller(apiKey, model) }
+
     /** Pausa entre steps MCP enviados juntos, ajustable con la barra de velocidad de la app. */
     val stepDelay = { prefs.getInt("stepDelayMs", 350).toLong() }
 
@@ -77,7 +89,7 @@ class GraphApp : Application() {
         packageManager.getInstalledApplications(0)
             .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
             .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
-    })
+    }, memory = { memories.promptBlock() })
 
     /**
      * Pídele algo por texto o voz. Gemini 3.5 Flash lo ejecuta con el motor mixto: elige entre
@@ -86,6 +98,15 @@ class GraphApp : Application() {
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
+        // En paralelo (nunca bloquea la ejecución): si el input enseña algo durable, se recuerda.
+        scope.launch(Dispatchers.IO) {
+            memoryDistiller.capture(prompt)?.let { note ->
+                if (memories.add(note)) {
+                    LogBus.log("memory", "🧠 recordado${if (note.app.isNotBlank()) " [${note.app}]" else ""}: ${note.note}")
+                    voice.narrate("🧠 Lo recordaré")
+                }
+            }
+        }
         // MCP = gestos de accesibilidad + acciones del sistema por Intent + herramientas aprendidas.
         val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
         val engine = ExecutionEngine(
@@ -147,8 +168,11 @@ class GraphApp : Application() {
         super.onCreate()
         instance = this
         prefs = getSharedPreferences("graph", MODE_PRIVATE)
-        // Trae los aprendizajes de la nube (y sube los locales que falten allá).
-        scope.launch(Dispatchers.IO) { learnedTools.syncFromCloud() }
+        // Trae los aprendizajes y la memoria de la nube (y sube lo local que falte allá).
+        scope.launch(Dispatchers.IO) {
+            learnedTools.syncFromCloud()
+            memories.syncFromCloud(CloudSync.pullMemory())
+        }
     }
 
     companion object {
