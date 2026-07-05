@@ -53,6 +53,14 @@ fun Context.caption(text: String): TextView = TextView(this).apply {
     setTextColor(Palette.textDim)
 }
 
+/** Texto de cuerpo legible: buen tamaño, color pleno y interlineado cómodo (para conversación). */
+fun Context.body(text: String, size: Float = 16f): TextView = TextView(this).apply {
+    this.text = text
+    textSize = size
+    setTextColor(Palette.text)
+    setLineSpacing(dp(3).toFloat(), 1f)
+}
+
 fun Context.button(text: String, primary: Boolean = false, onClick: () -> Unit): Button =
     Button(this).apply {
         this.text = text

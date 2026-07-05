@@ -33,6 +33,7 @@
             android:exported="true"
             android:excludeFromRecents="true"
             android:launchMode="singleInstance"
+            android:windowSoftInputMode="adjustResize"
             android:theme="@style/AssistTheme">
             <intent-filter>
                 <action android:name="android.intent.action.ASSIST" />

@@ -40,6 +40,12 @@ interface Transcriber {
 
     /** Orden temprana de terminar (p.ej. el usuario tocó la burbuja). */
     fun stop()
+
+    /** Transcripción parcial en vivo (si el motor la soporta). Se llama en el hilo principal. */
+    var onPartial: ((String) -> Unit)?
+
+    /** Nivel de voz 0..1 en vivo (para animar el indicador de escucha), si el motor lo soporta. */
+    var onLevel: ((Float) -> Unit)?
 }
 
 /**
@@ -49,6 +55,8 @@ interface Transcriber {
 class DeepgramTranscriber(private val apiKey: String) : Transcriber {
 
     @Volatile private var stopped = false
+    override var onPartial: ((String) -> Unit)? = null
+    override var onLevel: ((Float) -> Unit)? = null
 
     override fun stop() { stopped = true }
 
@@ -86,6 +94,7 @@ class DeepgramTranscriber(private val apiKey: String) : Transcriber {
                 var energy = 0.0
                 for (i in 0 until n) energy += buf[i].toDouble() * buf[i]
                 val rms = sqrt(energy / n)
+                onLevel?.let { cb -> val lvl = (rms / 6000.0).coerceIn(0.0, 1.0).toFloat(); cb(lvl) }
                 if (rms > 900) { heardSpeech = true; silentMs = 0 } else silentMs += 100
                 val bytes = ByteArray(n * 2)
                 for (i in 0 until n) {
@@ -135,6 +144,8 @@ class DeepgramTranscriber(private val apiKey: String) : Transcriber {
 class SystemTranscriber(private val context: Context) : Transcriber {
 
     private var recognizer: SpeechRecognizer? = null
+    override var onPartial: ((String) -> Unit)? = null
+    override var onLevel: ((Float) -> Unit)? = null
 
     override fun stop() {
         recognizer?.let { r -> android.os.Handler(context.mainLooper).post { runCatching { r.stopListening() } } }
@@ -156,14 +167,21 @@ class SystemTranscriber(private val context: Context) : Transcriber {
                 override fun onError(error: Int) = finish("")
                 override fun onReadyForSpeech(params: Bundle?) {}
                 override fun onBeginningOfSpeech() {}
-                override fun onRmsChanged(rmsdB: Float) {}
+                override fun onRmsChanged(rmsdB: Float) {
+                    // rmsdB ~ -2..10; normaliza a 0..1 para el indicador de escucha.
+                    onLevel?.invoke(((rmsdB + 2f) / 12f).coerceIn(0f, 1f))
+                }
                 override fun onBufferReceived(buffer: ByteArray?) {}
                 override fun onEndOfSpeech() {}
-                override fun onPartialResults(partialResults: Bundle?) {}
+                override fun onPartialResults(partialResults: Bundle?) {
+                    partialResults?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
+                        ?.firstOrNull()?.takeIf { it.isNotBlank() }?.let { onPartial?.invoke(it) }
+                }
                 override fun onEvent(eventType: Int, params: Bundle?) {}
             })
             r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
+                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
             cont.invokeOnCancellation { runCatching { r.destroy() } }
         }
     }

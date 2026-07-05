@@ -1,135 +1,343 @@
 package com.zevcorp.graph.ui
 
+import android.animation.ValueAnimator
 import android.app.Activity
+import android.content.Context
+import android.graphics.Color
 import android.os.Bundle
+import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.View
+import android.view.WindowInsets
+import android.view.WindowManager
 import android.view.inputmethod.EditorInfo
 import android.widget.EditText
 import android.widget.FrameLayout
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import com.zevcorp.graph.GraphApp
-import com.zevcorp.graph.platform.LogBus
-import com.zevcorp.graph.ui.FloatingBubble
+import com.zevcorp.graph.platform.GeminiJson
 import com.zevcorp.graph.platform.GraphAccessibilityService
+import com.zevcorp.graph.platform.LogBus
+import com.zevcorp.graph.platform.MicService
 import com.zevcorp.graph.voice.Transcriber
 import com.zevcorp.graph.voice.defaultTranscriber
+import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 /**
- * El punto de entrada como ASISTENTE DEL SISTEMA (mantener oprimido el botón de encendido, igual
- * que Gemini). Muestra una barra tipo pastilla en la parte inferior — carita, campo de texto y
- * micrófono — sobre un fondo atenuado. Mismo comportamiento general: la voz pasa por el pipeline
- * de Graph (transcripción → destilador de intención) y todo termina en el Execution Engine.
- * Para elegirlo: Ajustes → Apps predeterminadas → App de asistente digital → Graph.
+ * ASISTENTE DEL SISTEMA (mantener oprimido el botón de encendido). Hoja conversacional estilo
+ * Gemini: la carita, un hilo de mensajes legibles, escucha en vivo con transcripción parcial, y una
+ * barra de entrada con micrófono y enviar. Distingue conversación de acción: si preguntas algo
+ * responde ahí mismo; si pides una tarea, confirma y se la pasa al motor de ejecución (que actúa
+ * con la burbuja narrando). Elegir en Ajustes → Apps predeterminadas → App de asistente digital.
  */
 class AssistActivity : Activity() {
 
     private val app get() = GraphApp.instance
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
     private var transcriber: Transcriber? = null
-    private lateinit var hint: TextView
+    private var tts: TextToSpeech? = null
+    private var ttsReady = false
+
+    private lateinit var sheet: LinearLayout
+    private lateinit var convo: LinearLayout
+    private lateinit var convoScroll: ScrollView
+    private lateinit var status: TextView
+    private lateinit var input: EditText
+    private lateinit var micChip: FrameLayout
     private lateinit var face: FaceView
+
+    private var partialBubble: TextView? = null
+    @Volatile private var listening = false
+    @Volatile private var processing = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
+        window.setDecorFitsSystemWindows(false) // recibo los insets del teclado y los manejo yo
+        tts = TextToSpeech(this) { if (it == TextToSpeech.SUCCESS) { tts?.language = Locale.getDefault(); ttsReady = true } }
 
-        val root = FrameLayout(this)
-        root.setOnClickListener { finish() } // tocar fuera de la barra la cierra
+        val root = FrameLayout(this).apply { setOnClickListener { dismiss() } }
 
-        val sheet = LinearLayout(this).apply {
+        sheet = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(14), 0, dp(14), dp(24))
-            isClickable = true // no propagar el cierre al tocar la barra
+            background = sheetBackground()
+            setPadding(dp(18), dp(10), dp(18), dp(16))
+            elevation = dp(24).toFloat()
+            isClickable = true // absorbe toques: no cierra al tocar la hoja
         }
 
-        hint = caption("Te escucho…").apply { setPadding(dp(20), 0, dp(20), dp(8)) }
-        sheet.addView(hint)
+        // Asa superior
+        sheet.addView(View(this).apply {
+            background = rounded(Palette.cardBorder, dp(3).toFloat())
+        }, LinearLayout.LayoutParams(dp(40), dp(4)).apply { gravity = Gravity.CENTER_HORIZONTAL; bottomMargin = dp(10) })
 
-        // La pastilla: carita + campo + micrófono (la barra de Gemini, con la cara de Graph).
-        val pill = row().apply {
-            background = rounded(Palette.bg, dp(30).toFloat(), Palette.cardBorder)
-            setPadding(dp(12), dp(10), dp(10), dp(10))
-            elevation = 24f
-        }
+        // Encabezado: carita + nombre + cerrar
+        val header = row()
         face = FaceView(this)
-        pill.addView(face, LinearLayout.LayoutParams(dp(38), dp(38)))
+        header.addView(face, LinearLayout.LayoutParams(dp(40), dp(40)))
+        header.addView(title("Graph", 18f).apply { setPadding(dp(12), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(iconChip(Icon.CLOSE, sizeDp = 38) { dismiss() })
+        sheet.addView(header)
+        sheet.gap(dp(10))
 
-        val input = EditText(this).apply {
-            hint = "Pídeme algo…"
+        // Hilo de conversación (altura acotada; crece con el contenido)
+        convo = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        convoScroll = BoundedScrollView(this, resources.displayMetrics.heightPixels * 46 / 100).apply {
+            addView(convo)
+            isVerticalScrollBarEnabled = false
+        }
+        sheet.addView(convoScroll, LinearLayout.LayoutParams(-1, -2))
+        sheet.gap(dp(8))
+
+        // Estado (escuchando / pensando)
+        status = caption("").apply { setPadding(dp(6), 0, dp(6), dp(6)) }
+        sheet.addView(status)
+
+        // Barra de entrada: campo + micrófono + enviar
+        val bar = row().apply {
+            background = rounded(Palette.card, dp(26).toFloat(), Palette.cardBorder)
+            setPadding(dp(16), dp(6), dp(6), dp(6))
+        }
+        input = EditText(this).apply {
+            hint = "Escribe o habla…"
             setHintTextColor(Palette.textDim)
             setTextColor(Palette.text)
-            textSize = 15f
+            textSize = 16f
             background = null
-            setPadding(dp(12), dp(6), dp(12), dp(6))
-            maxLines = 3
+            setPadding(0, dp(8), dp(8), dp(8))
+            maxLines = 4
             imeOptions = EditorInfo.IME_ACTION_SEND
+            setOnEditorActionListener { _, _, _ -> submitTyped(); true }
         }
-        input.setOnEditorActionListener { _, _, _ -> dispatch(input.text.toString(), distill = false); true }
-        pill.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-
-        val mic = iconChip(Icon.MIC, sizeDp = 46, primary = true) {
-            transcriber?.stop() ?: startListening() // corta y procesa, o reabre
-        }
-        pill.addView(mic)
-        sheet.addView(pill)
+        bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        micChip = iconChip(Icon.MIC, sizeDp = 46, primary = true) { toggleMic() }
+        bar.addView(micChip)
+        bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+        bar.addView(iconChip(Icon.SEND, sizeDp = 46) { submitTyped() })
+        sheet.addView(bar)
 
         root.addView(sheet, FrameLayout.LayoutParams(-1, -2, Gravity.BOTTOM))
         setContentView(root)
 
-        startListening() // como Gemini: al invocarlo ya está escuchando
+        // El teclado empuja la hoja hacia arriba (sin cruzarse).
+        sheet.setOnApplyWindowInsetsListener { v, insets ->
+            val ime = insets.getInsets(WindowInsets.Type.ime()).bottom
+            val nav = insets.getInsets(WindowInsets.Type.navigationBars()).bottom
+            v.setPadding(dp(18), dp(10), dp(18), dp(16) + maxOf(ime, nav))
+            insets
+        }
+
+        addBubble("Hola, ¿en qué te ayudo?", mine = false)
+        startListening() // como Gemini: al abrir ya está escuchando
     }
 
-    /** Un segmento de escucha; el texto se destila (es voz cruda) y se despacha al motor. */
+    /* ---------- Escucha ---------- */
+
+    private fun toggleMic() {
+        if (listening) transcriber?.stop() else startListening()
+    }
+
     private fun startListening() {
-        if (transcriber != null) return
+        if (listening || processing) return
+        listening = true
         face.thinking = true
-        hint.text = "Te escucho… (toca el micrófono al terminar, o escribe)"
+        setStatus("Escuchando…")
         val t = defaultTranscriber(this)
         transcriber = t
+        t.onPartial = { partial -> runOnUiThread { showPartial(partial) } }
+        t.onLevel = { lvl -> runOnUiThread { micChip.scaleX = 1f + lvl * 0.14f; micChip.scaleY = 1f + lvl * 0.14f } }
+        MicService.start(this)
         scope.launch {
             val transcript = runCatching { withContext(Dispatchers.Default) { t.listen() } }.getOrElse { "" }
+            MicService.stop(this@AssistActivity)
+            listening = false
             transcriber = null
             face.thinking = false
+            micChip.scaleX = 1f; micChip.scaleY = 1f
             if (transcript.isBlank()) {
-                hint.text = "No te escuché — toca el micrófono o escribe"
+                partialBubble?.let { convo.removeView(it.parent as View); partialBubble = null }
+                setStatus("No te escuché — toca el micrófono o escribe")
                 return@launch
             }
-            hint.text = "✨ entendiendo…"
-            LogBus.log("assist", "transcripción: \"${transcript.take(140)}\"")
-            dispatch(transcript, distill = true)
+            finalizePartial(transcript)
+            process(transcript)
         }
     }
 
-    /** Cierra la barra y manda la orden al Execution Engine (la pantalla queda libre para actuar). */
-    private fun dispatch(text: String, distill: Boolean) {
-        val raw = text.trim()
-        if (raw.isBlank()) return
+    /** Muestra/actualiza en vivo lo que se va entendiendo como una burbuja del usuario. */
+    private fun showPartial(text: String) {
+        val tv = partialBubble ?: addBubble(text, mine = true).also { partialBubble = it }
+        tv.text = text
+        scrollToBottom()
+    }
+
+    private fun finalizePartial(text: String) {
+        val tv = partialBubble
+        if (tv != null) { tv.text = text; partialBubble = null } else addBubble(text, mine = true)
+    }
+
+    /* ---------- Entrada por texto ---------- */
+
+    private fun submitTyped() {
+        val text = input.text.toString().trim()
+        if (text.isBlank() || processing) return
+        input.setText("")
+        transcriber?.stop()
+        addBubble(text, mine = true)
+        process(text)
+    }
+
+    /* ---------- Enrutado: conversación vs acción ---------- */
+
+    private fun process(text: String) {
+        processing = true
+        setStatus("Pensando…")
+        val thinking = addThinking()
+        scope.launch {
+            val intent = withContext(Dispatchers.IO) {
+                runCatching { app.intentDistiller.distill(text) }.getOrNull()
+            }
+            convo.removeView(thinking)
+            processing = false
+            if (intent != null) actOn(intent) else converse(text)
+        }
+    }
+
+    /** Es una tarea del teléfono: confirma y entrega al motor (la burbuja narra y actúa). */
+    private fun actOn(intent: String) {
+        addBubble("Voy a hacerlo.", mine = false)
+        LogBus.log("assist", "▶ acción: \"${intent.take(120)}\"")
+        val bubble = (app.ui as? GraphAccessibilityService)?.bubble
+        scope.launch {
+            delay(650) // deja leer la confirmación
+            dismiss()
+            app.scope.launch {
+                runCatching { app.run(intent, bubble) }.onFailure { LogBus.log("assist", "error: ${it.message}") }
+            }
+        }
+    }
+
+    /** No es una acción: responde conversacionalmente ahí mismo y sigue abierto para continuar. */
+    private fun converse(text: String) {
+        setStatus("")
+        val thinking = addThinking()
+        scope.launch {
+            val reply = withContext(Dispatchers.IO) { chat(text) }
+                .ifBlank { "Puedo abrir apps, poner música, mandar mensajes y ayudarte con lo que necesites en el teléfono." }
+            convo.removeView(thinking)
+            addBubble(reply, mine = false)
+            speak(reply)
+            setStatus("Toca el micrófono o escribe para seguir")
+        }
+    }
+
+    private fun chat(text: String): String {
+        val prompt = """
+            Eres Graph, el asistente del teléfono del usuario. Personalidad cálida, cercana y BREVE.
+            Responde en 1-3 frases, natural y en el idioma del usuario, sin tecnicismos ni listas de
+            funciones. Si te preguntan qué puedes hacer, dilo en lenguaje cotidiano y corto.
+            ${app.memories.promptBlock().let { if (it.isBlank()) "" else "Lo que sabes del usuario:\n$it" }}
+            Usuario: "$text"
+        """.trimIndent()
+        return GeminiJson.askText(
+            app.prefs.getString("apiKey", GraphApp.DEFAULT_API_KEY)!!,
+            app.prefs.getString("model", "gemini-3.5-flash")!!,
+            prompt, tag = "assist",
+        )
+    }
+
+    /* ---------- Burbujas ---------- */
+
+    private fun addBubble(text: String, mine: Boolean): TextView {
+        val tv = TextView(this).apply {
+            this.text = text
+            textSize = 16f
+            setTextColor(if (mine) Color.WHITE else Palette.text)
+            setLineSpacing(dp(3).toFloat(), 1f)
+            setPadding(dp(16), dp(11), dp(16), dp(11))
+            maxWidth = resources.displayMetrics.widthPixels * 78 / 100
+            background = rounded(if (mine) Palette.accent else Palette.card,
+                dp(20).toFloat(), if (mine) 0 else Palette.cardBorder)
+        }
+        val rowLp = LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) }
+        val holder = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            gravity = if (mine) Gravity.END else Gravity.START
+            addView(tv, LinearLayout.LayoutParams(-2, -2))
+        }
+        convo.addView(holder, rowLp)
+        scrollToBottom()
+        return tv
+    }
+
+    /** Burbuja de "escribiendo" con tres puntos animados. */
+    private fun addThinking(): View {
+        val dots = TextView(this).apply {
+            text = "•  •  •"
+            textSize = 16f
+            setTextColor(Palette.textDim)
+            setPadding(dp(16), dp(11), dp(16), dp(11))
+            background = rounded(Palette.card, dp(20).toFloat(), Palette.cardBorder)
+        }
+        val holder = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL; gravity = Gravity.START
+            addView(dots, LinearLayout.LayoutParams(-2, -2))
+        }
+        convo.addView(holder, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(6) })
+        scrollToBottom()
+        ValueAnimator.ofFloat(0.3f, 1f).apply {
+            duration = 700; repeatCount = ValueAnimator.INFINITE
+            repeatMode = ValueAnimator.REVERSE
+            addUpdateListener {
+                if (holder.parent == null) { cancel(); return@addUpdateListener }
+                dots.alpha = it.animatedValue as Float
+            }
+            start()
+        }
+        return holder
+    }
+
+    private fun scrollToBottom() = convoScroll.post { convoScroll.fullScroll(View.FOCUS_DOWN) }
+
+    private fun setStatus(text: String) { status.text = text; status.visibility = if (text.isBlank()) View.GONE else View.VISIBLE }
+
+    private fun speak(text: String) {
+        if (ttsReady) tts?.speak(text.filter { it.code in 32..0x2FFF }, TextToSpeech.QUEUE_FLUSH, null, "assist")
+    }
+
+    private fun dismiss() {
         transcriber?.stop()
         finish()
-        val bubble: FloatingBubble? = (app.ui as? GraphAccessibilityService)?.bubble
-        app.scope.launch {
-            val prompt = if (distill) {
-                runCatching { app.intentDistiller.distill(raw) }.getOrNull() ?: return@launch Unit.also {
-                    LogBus.log("assist", "sin intención accionable")
-                    bubble?.narrate("Te oí, pero no había nada que hacer 🙂")
-                }
-            } else raw
-            LogBus.log("assist", "▶ \"${prompt.take(120)}\"")
-            runCatching { app.run(prompt, bubble) }
-                .onFailure { LogBus.log("assist", "error: ${it.message}") }
-        }
     }
 
     override fun onDestroy() {
         transcriber?.stop()
+        MicService.stop(this)
+        tts?.shutdown()
         scope.cancel()
         super.onDestroy()
+    }
+
+    private fun sheetBackground() = android.graphics.drawable.GradientDrawable().apply {
+        setColor(Palette.bg)
+        cornerRadii = floatArrayOf(dp(28).toFloat(), dp(28).toFloat(), dp(28).toFloat(), dp(28).toFloat(), 0f, 0f, 0f, 0f)
+        setStroke(dp(1), Palette.cardBorder)
+    }
+
+    /** ScrollView con altura máxima: el hilo crece hasta un tope y luego se desplaza. */
+    private class BoundedScrollView(context: Context, private val maxH: Int) : ScrollView(context) {
+        override fun onMeasure(widthSpec: Int, heightSpec: Int) {
+            super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(maxH, MeasureSpec.AT_MOST))
+        }
     }
 }
