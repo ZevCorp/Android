@@ -455,6 +455,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scope.launch { bubble.blink(times) }
     }
 
+    /** Pulso de vida en acciones MCP por Intent (sin coordenadas: no hay a dónde volar). */
+    fun pulse() {
+        scope.launch { bubble.pulse() }
+    }
+
     /* ---------- Voz sin Activity: SpeechRecognizer directo en el servicio ---------- */
 
     private fun recognize(onResult: (String?) -> Unit) {

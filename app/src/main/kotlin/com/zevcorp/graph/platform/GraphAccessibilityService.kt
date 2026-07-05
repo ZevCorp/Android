@@ -343,11 +343,14 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
     }
 
     override suspend fun tapLabel(label: String): Boolean {
-        val node = findByLabel(label) ?: return false.also { LogBus.log("learn", "no encontré \"$label\"") }
+        val node = findByLabel(label)
+            ?: return false.also { LogBus.log("mcp", "tap \"$label\": no está en la pantalla actual ($foregroundApp)") }
         val target = clickableAncestor(node) ?: node
         val r = Rect().also { target.getBoundsInScreen(it) }
         bubble?.flyTo(r.centerX(), r.centerY())
-        return target.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tapGesture(r.centerX(), r.centerY())
+        val ok = target.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tapGesture(r.centerX(), r.centerY())
+        if (!ok) LogBus.log("mcp", "tap \"$label\": lo encontré pero ni ACTION_CLICK ni el gesto funcionaron")
+        return ok
     }
 
     private fun findByLabel(label: String): AccessibilityNodeInfo? {

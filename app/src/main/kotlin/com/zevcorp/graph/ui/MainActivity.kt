@@ -174,6 +174,8 @@ class MainActivity : Activity(), UserChannel {
             addView(logView)
             background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
             setPadding(dp(10), dp(8), dp(10), dp(8))
+            // Dentro de un ScrollView padre: reclama el gesto para poder scrollear los logs.
+            setOnTouchListener { v, _ -> v.parent.requestDisallowInterceptTouchEvent(true); false }
         }
         dev.addView(logScroll, LinearLayout.LayoutParams(-1, dp(260)))
         root.addView(dev)
@@ -204,8 +206,10 @@ class MainActivity : Activity(), UserChannel {
         logView.text = LogBus.dump()
         scope.launch {
             LogBus.lines.collect {
+                // Solo sigue el "vivo" si ya estabas al fondo: si subiste a leer, no te arrastra.
+                val atBottom = logScroll.scrollY + logScroll.height >= logView.height - dp(28)
                 logView.text = LogBus.dump()
-                logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+                if (atBottom) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
             }
         }
         refreshMcpPanel()

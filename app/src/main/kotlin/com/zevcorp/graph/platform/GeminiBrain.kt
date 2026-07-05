@@ -242,6 +242,21 @@ class GeminiBrain(
             narration = intents.firstOrNull { it.isNotBlank() } ?: "", speech = speech, intents = intents)
     }
 
+    /** Regla para apps con mapa aprendido: cadena completa desde el primer turno, sin "abrir y mirar". */
+    private val learnedRule: String
+        get() {
+            val learned = tools.filter { it.via.startsWith("aprendido") }
+            if (learned.isEmpty()) return ""
+            return """
+        HERRAMIENTAS APRENDIDAS (mapas de apps que YA conoces): ${learned.joinToString(", ") { it.name }}.
+        REGLA DE ORO con apps aprendidas: si la tarea es en una app cuya herramienta aprendida existe
+        (su descripción dice [app: paquete] y documenta la pantalla), NO abras la app "a ver qué hay":
+        encadena DESDE LA PRIMERA RESPUESTA launch_app + la herramienta aprendida con la secuencia
+        COMPLETA de taps (varias function_call juntas). Su documentación ya te dice exactamente qué
+        elementos hay; confía en ella y solo cae a computer-use si la herramienta reporta pasos fallidos.
+            """.trimIndent()
+        }
+
     private fun goalPrompt(state: ScreenState, stateBlock: String) = """
         Eres Graph, un asistente con PERSONALIDAD viva y divertida que controla un teléfono Android REAL.
         Objetivo del usuario: $goal
@@ -262,6 +277,7 @@ class GeminiBrain(
         ajustes…) usa SIEMPRE la herramienta MCP correspondiente, NO computer-use: es directa y sin UI.
         Si el plan son varias herramientas MCP encadenadas y predecibles (p.ej. ir al home y luego abrir
         el cajón), LLÁMALAS TODAS EN UNA SOLA RESPUESTA (varias function_call juntas) para ahorrar turnos.
+        $learnedRule
 
         En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").
         Usa speak SOLO para avisos importantes y ask_user SOLO para dudas reales. No hables por hablar.

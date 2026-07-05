@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.SharedPreferences
 import com.zevcorp.graph.platform.AndroidSystemApi
+import com.zevcorp.graph.platform.CloudSync
 import com.zevcorp.graph.platform.GeminiBrain
 import com.zevcorp.graph.platform.GeminiLearning
 import com.zevcorp.graph.platform.GraphAccessibilityService
@@ -25,6 +26,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.launch
 
 /** Composition root: une el núcleo (motor mixto + MCP) con los adaptadores Android. */
 class GraphApp : Application() {
@@ -45,8 +47,10 @@ class GraphApp : Application() {
         override fun speak(text: String) { bubble?.speak(text) }
     }
 
-    /** Herramientas aprendidas en sesiones de enseñanza (se vuelven MCP ejecutables). */
-    val learnedTools by lazy { LearnedToolRepo(filesDir) }
+    /** Herramientas aprendidas (se vuelven MCP ejecutables): disco local + copia en la nube. */
+    val learnedTools by lazy {
+        LearnedToolRepo(filesDir) { tool -> scope.launch(Dispatchers.IO) { CloudSync.push(tool) } }
+    }
 
     /**
      * Enseñanza PASIVA: se alterna con el 🎓 de la burbuja. Observa los clics del usuario usando el
@@ -65,6 +69,8 @@ class GraphApp : Application() {
             lastSubconscious = subconscious
             bubble?.blink(if (subconscious) 2 else 1)
         }
+        // Las MCP por Intent no vuelan la burbuja (no hay coordenadas): pulso para que se vea viva.
+        if (subconscious) bubble?.pulse()
     }
 
     private fun newBrain(mcp: Mcp) = GeminiBrain(apiKey, model, mcp.tools, listApps = {
@@ -81,7 +87,7 @@ class GraphApp : Application() {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
         // MCP = gestos de accesibilidad + acciones del sistema por Intent + herramientas aprendidas.
-        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay)
+        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
         val engine = ExecutionEngine(
             brain = { newBrain(mcp) },
             phone = surface,
@@ -141,6 +147,8 @@ class GraphApp : Application() {
         super.onCreate()
         instance = this
         prefs = getSharedPreferences("graph", MODE_PRIVATE)
+        // Trae los aprendizajes de la nube (y sube los locales que falten allá).
+        scope.launch(Dispatchers.IO) { learnedTools.syncFromCloud() }
     }
 
     companion object {

@@ -23,6 +23,18 @@ class FaceView(context: Context) : View(context) {
     private var blinkClosed = 0f // 0 = ojos abiertos, 1 = cerrados
     private var blinkAnim: android.animation.ValueAnimator? = null
 
+    /**
+     * Pulso de vida: encoge y rebota. Señal de que se ejecutó una acción MCP sin coordenadas
+     * (Intent/API del sistema), donde no hay ningún punto de la pantalla al que volar.
+     */
+    fun pulse() {
+        animate().cancel()
+        scaleX = 1f; scaleY = 1f
+        animate().scaleX(0.84f).scaleY(0.84f).setDuration(110).withEndAction {
+            animate().scaleX(1f).scaleY(1f).setDuration(180).start()
+        }.start()
+    }
+
     /** Parpadea `times` veces seguidas cerrando y abriendo los ojos. */
     fun blink(times: Int) {
         if (times <= 0) return

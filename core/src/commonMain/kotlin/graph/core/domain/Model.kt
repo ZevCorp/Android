@@ -57,7 +57,11 @@ class Mcp(
     player: UiPlayer? = null,
     /** Pausa entre los steps (taps) de una herramienta aprendida enviados juntos; ajustable en la app. */
     stepDelay: () -> Long = { 350 },
+    private val log: GraphLog = GraphLog { _, _ -> },
 ) {
+
+    /** Detalle del último fallo de una herramienta aprendida (qué pasos no se pudieron tocar). */
+    private var lastDetail: String? = null
 
     private val gestureTools = listOf(
         McpTool("go_home", "Vuelve a la pantalla de inicio (home) de Android.", via = GESTURE) { gestures.home() },
@@ -113,19 +117,27 @@ class Mcp(
     // Herramientas aprendidas: el mapa de una pantalla estructurado en la enseñanza. El modelo compone
     // en runtime la secuencia que necesite (taps) con el catálogo de elementos; se toca por árbol de UI.
     private val learnedTools = learned.map { lt ->
+        val appNote = if (lt.app.isNotBlank()) "[app: ${lt.app}] " else ""
         McpTool(
             sanitize(lt.name),
-            "${lt.description} Elementos disponibles (etiquetas exactas): ${lt.elements.joinToString(", ")}.",
+            "$appNote${lt.description} Elementos disponibles (etiquetas exactas): ${lt.elements.joinToString(", ")}.",
             listOf(McpParam("taps", "Etiquetas a tocar EN ORDEN, separadas por comas (usa solo las disponibles)")),
             via = "aprendido (árbol de UI)",
         ) { args ->
             val labels = (args["taps"] ?: "").split(',').map { it.trim() }.filter { it.isNotBlank() }
-            var ok = labels.isNotEmpty()
+            val failed = mutableListOf<String>()
             for (label in labels) {
-                if (player?.tapLabel(label) != true) ok = false
+                if (player?.tapLabel(label) != true) {
+                    failed += label
+                    log.log("mcp", "🧩 ${sanitize(lt.name)}: falló el paso \"$label\"")
+                }
                 delay(stepDelay())
             }
-            ok
+            if (failed.isNotEmpty())
+                lastDetail = "pasos fallidos: ${failed.joinToString(", ")} (de ${labels.size})"
+            else if (labels.isEmpty())
+                lastDetail = "llamada sin taps: no había pasos que ejecutar"
+            labels.isNotEmpty() && failed.isEmpty()
         }
     }
 
@@ -140,7 +152,9 @@ class Mcp(
     /** Ejecuta una herramienta por nombre y devuelve un resultado legible para el modelo. */
     suspend fun call(name: String, args: Map<String, String>): String {
         val t = tool(name) ?: return "herramienta MCP desconocida: $name"
-        return if (t.run(args)) "ok" else "la herramienta no se pudo ejecutar"
+        lastDetail = null
+        return if (t.run(args)) "ok"
+        else "la herramienta no se pudo ejecutar" + (lastDetail?.let { " — $it" } ?: "")
     }
 
     /** Documentación del protocolo en Markdown, agrupada por vía. Semilla de los workflows-MCP de v2. */

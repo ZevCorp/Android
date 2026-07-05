@@ -98,19 +98,23 @@ class ExecutionEngine(
     private suspend fun execute(action: AgentAction): String {
         // Aviso de vía: MCP = subconsciente, computer-use = consciente (Wait no cambia de vía).
         if (action !is AgentAction.Wait) mode?.executing(action is AgentAction.Mcp)
-        val ok = when (action) {
-            is AgentAction.Mcp -> mcp.call(action.tool, action.args) == "ok"
-            is AgentAction.Tap -> phone.tap(action.x, action.y)
-            is AgentAction.Type -> phone.type(action.x, action.y, action.text)
-            is AgentAction.OpenApp -> phone.openApp(action.name)
-            is AgentAction.Scroll -> phone.scroll(action.down)
-            is AgentAction.Swipe -> phone.swipe(action.x1, action.y1, action.x2, action.y2, action.ms)
-            is AgentAction.Key -> phone.pressKey(action.key)
-            is AgentAction.Wait -> { delay(action.ms); true }
+        // Las MCP devuelven su propio detalle de fallo (p.ej. qué taps de una aprendida no salieron):
+        // se conserva tal cual para el log y para que el modelo pueda corregir en el siguiente turno.
+        val result = when (action) {
+            is AgentAction.Mcp -> mcp.call(action.tool, action.args)
+            is AgentAction.Tap -> phone.tap(action.x, action.y).asResult()
+            is AgentAction.Type -> phone.type(action.x, action.y, action.text).asResult()
+            is AgentAction.OpenApp -> phone.openApp(action.name).asResult()
+            is AgentAction.Scroll -> phone.scroll(action.down).asResult()
+            is AgentAction.Swipe -> phone.swipe(action.x1, action.y1, action.x2, action.y2, action.ms).asResult()
+            is AgentAction.Key -> phone.pressKey(action.key).asResult()
+            is AgentAction.Wait -> { delay(action.ms); "ok" }
         }
-        log.log("run", "  ▪ ${describe(action)} → ${if (ok) "ok" else "falló"}")
-        return if (ok) "ok" else "no se pudo ejecutar la acción"
+        log.log("run", "  ▪ ${describe(action)} → $result")
+        return result
     }
+
+    private fun Boolean.asResult() = if (this) "ok" else "no se pudo ejecutar la acción"
 
     /** Etiqueta legible de una acción, distinguiendo la VÍA usada (MCP vs computer-use). */
     private fun describe(a: AgentAction): String = when (a) {
