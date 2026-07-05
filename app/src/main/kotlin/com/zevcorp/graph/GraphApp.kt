@@ -9,11 +9,15 @@ import android.content.Intent
 import android.content.SharedPreferences
 import com.zevcorp.graph.platform.AndroidSystemApi
 import com.zevcorp.graph.platform.GeminiBrain
+import com.zevcorp.graph.platform.GeminiLearning
 import com.zevcorp.graph.platform.GraphAccessibilityService
+import com.zevcorp.graph.platform.LearnedToolRepo
 import com.zevcorp.graph.platform.LogBus
 import graph.core.application.ExecutionEngine
+import graph.core.application.LearningSession
 import graph.core.domain.Mcp
 import graph.core.domain.Phone
+import graph.core.domain.Teacher
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import kotlinx.coroutines.CancellationException
@@ -41,6 +45,9 @@ class GraphApp : Application() {
         override fun speak(text: String) { bubble?.speak(text) }
     }
 
+    /** Herramientas aprendidas en sesiones de enseñanza (se vuelven MCP ejecutables). */
+    val learnedTools by lazy { LearnedToolRepo(filesDir) }
+
     private fun newBrain(mcp: Mcp) = GeminiBrain(apiKey, model, mcp.tools, listApps = {
         packageManager.getInstalledApplications(0)
             .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
@@ -54,8 +61,8 @@ class GraphApp : Application() {
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
-        // Gestos por accesibilidad + acciones del sistema por Intent, ambos expuestos como MCP.
-        val mcp = Mcp(service, AndroidSystemApi(service))
+        // MCP = gestos de accesibilidad + acciones del sistema por Intent + herramientas aprendidas.
+        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service)
         val engine = ExecutionEngine(
             brain = { newBrain(mcp) },
             phone = surface,
@@ -65,6 +72,23 @@ class GraphApp : Application() {
             log = LogBus,
         )
         return running { engine.run(prompt) }
+    }
+
+    /**
+     * Sesión de ENSEÑANZA: el usuario muestra y explica; el asistente entiende contra el árbol de UI,
+     * ilumina la secuencia, la prueba con permiso y al terminar la organiza en una herramienta MCP.
+     */
+    suspend fun learn(teacher: Teacher): String {
+        val service = ui as? GraphAccessibilityService ?: return "Activa el servicio de accesibilidad de Graph"
+        val session = LearningSession(
+            brain = GeminiLearning(apiKey, model),
+            surface = service,
+            teacher = teacher,
+            voice = voice,
+            repo = learnedTools,
+            log = LogBus,
+        )
+        return running { session.run() }
     }
 
     /* ---------- Detener la ejecución (botón rojo flotante + notificación) ---------- */

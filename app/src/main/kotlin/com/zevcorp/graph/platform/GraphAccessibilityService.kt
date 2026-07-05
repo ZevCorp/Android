@@ -15,22 +15,28 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.ui.FloatingBubble
+import com.zevcorp.graph.ui.HighlightOverlay
 import graph.core.domain.Gestures
+import graph.core.domain.LearningSurface
 import graph.core.domain.Phone
 import graph.core.domain.ScreenState
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
+import kotlinx.coroutines.withContext
 
 /**
  * Superficie del teléfono para Android: implementa las primitivas de computer-use (`Phone`) y los
  * gestos semánticos que se exponen como herramientas MCP (`Gestures`), todo vía accesibilidad.
  */
-class GraphAccessibilityService : AccessibilityService(), Phone, Gestures {
+class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, LearningSurface {
 
     var bubble: FloatingBubble? = null
         private set
+
+    private val highlighter by lazy { HighlightOverlay(this) }
 
     override fun onServiceConnected() {
         GraphApp.instance.ui = this
@@ -41,6 +47,7 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures {
     override fun onDestroy() {
         if (GraphApp.instance.ui === this) GraphApp.instance.ui = null
         bubble?.destroy()
+        highlighter.destroy()
         super.onDestroy()
     }
 
@@ -232,6 +239,53 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures {
     }
 
     override suspend fun scrollMenu(down: Boolean): Boolean = scroll(down)
+
+    /* ---------- LearningSurface: leer, iluminar y tocar elementos por etiqueta ---------- */
+
+    override suspend fun screen(): String = currentScreen()
+
+    /** Etiquetas de los elementos tocables de la pantalla actual (lo que el cerebro puede secuenciar). */
+    override suspend fun elements(): List<String> {
+        val out = LinkedHashSet<String>()
+        fun walk(n: AccessibilityNodeInfo?) {
+            n ?: return
+            if (n.isClickable || n.isEditable) labelOf(n).takeIf { it.isNotBlank() }?.let { out += it }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(rootInActiveWindow)
+        return out.take(48).toList()
+    }
+
+    /** Ilumina en secuencia (tin·tin·tin) los elementos por su etiqueta. */
+    override suspend fun highlight(labels: List<String>) {
+        for (label in labels) {
+            val node = findByLabel(label) ?: continue
+            val r = Rect().also { node.getBoundsInScreen(it) }
+            withContext(Dispatchers.Main) { highlighter.show(r) }
+            delay(700)
+        }
+        withContext(Dispatchers.Main) { highlighter.hide() }
+    }
+
+    override suspend fun tapLabel(label: String): Boolean {
+        val node = findByLabel(label) ?: return false.also { LogBus.log("learn", "no encontré \"$label\"") }
+        val target = clickableAncestor(node) ?: node
+        val r = Rect().also { target.getBoundsInScreen(it) }
+        bubble?.flyTo(r.centerX(), r.centerY())
+        return target.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tapGesture(r.centerX(), r.centerY())
+    }
+
+    private fun findByLabel(label: String): AccessibilityNodeInfo? {
+        val root = rootInActiveWindow ?: return null
+        var found: AccessibilityNodeInfo? = null
+        fun walk(n: AccessibilityNodeInfo?) {
+            n ?: return
+            if (found == null && labelOf(n).equals(label, true)) found = n
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return found
+    }
 
     /* ---------- Primitivas de accesibilidad ---------- */
 

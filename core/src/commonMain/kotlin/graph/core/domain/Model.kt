@@ -1,5 +1,7 @@
 package graph.core.domain
 
+import kotlinx.coroutines.delay
+
 /**
  * Estado de la pantalla que ve el cerebro en cada turno.
  * Por defecto es TEXTO (georreferenciación por árbol de UI): `screen` (paquete·título) y `uiContext`
@@ -48,7 +50,12 @@ private fun Map<String, String>.str(key: String) = this[key]?.trim() ?: ""
  * Expone el esquema (para declararlas al modelo), la documentación (semilla de los workflows-MCP de
  * v2) y el despacho. Añadir una capacidad = añadir una entrada a `tools`.
  */
-class Mcp(gestures: Gestures, system: SystemApi) {
+class Mcp(
+    gestures: Gestures,
+    system: SystemApi,
+    learned: List<LearnedTool> = emptyList(),
+    player: UiPlayer? = null,
+) {
 
     private val gestureTools = listOf(
         McpTool("go_home", "Vuelve a la pantalla de inicio (home) de Android.", via = GESTURE) { gestures.home() },
@@ -101,9 +108,25 @@ class Mcp(gestures: Gestures, system: SystemApi) {
             listOf(McpParam("text", "Texto a copiar"))) { system.setClipboard(it.str("text")) },
     )
 
-    val tools: List<McpTool> = gestureTools + systemTools
+    // Herramientas aprendidas en sesiones de enseñanza: cada una reproduce su secuencia de toques.
+    private val learnedTools = learned.map { lt ->
+        McpTool(sanitize(lt.name), "${lt.description} (aprendido: ${lt.steps.size} toques)", via = "workflow aprendido") {
+            var ok = true
+            for (label in lt.steps) {
+                if (player?.tapLabel(label) != true) ok = false
+                delay(350)
+            }
+            ok
+        }
+    }
+
+    val tools: List<McpTool> = gestureTools + systemTools + learnedTools
 
     fun tool(name: String) = tools.firstOrNull { it.name == name }
+
+    private fun sanitize(s: String) =
+        s.trim().lowercase().map { if (it in 'a'..'z' || it in '0'..'9') it else '_' }
+            .joinToString("").trim('_').ifBlank { "learned_tool" }
 
     /** Ejecuta una herramienta por nombre y devuelve un resultado legible para el modelo. */
     suspend fun call(name: String, args: Map<String, String>): String {
