@@ -66,13 +66,15 @@ class GeminiLearning(
         """.trimIndent() else "No existía mapa previo de esta app: si guardas, elige un nombre snake_case descriptivo."
 
         val prompt = """
-            Eres Graph. El usuario tuvo activado tu modo de ENSEÑANZA PASIVA mientras usaba una app de
-            su teléfono Android con normalidad, y acaba de salir de ella. Tu trabajo: estructurar lo
-            observado como herramienta MCP — o decidir que NO hay nada confiable que guardar.
+            Eres Graph. Tu modo de ENSEÑANZA PASIVA observó el uso de una app en el teléfono Android
+            y esa app acaba de cerrarse. Los clics pueden venir del usuario usándola con normalidad
+            O de ti mismo ejecutando una tarea que el usuario pidió: ambas son señales igual de
+            válidas de qué importa. Tu trabajo: estructurar lo observado como herramienta MCP — o
+            decidir que NO hay nada confiable que guardar.
 
             App (paquete): $app
             Pantalla: $screen
-            CLICS del usuario EN ORDEN (su uso real; ESTA es la señal de qué le importa):
+            CLICS observados EN ORDEN (el uso real; ESTA es la señal de qué importa):
             ${clicks.joinToString(" → ").ifBlank { "(ninguno)" }}
             Elementos tocables vistos en el árbol de UI (etiquetas EXACTAS):
             ${elements.joinToString(" | ").ifBlank { "(ninguno)" }}

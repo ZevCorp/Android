@@ -30,18 +30,19 @@ class PassiveLearning(
     private val clicks = mutableListOf<String>()
     private val elements = LinkedHashSet<String>()
 
-    fun start() {
+    /** Enciende la observación. `quiet` = sin anuncios (modo automático durante una ejecución). */
+    fun start(quiet: Boolean = false) {
         active = true
-        log.log("learn", "▶ enseñanza pasiva activada")
-        voice.narrate("🎓 Observo mientras usas el teléfono; aprendo solo.")
+        log.log("learn", if (quiet) "▶ enseñanza pasiva automática (ejecución)" else "▶ enseñanza pasiva activada")
+        if (!quiet) voice.narrate("🎓 Observo mientras usas el teléfono; aprendo solo.")
     }
 
     /** Apaga el modo consolidando lo que quedara pendiente de la app actual. */
-    suspend fun stop() {
+    suspend fun stop(quiet: Boolean = false) {
         active = false
         mutex.withLock { consolidate() }
         log.log("learn", "■ enseñanza pasiva desactivada")
-        voice.narrate("🎓 Dejo de observar.")
+        if (!quiet) voice.narrate("🎓 Dejo de observar.")
     }
 
     /** Un clic del usuario dentro de una app, con el árbol de UI visible en ese momento. */

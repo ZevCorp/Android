@@ -137,6 +137,11 @@ class GraphApp : Application() {
         bubble?.companion(true)
         bubble?.showStop(true)
         notifyRunning(true)
+        // Toda ejecución autónoma también aprende: los taps del asistente son señales igual de
+        // válidas que los del usuario. Se enciende en silencio y al terminar consolida aparte
+        // (en background, para no retrasar la respuesta). Si el 🎓 ya estaba activo, no se toca.
+        val autoLearn = !passive.active
+        if (autoLearn) passive.start(quiet = true)
         try {
             return block()
         } finally {
@@ -144,6 +149,7 @@ class GraphApp : Application() {
             bubble?.companion(false)
             bubble?.showStop(false)
             notifyRunning(false)
+            if (autoLearn && passive.active) scope.launch(Dispatchers.IO) { passive.stop(quiet = true) }
         }
     }
 
