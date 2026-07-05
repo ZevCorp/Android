@@ -74,6 +74,14 @@
             android:launchMode="singleInstance"
             android:theme="@style/AssistTheme" />
 
+        <!-- Diagnóstico: muestra la traza de cualquier crash (en su propio proceso). -->
+        <activity
+            android:name=".ui.CrashActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:process=":crash"
+            android:launchMode="singleInstance" />
+
         <receiver
             android:name=".platform.StopReceiver"
             android:exported="true">

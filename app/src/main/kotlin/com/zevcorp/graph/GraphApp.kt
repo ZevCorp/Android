@@ -274,6 +274,7 @@ class GraphApp : Application() {
     override fun onCreate() {
         super.onCreate()
         instance = this
+        installCrashReporter()
         prefs = getSharedPreferences("graph", MODE_PRIVATE)
         // Tema guardado (claro por defecto): cara y app en blanco/negro, sin azul.
         Palette.mode = runCatching { ThemeMode.valueOf(prefs.getString("theme", ThemeMode.LIGHT.name)!!) }
@@ -282,6 +283,28 @@ class GraphApp : Application() {
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()
             memories.syncFromCloud(CloudSync.pullMemory())
+        }
+    }
+
+    /**
+     * Si algo revienta (arranque incluido), en vez de cerrarse en silencio se guarda la traza en
+     * files/last_crash.txt y se abre CrashActivity mostrándola (en su propio proceso). Así se puede
+     * capturar el error exacto aunque no haya cable/logcat.
+     */
+    private fun installCrashReporter() {
+        val previous = Thread.getDefaultUncaughtExceptionHandler()
+        Thread.setDefaultUncaughtExceptionHandler { thread, error ->
+            val trace = java.io.StringWriter().also { error.printStackTrace(java.io.PrintWriter(it)) }.toString()
+            runCatching { java.io.File(filesDir, "last_crash.txt").writeText(trace) }
+            runCatching {
+                startActivity(
+                    Intent(this, com.zevcorp.graph.ui.CrashActivity::class.java)
+                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                        .putExtra(com.zevcorp.graph.ui.CrashActivity.EXTRA_TRACE, trace))
+            }
+            runCatching { previous?.uncaughtException(thread, error) }
+            android.os.Process.killProcess(android.os.Process.myPid())
+            kotlin.system.exitProcess(1)
         }
     }
 
