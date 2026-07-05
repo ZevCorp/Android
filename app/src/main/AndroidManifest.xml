@@ -25,6 +25,20 @@
             </intent-filter>
         </activity>
 
+        <!-- Asistente del sistema: seleccionable en Ajustes → App de asistente digital;
+             se invoca manteniendo oprimido el botón de encendido (o el gesto de assist). -->
+        <activity
+            android:name=".ui.AssistActivity"
+            android:exported="true"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/AssistTheme">
+            <intent-filter>
+                <action android:name="android.intent.action.ASSIST" />
+                <category android:name="android.intent.category.DEFAULT" />
+            </intent-filter>
+        </activity>
+
         <service
             android:name=".platform.GraphAccessibilityService"
             android:exported="false"

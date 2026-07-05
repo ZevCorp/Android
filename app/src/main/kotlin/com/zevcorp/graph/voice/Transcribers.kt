@@ -24,6 +24,12 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
+/** Elige el transcriptor según configuración: Deepgram nova-3 si hay key, si no el del sistema. */
+fun defaultTranscriber(context: Context): Transcriber {
+    val key = com.zevcorp.graph.GraphApp.instance.prefs.getString("deepgramKey", "")?.trim().orEmpty()
+    return if (key.isNotBlank()) DeepgramTranscriber(key) else SystemTranscriber(context)
+}
+
 /**
  * Captura del micrófono → texto. Dos implementaciones intercambiables:
  * Deepgram nova-3 (el pipeline del repo Graph) si hay API key, o el reconocedor del sistema.

@@ -56,12 +56,18 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
-    /** Esquinas superiores = zona de encaje para activar la escucha por voz (pipeline Graph). */
+    /** Esquinas superiores = zona de encaje para la escucha PERMANENTE (pipeline Graph). */
     private val voiceDock by lazy {
         VoiceDock(service,
             setThinking = { bubble.thinking = it },
             narrate = ::narrate,
-            runIntent = ::runPrompt)
+            runIntent = { prompt -> runPromptAwait(prompt) },
+            returnToCorner = { left -> scope.launch { snapTo(cornerX(left), service.dp(6)) } })
+    }
+
+    private fun cornerX(left: Boolean): Int {
+        val m = service.resources.displayMetrics
+        return if (left) service.dp(4) else m.widthPixels - bubbleParams.width - service.dp(4)
     }
 
     fun show() {
@@ -164,9 +170,15 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     /** Encaja la burbuja exactamente en la esquina superior más cercana (zona de escucha). */
     private fun snapToCorner(size: Int) {
-        val m = service.resources.displayMetrics
-        val destX = if (bubbleParams.x + size / 2 < m.widthPixels / 2) service.dp(4) else m.widthPixels - size - service.dp(4)
+        val left = bubbleParams.x + size / 2 < service.resources.displayMetrics.widthPixels / 2
+        val destX = cornerX(left)
         val destY = service.dp(6)
+        snapTo(destX, destY)
+        voiceDock.track(destX + size / 2, destY + size / 2)
+    }
+
+    /** Animación corta de encaje hacia un punto (también para volver a la esquina tras ejecutar). */
+    private fun snapTo(destX: Int, destY: Int) {
         val fromX = bubbleParams.x; val fromY = bubbleParams.y
         dragAnimator?.cancel()
         dragAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
@@ -180,7 +192,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             }
             start()
         }
-        voiceDock.track(destX + size / 2, destY + size / 2)
     }
 
     fun destroy() {
@@ -400,13 +411,17 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {
         if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
-        voiceDock.cancel() // si estaba armada en una esquina, la ejecución la desarma
+        voiceDock.cancel() // desarma una cuenta regresiva pendiente (no toca la escucha permanente)
+        scope.launch { runPromptAwait(prompt) }
+    }
+
+    /** Igual que runPrompt pero SUSPENDE hasta terminar: lo usa el bucle de escucha permanente. */
+    suspend fun runPromptAwait(prompt: String) = withContext(Dispatchers.Main) {
+        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return@withContext }
         narrate("¡Vamos! $prompt")
-        scope.launch {
-            runCatching { withContext(Dispatchers.Default) { app.run(prompt, this@FloatingBubble) } }
-                .onSuccess { toast(it) }
-                .onFailure { toast(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
-        }
+        runCatching { withContext(Dispatchers.Default) { app.run(prompt, this@FloatingBubble) } }
+            .onSuccess { toast(it) }
+            .onFailure { toast(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
     }
 
     private fun closePanel() {

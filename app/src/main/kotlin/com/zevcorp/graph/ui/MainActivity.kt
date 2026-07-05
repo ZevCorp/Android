@@ -92,8 +92,13 @@ class MainActivity : Activity(), UserChannel {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
         }, LinearLayout.LayoutParams(0, -2, 1f))
         setup.addView(setupRow)
+        setup.gap(dp(8))
+        setup.addView(button("⚡ Hacer de Graph tu asistente (botón de encendido)") {
+            startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
+        })
         setup.gap(dp(6))
-        setup.addView(caption("Al activar accesibilidad aparece la burbuja flotante: Graph te acompaña en cualquier app."))
+        setup.addView(caption("Al activar accesibilidad aparece la burbuja flotante. En Apps predeterminadas → " +
+            "App de asistente digital elige Graph: lo invocas manteniendo el botón de encendido."))
         root.addView(setup)
         root.gap(dp(14))
 
