@@ -296,7 +296,11 @@ class GeminiBrain(
         $learnedRule
 
         En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").
-        Usa speak SOLO para avisos importantes y ask_user SOLO para dudas reales. No hables por hablar.
+        Usa speak SOLO para avisos importantes. No hables por hablar.
+        CUÁNDO PREGUNTAR (ask_user): si algo se te complica así sea MÍNIMAMENTE o depende de un dato
+        del usuario que tú no puedes saber ni ver (¿cuál es el chat de Sebastián?, ¿cuál cuenta?,
+        ¿a qué hora?), pregunta DE UNA con ask_user: una pregunta corta vale más que una acción
+        equivocada. Lo que sí puedas resolver mirando la pantalla o con tu memoria, NO lo preguntes.
 
         CÓMO HABLAS (importantísimo): eres un compañero, no un manual. Respuestas CORTAS (1-2 frases),
         naturales y en el idioma del usuario. NUNCA enumeres tus herramientas ni uses términos técnicos

@@ -9,11 +9,11 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonPrimitive
 
 /**
- * Interrupción por voz durante la enseñanza pasiva iniciada por el usuario. Mira lo que el usuario
- * acaba de hacer en una app y, SOLO si tras una cadena de pensamiento muy corta concluye que hay un
- * motivo real (no una duda obvia que él mismo puede inferir), la pregunta por voz, escucha la
- * respuesta y la guarda como conocimiento durable de esa app. Aislado: PassiveLearning decide
- * "cuándo"; esta clase decide "si vale la pena" y "qué preguntar" y hace todo el trabajo async.
+ * Intervención por voz POR INICIATIVA PROPIA durante la enseñanza pasiva iniciada por el usuario.
+ * Mira lo que el usuario acaba de hacer y, tras una cadena de pensamiento muy corta, decide UNA de
+ * tres: PROPONER ayuda con algo concreto y pendiente que ve en pantalla ("veo que te escribieron,
+ * ¿quieres que responda?"), PREGUNTAR una duda genuinamente útil para aprender, o quedarse callado.
+ * Siempre que interviene por voz, el usuario responde con el micrófono sticky bajo la carita.
  */
 class LearningInquiry(
     private val apiKey: () -> String,
@@ -24,23 +24,23 @@ class LearningInquiry(
     private val busy: () -> Boolean,
     /** Dice la pregunta en voz alta, muestra el micrófono bajo la carita y devuelve la respuesta. */
     private val askByVoice: suspend (String) -> String,
+    /** Ejecuta una tarea aceptada por el usuario (va al Execution Engine). */
+    private val runTask: (String) -> Unit,
 ) : LearningInquirer {
 
     @Volatile private var working = false
+
+    private class Decision(val action: String, val question: String, val task: String)
 
     override fun maybeAsk(app: String, screen: String, recentClicks: List<String>, elements: List<String>) {
         if (working || busy()) return
         working = true
         scope.launch(Dispatchers.IO) {
             try {
-                val question = decideQuestion(app, screen, recentClicks, elements) ?: return@launch
-                LogBus.log("learn", "🙋 pregunto: $question")
-                val answer = askByVoice(question)
-                if (answer.isBlank()) { LogBus.log("learn", "sin respuesta a la pregunta"); return@launch }
-                LogBus.log("learn", "respuesta: \"${answer.take(120)}\"")
-                val note = distillNote(app, question, answer) ?: return@launch
-                if (memories.add(note)) {
-                    LogBus.log("learn", "🧠 aprendido de tu respuesta [${note.app}]: ${note.note}")
+                val d = decide(app, screen, recentClicks, elements) ?: return@launch
+                when (d.action) {
+                    "offer" -> propose(app, d)
+                    "ask" -> inquire(app, d.question)
                 }
             } finally {
                 working = false
@@ -49,42 +49,80 @@ class LearningInquiry(
     }
 
     /**
-     * Cadena de pensamiento CORTÍSIMA + decisión. El modelo razona en una frase si la duda es obvia
-     * o inferible por él mismo; solo si concluye que NO lo es y que la respuesta cambiaría cómo hará
-     * la tarea, formula la pregunta. Texto, sin imagen.
+     * Cadena de pensamiento CORTÍSIMA + decisión. Prefiere el silencio; jamás preguntas obvias.
+     * "offer" solo si ve algo CONCRETO y pendiente con lo que puede ayudar YA.
      */
-    private fun decideQuestion(app: String, screen: String, clicks: List<String>, elements: List<String>): String? {
+    private fun decide(app: String, screen: String, clicks: List<String>, elements: List<String>): Decision? {
         val prompt = """
-            Eres Graph, un asistente que aprende observando al usuario usar una app de su Android para
-            luego hacer esas tareas por él. Acaba de hacer esto:
+            Eres Graph, un asistente que OBSERVA al usuario usar una app de su Android (él activó tu
+            modo aprendizaje). Puedes hacer tareas por él en el teléfono. Esto acaba de pasar:
 
             App: $app
             Pantalla: $screen
             Lo que tocó (en orden): ${clicks.joinToString(" → ").ifBlank { "(nada)" }}
             Elementos visibles: ${elements.take(30).joinToString(", ").ifBlank { "(ninguno)" }}
 
-            PIENSA PRIMERO (campo "reasoning", UNA sola frase brevísima): ¿de verdad necesitas
-            preguntarle algo, o la respuesta es OBVIA / puedes inferirla tú mismo?
-            Reglas de oro para tu razonamiento:
-            - La gente hace las cosas de forma variable y según el contexto. El ORDEN en que revisa
-              cuentas, toca botones o abre secciones casi NUNCA es una regla fija: NO se pregunta.
-            - Ejemplo de pregunta TONTA que jamás debes hacer: "¿siempre revisas estas cuentas en el
-              mismo orden?" — es obvio que no. No hagas preguntas cuya respuesta ya conoces.
-            - Solo vale preguntar si la respuesta cambiaría DE VERDAD cómo harías la tarea después y
-              no la puedes inferir del contexto (p.ej. un dato personal que solo el usuario sabe).
-            - Ante la duda, quédate callado. Es mejor no preguntar que hacer una pregunta obvia.
+            PIENSA PRIMERO (campo "reasoning", UNA frase brevísima) y decide UNA de tres:
+            - "offer": ves algo CONCRETO y PENDIENTE en pantalla con lo que podrías ayudar YA (un
+              mensaje que él debe contestar, algo a medio hacer, un trámite repetitivo). Propónlo
+              corto y natural por voz: "Veo que…, ¿quieres que te ayude con eso?" y define en "task"
+              la tarea exacta que harías. Solo si es evidente y útil; nunca por cortesía.
+            - "ask": tienes una duda que DE VERDAD te ayudaría a hacer bien esta tarea después y que
+              no puedes inferir (un dato personal que solo él sabe). El ORDEN en que hace las cosas
+              casi nunca es una regla: NO se pregunta. Jamás preguntes lo obvio.
+            - "none": silencio. Ante la duda, siempre "none": es mejor callar que molestar.
 
-            Devuelve SOLO JSON:
-            {"reasoning": "una frase", "worth_asking": true/false, "question": "pregunta corta y natural, o vacío"}
+            Responde SOLO JSON:
+            {"reasoning": "una frase", "action": "offer|ask|none", "question": "lo que dirías por voz o vacío", "task": "instrucción imperativa si action=offer, si no vacío"}
         """.trimIndent()
         return runCatching {
             val o = GeminiJson.ask(apiKey(), model(), prompt, tag = "learn")
             val reasoning = o["reasoning"]?.jsonPrimitive?.contentOrNull.orEmpty()
-            val worth = o["worth_asking"]?.jsonPrimitive?.booleanOrNull == true
-            LogBus.log("learn", "🤔 ${reasoning.take(120)} · ${if (worth) "pregunto" else "me lo respondo solo"}")
-            if (!worth) null
-            else o["question"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
+            val action = o["action"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            val question = o["question"]?.jsonPrimitive?.contentOrNull.orEmpty()
+            LogBus.log("learn", "🤔 ${reasoning.take(120)} · $action")
+            if (action !in setOf("offer", "ask") || question.isBlank()) null
+            else Decision(action, question, o["task"]?.jsonPrimitive?.contentOrNull.orEmpty())
         }.getOrElse { LogBus.log("learn", "razonamiento falló: ${it.message}"); null }
+    }
+
+    /* ---------- offer: propone ayuda y, si aceptas, ejecuta ---------- */
+
+    private suspend fun propose(app: String, d: Decision) {
+        LogBus.log("learn", "🙋 propongo: ${d.question}")
+        val answer = askByVoice(d.question)
+        if (answer.isBlank()) { LogBus.log("learn", "sin respuesta a la propuesta"); return }
+        LogBus.log("learn", "respuesta: \"${answer.take(120)}\"")
+        val prompt = """
+            Graph le propuso ayuda al usuario y este respondió por voz. Decide si ACEPTÓ.
+            Propuesta: "${d.question}"
+            Tarea que Graph haría: "${d.task}"
+            Respuesta del usuario: "$answer"
+            Si aceptó, escribe en "task" la tarea FINAL en imperativo incorporando cualquier detalle
+            o cambio que el usuario haya dicho en su respuesta. Si dijo que no o es ambiguo, accept=false.
+            Responde SOLO JSON: {"accept": true/false, "task": "tarea final o vacío"}
+        """.trimIndent()
+        val accepted = runCatching {
+            val o = GeminiJson.ask(apiKey(), model(), prompt, tag = "learn")
+            if (o["accept"]?.jsonPrimitive?.booleanOrNull != true) null
+            else o["task"]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() } ?: d.task.takeIf { it.isNotBlank() }
+        }.getOrNull()
+        if (accepted == null) { LogBus.log("learn", "propuesta no aceptada"); return }
+        LogBus.log("learn", "✅ propuesta aceptada → ejecuto: ${accepted.take(120)}")
+        runTask(accepted)
+    }
+
+    /* ---------- ask: duda de aprendizaje → memoria durable ---------- */
+
+    private suspend fun inquire(app: String, question: String) {
+        LogBus.log("learn", "🙋 pregunto: $question")
+        val answer = askByVoice(question)
+        if (answer.isBlank()) { LogBus.log("learn", "sin respuesta a la pregunta"); return }
+        LogBus.log("learn", "respuesta: \"${answer.take(120)}\"")
+        val note = distillNote(app, question, answer) ?: return
+        if (memories.add(note)) {
+            LogBus.log("learn", "🧠 aprendido de tu respuesta [${note.app}]: ${note.note}")
+        }
     }
 
     /** Convierte (pregunta, respuesta) en una regla durable y auto-contenida para esa app. */

@@ -27,6 +27,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
+import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.MicService
 import com.zevcorp.graph.voice.Transcriber
 import com.zevcorp.graph.voice.defaultTranscriber
@@ -100,6 +101,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                     speechHide?.cancel()
                     speech?.visibility = View.GONE
                 }
+                // Escucha en vivo de la ejecución: el toque a la burbuja la apaga.
+                execLive -> stopExecLive()
                 // Durante la escucha por esquina: el toque termina la grabación y procesa.
                 voiceDock.listening -> voiceDock.stopNow()
                 panel == null -> openPanel()
@@ -123,6 +126,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     /** Reinicia el temporizador de reposo; si estaba encogida, la agranda de nuevo. */
     private fun wake() {
+        wanderJob?.cancel()
         if (shrunk) animateScale(1f, idleGrow)
         scheduleIdleShrink()
     }
@@ -131,8 +135,46 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         idleJob?.cancel()
         idleJob = scope.launch {
             delay(15_000) // ~15 s sin usarla → se encoge para no estorbar
-            if (!shrunk) animateScale(0.34f, idleEase)
+            if (!shrunk) { animateScale(0.34f, idleEase); startWander() }
         }
+    }
+
+    /* ---------- Paseo en reposo: encogida, de vez en cuando cambia de sitio ---------- */
+
+    private var wanderJob: Job? = null
+
+    /**
+     * Muy de vez en cuando (tiempo ALEATORIO, entre 2 y 5 minutos) la carita encogida se pasea a
+     * otro punto del borde — señal sutil de vida. Solo con la pantalla ENCENDIDA (si está apagada
+     * no gasta nada: simplemente vuelve a sortear el próximo intento) y nunca mientras ejecuta,
+     * escucha o está anclada en una esquina.
+     */
+    private fun startWander() {
+        wanderJob?.cancel()
+        wanderJob = scope.launch {
+            val random = java.util.Random()
+            while (shrunk) {
+                delay(120_000L + (random.nextFloat() * 180_000L).toLong()) // 2–5 min, nunca exacto
+                if (!shrunk) break
+                val pm = service.getSystemService(android.os.PowerManager::class.java)
+                if (pm?.isInteractive != true) continue // pantalla apagada: no molestar ni gastar
+                if (app.executing || voiceDock.docked || voiceDock.listening || panel != null) continue
+                wanderOnce(random)
+            }
+        }
+    }
+
+    /** Un paseo: al borde opuesto (o el mismo, a veces) con altura aleatoria, animación lenta. */
+    private fun wanderOnce(random: java.util.Random) {
+        val m = service.resources.displayMetrics
+        val size = bubbleParams.width
+        val onLeft = bubbleParams.x + size / 2 < m.widthPixels / 2
+        val goLeft = if (random.nextFloat() < 0.75f) !onLeft else onLeft // casi siempre cruza
+        val destX = if (goLeft) 0 else m.widthPixels - size
+        val minY = service.dp(90)
+        val maxY = m.heightPixels - size - service.dp(140)
+        val destY = minY + (random.nextFloat() * (maxY - minY).coerceAtLeast(1)).toInt()
+        snapTo(destX, destY, dur = 1400, interp = idleEase)
     }
 
     private fun animateScale(target: Float, interp: android.view.animation.Interpolator) {
@@ -227,12 +269,13 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         snapTo(cornerX(left), service.dp(6))
     }
 
-    /** Animación corta de encaje hacia un punto (también para volver a la esquina tras ejecutar). */
-    private fun snapTo(destX: Int, destY: Int) {
+    /** Animación de encaje hacia un punto (esquinas, regreso tras ejecutar, paseo en reposo). */
+    private fun snapTo(destX: Int, destY: Int, dur: Long = 220, interp: android.view.animation.Interpolator? = null) {
         val fromX = bubbleParams.x; val fromY = bubbleParams.y
         dragAnimator?.cancel()
         dragAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = 220
+            duration = dur
+            interp?.let { interpolator = it }
             addUpdateListener { a ->
                 val f = a.animatedValue as Float
                 bubbleParams.x = (fromX + (destX - fromX) * f).toInt()
@@ -480,6 +523,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     override suspend fun ask(question: String): String = withContext(Dispatchers.Main) {
         bubble.visibility = View.VISIBLE
         bubble.thinking = true
+        wake()
         suspendCancellableCoroutine { cont ->
             val c = service
             val body = LinearLayout(c).apply {
@@ -490,8 +534,29 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             lateinit var window: View
             fun finish(answer: String) {
                 runCatching { wm.removeView(window) }
+                hideAnswerMic()
                 bubble.visibility = View.VISIBLE
                 if (cont.isActive) cont.resume(answer)
+            }
+            // Micrófono sticky bajo la carita: la vía rápida para responder. Y si estamos en plena
+            // EJECUCIÓN, responder por aquí enciende la escucha continua por el resto de la tarea.
+            var listeningNow: Transcriber? = null
+            showAnswerMic {
+                listeningNow?.let { it.stop(); return@showAnswerMic }
+                val t = defaultTranscriber(c)
+                listeningNow = t
+                MicService.start(c)
+                scope.launch {
+                    val heard = withContext(Dispatchers.IO) { runCatching { t.listen() }.getOrElse { "" } }
+                    MicService.stop(c)
+                    listeningNow = null
+                    if (heard.isBlank()) { toast("No te escuché, intenta de nuevo"); return@launch }
+                    val wasExecuting = app.executing
+                    finish(heard)
+                    // ÚNICO caso donde se enciende el modo de voz en tiempo real fuera de las
+                    // esquinas: respondiste por voz una duda del asistente mientras ejecutaba.
+                    if (wasExecuting) startExecLive()
+                }
             }
             val header = c.row()
             header.addView(FaceView(c).apply { thinking = true }, LinearLayout.LayoutParams(c.dp(36), c.dp(36)))
@@ -521,7 +586,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
             }
             wm.addView(window, params)
-            cont.invokeOnCancellation { runCatching { wm.removeView(window) } }
+            cont.invokeOnCancellation {
+                runCatching { wm.removeView(window) }
+                scope.launch { hideAnswerMic() }
+            }
         }
     }
 
@@ -719,5 +787,54 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             mic.animate().alpha(0.16f).scaleX(1f).scaleY(1f).setDuration(400).start()
             if (text.isNotBlank()) app.augmentExecution(text)
         }
+    }
+
+    /* ---------- Escucha continua DURANTE la ejecución (tras responder una duda por voz) ---------- */
+
+    private var execLiveJob: Job? = null
+    private var execLiveTranscriber: Transcriber? = null
+
+    /** ¿Está encendida la escucha en tiempo real de esta ejecución? */
+    val execLive get() = execLiveJob?.isActive == true
+
+    /**
+     * El modo de las esquinas, pero atado a UNA ejecución: escucha en bucle y cada cosa que digas
+     * se suma al objetivo (mensaje-sobre-mensaje). Se apaga solo al terminar la ejecución, o antes
+     * si tocas la burbuja.
+     */
+    fun startExecLive() {
+        if (execLive) return
+        narrate("Te sigo escuchando mientras trabajo; tócame para dejar de oírte 👂")
+        LogBus.log("voice", "▶ escucha en vivo durante la ejecución")
+        execLiveJob = scope.launch {
+            MicService.start(service)
+            try {
+                while (app.executing) {
+                    val t = defaultTranscriber(service)
+                    execLiveTranscriber = t
+                    val text = withContext(Dispatchers.IO) { runCatching { t.listen() }.getOrElse { "" } }
+                    execLiveTranscriber = null
+                    if (!app.executing) break
+                    if (text.isBlank()) { delay(250); continue }
+                    LogBus.log("voice", "en vivo: \"${text.take(120)}\"")
+                    app.augmentExecution(text)
+                }
+            } finally {
+                execLiveTranscriber = null
+                MicService.stop(service)
+            }
+        }
+    }
+
+    /** Apaga la escucha en vivo (toque de la burbuja, o fin de la ejecución desde GraphApp). */
+    fun stopExecLive(announce: Boolean = true) {
+        if (execLiveJob == null) return
+        execLiveJob?.cancel()
+        execLiveJob = null
+        execLiveTranscriber?.stop()
+        execLiveTranscriber = null
+        MicService.stop(service)
+        LogBus.log("voice", "■ escucha en vivo apagada")
+        if (announce) narrate("Ok, dejo de escucharte")
     }
 }

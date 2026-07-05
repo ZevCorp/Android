@@ -66,7 +66,8 @@ class GraphApp : Application() {
         PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus,
             inquirer = LearningInquiry(apiKey, model, memories, scope,
                 busy = { executing || bubble?.voiceBusy == true },
-                askByVoice = { q -> bubble?.askAloud(q) ?: "" }))
+                askByVoice = { q -> bubble?.askAloud(q) ?: "" },
+                runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }))
     }
 
     /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube). */
@@ -232,6 +233,7 @@ class GraphApp : Application() {
             bubble?.companion(false)
             bubble?.showStop(false)
             bubble?.showExecutionMic(false) // limpia el micrófono de ejecución también si te detienen
+            bubble?.stopExecLive(announce = false) // la escucha en vivo muere con su ejecución
             notifyRunning(false)
             if (autoLearn && passive.active) scope.launch(Dispatchers.IO) { passive.stop(quiet = true) }
         }

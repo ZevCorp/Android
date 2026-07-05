@@ -48,7 +48,9 @@ Toca **🎓** en la burbuja para **activar/desactivar** el modo enseñanza pasiv
 
 **Mantén oprimido el 🎓** para ver lo que ya sabe: se iluminan los contornos de todos los elementos ya trackeados en MCPs de la app visible, y el overlay se actualiza mientras navegas a otras apps. Vuelve a mantenerlo oprimido para ocultarlo.
 
-Mientras el modo está activo, el asistente puede **interrumpirte y preguntarte por voz** cosas que le sirvan para hacer bien la tarea después ("¿esta es la lista que pones siempre?"). Escucha tu respuesta y la guarda como conocimiento durable de esa app (memoria que el motor de ejecución inyecta en su prompt). No pregunta por preguntar: solo cuando tiene una duda genuinamente útil, y con moderación.
+Mientras el modo está activo, el asistente puede **intervenir por voz por iniciativa propia**, con una cadena de pensamiento corta que decide entre tres: **proponer ayuda** con algo concreto y pendiente que ve en pantalla ("veo que te escribieron, ¿quieres que te ayude con eso?" — si aceptas, lo ejecuta), **preguntar** una duda genuinamente útil (se guarda como memoria durable de esa app), o **quedarse callado** (el default). Siempre que interviene por voz, respondes con el **micrófono sticky** que aparece bajo la carita.
+
+**Durante la ejecución** el motor pregunta ante la **mínima duda** sobre datos que solo tú sabes ("¿cuál es el chat de Sebastián?"). Si respondes esa duda con el micrófono sticky, se enciende la **escucha en tiempo real por el resto de esa ejecución** (todo lo que digas se suma al objetivo); se apaga al terminar o tocando la burbuja. Es el único caso donde ese modo se enciende fuera de las esquinas.
 
 **Voz por esquinas.** Arrastra la burbuja **con el dedo** hasta una esquina superior y **mantenla ahí ~2.5 s**: eso enciende la escucha permanente (transcripción → destilador de intención → motor). Lanzarla de un flick a la esquina **no** activa la voz — hace falta el dedo sostenido, que es la señal de intención clara. Sacas la burbuja de la esquina para apagarla.
 
