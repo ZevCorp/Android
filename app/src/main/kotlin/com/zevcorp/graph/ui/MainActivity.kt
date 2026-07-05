@@ -93,7 +93,7 @@ class MainActivity : Activity(), UserChannel {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         setup.addView(setupRow)
         setup.gap(dp(8))
-        setup.addView(button("⚡ Hacer de Graph tu asistente (botón de encendido)") {
+        setup.addView(button("Hacer de Graph tu asistente (botón de encendido)") {
             startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
         })
         setup.gap(dp(6))
@@ -124,26 +124,23 @@ class MainActivity : Activity(), UserChannel {
         val bar = row()
         bar.addView(promptInput, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
-        bar.addView(TextView(this).apply {
-            text = "🎤"; textSize = 18f; gravity = Gravity.CENTER
-            setTextColor(Palette.text)
-            background = rounded(Palette.card, dp(21).toFloat(), Palette.cardBorder)
-            minWidth = dp(44); minHeight = dp(44)
-            setOnClickListener {
-                voiceCallback = { t -> if (t.isNotBlank()) runPrompt(t) }
-                startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                    .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
-            }
+        bar.addView(iconChip(Icon.MIC, sizeDp = 44) {
+            voiceCallback = { t -> if (t.isNotBlank()) runPrompt(t) }
+            startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
         })
         bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
-        bar.addView(button("➤", primary = true) { submitPrompt() })
+        bar.addView(iconChip(Icon.SEND, sizeDp = 44, primary = true) { submitPrompt() })
         ask.addView(bar)
         root.addView(ask)
         root.gap(dp(14))
 
         // Velocidad de ejecución: pausa entre los steps de un MCP que se envían juntos
         val speed = card()
-        speed.addView(title("⚡ Velocidad de ejecución"))
+        val speedHead = row()
+        speedHead.addView(iconChip(Icon.BOLT, sizeDp = 34, tint = Palette.accent))
+        speedHead.addView(title("Velocidad de ejecución").apply { setPadding(dp(8), 0, 0, 0) })
+        speed.addView(speedHead)
         speed.gap(dp(4))
         val savedDelay = app.prefs.getInt("stepDelayMs", 350)
         val speedCaption = caption("Vuelo del asistente y pausa entre clics MCP: $savedDelay ms · se aplica al instante")
@@ -171,7 +168,7 @@ class MainActivity : Activity(), UserChannel {
         // Panel de desarrollador: logs en vivo
         val dev = card()
         val devHead = row()
-        devHead.addView(pill(" 🐞 "))
+        devHead.addView(iconChip(Icon.CODE, sizeDp = 34, tint = Palette.accent))
         devHead.addView(title("Desarrollador").apply { setPadding(dp(8), 0, 0, 0) },
             LinearLayout.LayoutParams(0, -2, 1f))
         devHead.addView(button("Copiar") {
@@ -203,13 +200,13 @@ class MainActivity : Activity(), UserChannel {
         // Panel de MCPs: lo que el asistente ha aprendido (enseñanza) + lo incorporado de fábrica
         val mcp = card()
         val mcpHead = row()
-        mcpHead.addView(pill(" 🧩 "))
+        mcpHead.addView(iconChip(Icon.TOOLS, sizeDp = 34, tint = Palette.accent))
         mcpHead.addView(title("Herramientas MCP").apply { setPadding(dp(8), 0, 0, 0) },
             LinearLayout.LayoutParams(0, -2, 1f))
         mcpHead.addView(button("Actualizar") { refreshMcpPanel() })
         mcp.addView(mcpHead)
         mcp.gap(dp(4))
-        mcp.addView(caption("Aprendidas enseñándole (🎓) + gestos y acciones de sistema incorporados."))
+        mcp.addView(caption("Aprendidas con el modo enseñanza + gestos y acciones de sistema incorporados."))
         mcp.gap(dp(10))
         mcpPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mcp.addView(mcpPanel)
@@ -244,11 +241,11 @@ class MainActivity : Activity(), UserChannel {
         val tools = withContext(Dispatchers.IO) { app.learnedTools.list() }
         mcpPanel.removeAllViews()
         if (tools.isEmpty()) {
-            mcpPanel.addView(caption("Aún no he aprendido ninguna app. Activa 🎓 en la burbuja y usa el teléfono normal."))
+            mcpPanel.addView(caption("Aún no he aprendido ninguna app. Activa el modo enseñanza en la burbuja y usa el teléfono normal."))
             return@launch
         }
         tools.forEach { t ->
-            mcpPanel.addView(button("🧩 ${t.name} · ${t.elements.size} elementos") { showMcpDetail(t) })
+            mcpPanel.addView(button("${t.name} · ${t.elements.size} elementos") { showMcpDetail(t) })
             mcpPanel.gap(dp(8))
         }
     }
@@ -319,7 +316,7 @@ class MainActivity : Activity(), UserChannel {
                     moveTaskToBack(true)
                     if (cont.isActive) cont.resume(input.text.toString())
                 }
-                .setNegativeButton("🎤 Voz") { _, _ ->
+                .setNegativeButton("Responder con voz") { _, _ ->
                     voiceCallback = { text -> moveTaskToBack(true); if (cont.isActive) cont.resume(text) }
                     startActivityForResult(
                         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)

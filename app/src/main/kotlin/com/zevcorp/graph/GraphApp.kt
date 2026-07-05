@@ -63,8 +63,9 @@ class GraphApp : Application() {
      */
     val passive by lazy {
         PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus,
-            inquirer = LearningInquiry(this, apiKey, model, voice, memories, scope,
-                busy = { executing || bubble?.voiceBusy == true }))
+            inquirer = LearningInquiry(apiKey, model, memories, scope,
+                busy = { executing || bubble?.voiceBusy == true },
+                askByVoice = { q -> bubble?.askAloud(q) ?: "" }))
     }
 
     /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube). */

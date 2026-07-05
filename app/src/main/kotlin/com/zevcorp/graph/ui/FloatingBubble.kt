@@ -27,6 +27,8 @@ import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
+import com.zevcorp.graph.platform.MicService
+import com.zevcorp.graph.voice.defaultTranscriber
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import java.util.Locale
@@ -103,7 +105,48 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 else -> closePanel()
             }
         }
+        bubble.pivotX = size / 2f
+        bubble.pivotY = size / 2f
         wm.addView(bubble, bubbleParams)
+        scheduleIdleShrink()
+    }
+
+    /* ---------- Reposo: la carita se encoge cuando llevas rato sin usarla ---------- */
+
+    private var idleJob: Job? = null
+    private var idleAnimator: ValueAnimator? = null
+    @Volatile private var shrunk = false
+    // Curva suave estilo Euler/Material (ease-in-out) para una transición placentera.
+    private val idleEase = android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f)
+    private val idleGrow = OvershootInterpolator(1.2f)
+
+    /** Reinicia el temporizador de reposo; si estaba encogida, la agranda de nuevo. */
+    private fun wake() {
+        if (shrunk) animateScale(1f, idleGrow)
+        scheduleIdleShrink()
+    }
+
+    private fun scheduleIdleShrink() {
+        idleJob?.cancel()
+        idleJob = scope.launch {
+            delay(15_000) // ~15 s sin usarla → se encoge para no estorbar
+            if (!shrunk) animateScale(0.34f, idleEase)
+        }
+    }
+
+    private fun animateScale(target: Float, interp: android.view.animation.Interpolator) {
+        shrunk = target < 0.99f
+        idleAnimator?.cancel()
+        val from = bubble.scaleX
+        idleAnimator = ValueAnimator.ofFloat(from, target).apply {
+            duration = if (target < from) 620 else 420
+            interpolator = interp
+            addUpdateListener { a ->
+                val f = a.animatedValue as Float
+                bubble.scaleX = f; bubble.scaleY = f
+            }
+            start()
+        }
     }
 
     /** Arrastre fluido con inercia: un flick corto la lanza a la esquina; siempre "aterriza" al borde. */
@@ -113,6 +156,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         bubble.setOnTouchListener { v, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
+                    wake() // tocarla/moverla la despierta y la agranda
                     dragAnimator?.cancel()
                     downX = e.rawX; downY = e.rawY; startX = bubbleParams.x; startY = bubbleParams.y; moved = false
                     tracker = VelocityTracker.obtain().also { it.addMovement(e) }
@@ -202,12 +246,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     fun destroy() {
         scope.cancel()
         dragAnimator?.cancel()
+        idleAnimator?.cancel()
         voiceDock.destroy()
         tts?.shutdown()
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
         stopButton?.let { runCatching { wm.removeView(it) } }
+        answerMic?.let { runCatching { wm.removeView(it) } }
     }
 
     /* ---------- Voz y narración (globo de diálogo + TTS) ---------- */
@@ -218,6 +264,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private fun showSpeech(text: String, aloud: Boolean) {
         if (text.isBlank()) return
         scope.launch {
+            wake() // si está hablando/narrando, que esté a tamaño completo
             val bubbleText = speech ?: TextView(service).apply {
                 setTextColor(Color.WHITE)
                 textSize = 13f
@@ -241,6 +288,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     }
 
     private fun moveSpeechToBubble() {
+        moveAnswerMicToBubble() // el micrófono de respuesta también sigue a la carita
         val view = speech ?: return
         val p = speechParams ?: return
         view.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
@@ -258,6 +306,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         setPassThrough(true)
         bubble.visibility = View.VISIBLE
         bubble.thinking = true
+        wake() // trabajando: a tamaño completo
         val m = service.resources.displayMetrics
         val destX = (targetX - bubbleParams.width / 2).coerceIn(0, m.widthPixels - bubbleParams.width)
         val destY = (targetY - bubbleParams.height - service.dp(14)).coerceIn(0, m.heightPixels - bubbleParams.height)
@@ -286,13 +335,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     /** on=true durante la ejecución (pass-through, carita pensativa); on=false restaura. */
     fun companion(on: Boolean) {
         scope.launch {
+            if (on) wake()
             setPassThrough(on)
             bubble.visibility = View.VISIBLE
             bubble.thinking = on
         }
     }
 
-    private var stopButton: TextView? = null
+    private var stopButton: View? = null
 
     /** Botón rojo ⏹ arriba-centro mientras el asistente ejecuta: un toque detiene. Ventana propia y tocable. */
     fun showStop(on: Boolean) {
@@ -303,15 +353,19 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 return@launch
             }
             if (stopButton != null) return@launch
-            val button = TextView(service).apply {
-                text = "⏹ detener"
-                textSize = 13f
-                typeface = Typeface.DEFAULT_BOLD
-                setTextColor(Color.WHITE)
+            val button = service.row().apply {
+                gravity = Gravity.CENTER_VERTICAL
                 background = rounded(Palette.danger, service.dp(22).toFloat())
-                setPadding(service.dp(16), service.dp(7), service.dp(16), service.dp(7))
+                setPadding(service.dp(14), service.dp(7), service.dp(16), service.dp(7))
                 elevation = 22f
-                setOnClickListener { app.stopExecution(); toast("Detenido ✋") }
+                addView(IconView(service, Icon.STOP, tint = Color.WHITE),
+                    LinearLayout.LayoutParams(service.dp(16), service.dp(16)))
+                addView(TextView(service).apply {
+                    text = "detener"; textSize = 13f
+                    typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
+                    setPadding(service.dp(8), 0, 0, 0)
+                })
+                setOnClickListener { app.stopExecution(); toast("Detenido") }
             }
             val params = overlayParams(-2, -2, focusable = false).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
@@ -354,7 +408,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         titles.addView(c.title("Graph", 16f))
         titles.addView(c.caption(if (app.ui != null) "Pídeme algo 👇" else "Activa accesibilidad"))
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(iconButton("✕") { closePanel() })
+        header.addView(c.iconChip(Icon.CLOSE) { closePanel() })
         body.addView(header)
         body.gap(c.dp(10))
 
@@ -380,11 +434,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
-        bar.addView(iconButton("🎤") {
+        bar.addView(c.iconChip(Icon.MIC) {
             recognize { heard -> if (heard != null) submit(heard) else toast("No te escuché") }
         })
         bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
-        bar.addView(iconButton("➤", primary = true) { submit(input.text.toString()) })
+        bar.addView(c.iconChip(Icon.SEND, primary = true) { submit(input.text.toString()) })
         body.addView(bar)
 
         val scroll = ScrollView(c).apply { addView(body); elevation = 16f }
@@ -397,21 +451,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         wm.addView(scroll, params)
         panel = scroll
     }
-
-    /** Botón-ícono circular (fill blanco si es primary). */
-    private fun iconButton(glyph: String, primary: Boolean = false, onClick: () -> Unit) =
-        TextView(service).apply {
-            text = glyph
-            textSize = 16f
-            gravity = Gravity.CENTER
-            setTextColor(if (primary) Palette.bg else Palette.text)
-            val d = service.dp(42)
-            minWidth = d; minHeight = d
-            setPadding(service.dp(10), service.dp(8), service.dp(10), service.dp(8))
-            background = rounded(if (primary) Color.WHITE else Palette.card,
-                service.dp(21).toFloat(), if (primary) 0 else Palette.cardBorder)
-            setOnClickListener { onClick() }
-        }
 
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {
@@ -470,7 +509,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             body.gap(c.dp(10))
             body.addView(c.button("Responder", primary = true) { finish(input.text.toString()) })
             body.gap(c.dp(6))
-            body.addView(c.button("🎤 Voz") {
+            body.addView(c.button("Responder con voz") {
                 recognize { heard -> if (heard != null) finish(heard) else toast("No te escuché, intenta de nuevo") }
             })
 
@@ -491,16 +530,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
      * detener, sin popups: el asistente solo observa el uso normal y consolida al salir de cada
      * app). Mantener oprimido: alterna la visualización de los elementos ya trackeados en MCPs.
      */
-    private fun learnToggleButton(): TextView {
+    private fun learnToggleButton(): View {
         val active = app.passive.active
-        val button = iconButton("🎓") { toggleTeaching() }
-        if (active) {
-            button.background = rounded(Palette.accent, service.dp(21).toFloat())
-            button.setTextColor(Color.WHITE)
-        }
+        // Cuando está activo, el chip se pinta en acento y el ícono en blanco.
+        val button = service.iconChip(Icon.TEACH, primary = active) { toggleTeaching() }
+        if (active) button.background = rounded(Palette.accent, service.dp(21).toFloat())
         button.setOnLongClickListener {
             val on = (service as? GraphAccessibilityService)?.toggleLearnedVisualization() ?: false
-            toast(if (on) "👁 Te muestro lo que ya aprendí" else "Oculto lo aprendido")
+            toast(if (on) "Te muestro lo que ya aprendí" else "Oculto lo aprendido")
             closePanel()
             true
         }
@@ -520,12 +557,12 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     /** Parpadeo de la carita: 1 vez al pasar a ejecución consciente, 2 al pasar a subconsciente. */
     fun blink(times: Int) {
-        scope.launch { bubble.blink(times) }
+        scope.launch { wake(); bubble.blink(times) }
     }
 
     /** Pulso de vida en acciones MCP por Intent (sin coordenadas: no hay a dónde volar). */
     fun pulse() {
-        scope.launch { bubble.pulse() }
+        scope.launch { wake(); bubble.pulse() }
     }
 
     /* ---------- Voz sin Activity: SpeechRecognizer directo en el servicio ---------- */
@@ -553,4 +590,78 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     private fun toast(message: String) =
         Toast.makeText(service, message, Toast.LENGTH_LONG).show()
+
+    /* ---------- Responder por voz: micrófono sticky pegado bajo la carita ---------- */
+
+    private var answerMic: View? = null
+    private var answerMicParams: WindowManager.LayoutParams? = null
+
+    /**
+     * Pregunta en voz alta y espera la respuesta del usuario mostrando un botón de micrófono
+     * pegado JUSTO debajo de la carita (sticky): tocarlo termina la respuesta. Devuelve lo que oyó.
+     * Lo usa la interrupción del aprendizaje pasivo para que responder sea inmediato.
+     */
+    suspend fun askAloud(question: String): String = withContext(Dispatchers.Main) {
+        speak(question)
+        val transcriber = defaultTranscriber(service)
+        MicService.start(service)
+        showAnswerMic { transcriber.stop() }
+        val answer = withContext(Dispatchers.IO) { runCatching { transcriber.listen() }.getOrElse { "" } }
+        hideAnswerMic()
+        MicService.stop(service)
+        answer
+    }
+
+    private fun showAnswerMic(onTap: () -> Unit) {
+        if (answerMic != null) return
+        val c = service
+        val d = c.dp(52)
+        val mic = IconView(c, Icon.MIC, tint = Color.WHITE).apply {
+            val pad = c.dp(13)
+            setPadding(pad, pad, pad, pad)
+            background = rounded(Palette.accent, (d / 2).toFloat())
+            elevation = 26f
+            setOnClickListener { onTap() }
+        }
+        val p = overlayParams(d, d, focusable = false).apply { gravity = Gravity.TOP or Gravity.START }
+        answerMic = mic
+        answerMicParams = p
+        runCatching { wm.addView(mic, p) }
+        moveAnswerMicToBubble()
+        pulseAnswerMic()
+    }
+
+    /** Late suavemente bajo la carita (o encima si no cabe abajo) y la sigue si se mueve. */
+    private fun moveAnswerMicToBubble() {
+        val mic = answerMic ?: return
+        val p = answerMicParams ?: return
+        val m = service.resources.displayMetrics
+        val size = mic.layoutParams?.width ?: service.dp(52)
+        p.x = (bubbleParams.x + (bubbleParams.width - size) / 2).coerceIn(service.dp(4), m.widthPixels - size - service.dp(4))
+        val below = bubbleParams.y + bubbleParams.height + service.dp(8)
+        p.y = if (below + size < m.heightPixels - service.dp(8)) below
+        else bubbleParams.y - size - service.dp(8) // no cabe abajo: ponlo encima
+        runCatching { wm.updateViewLayout(mic, p) }
+    }
+
+    private fun pulseAnswerMic() {
+        val mic = answerMic ?: return
+        ValueAnimator.ofFloat(1f, 1.12f, 1f).apply {
+            duration = 1100
+            repeatCount = ValueAnimator.INFINITE
+            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+            addUpdateListener { a ->
+                val f = a.animatedValue as Float
+                if (answerMic == null) { cancel(); return@addUpdateListener }
+                mic.scaleX = f; mic.scaleY = f
+            }
+            start()
+        }
+    }
+
+    private fun hideAnswerMic() {
+        answerMic?.let { runCatching { wm.removeView(it) } }
+        answerMic = null
+        answerMicParams = null
+    }
 }

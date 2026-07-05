@@ -49,7 +49,7 @@ class AssistActivity : Activity() {
             isClickable = true // no propagar el cierre al tocar la barra
         }
 
-        hint = caption("🎤 te escucho…").apply { setPadding(dp(20), 0, dp(20), dp(8)) }
+        hint = caption("Te escucho…").apply { setPadding(dp(20), 0, dp(20), dp(8)) }
         sheet.addView(hint)
 
         // La pastilla: carita + campo + micrófono (la barra de Gemini, con la cara de Graph).
@@ -74,14 +74,8 @@ class AssistActivity : Activity() {
         input.setOnEditorActionListener { _, _, _ -> dispatch(input.text.toString(), distill = false); true }
         pill.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
 
-        val mic = TextView(this).apply {
-            text = "🎤"
-            textSize = 19f
-            gravity = Gravity.CENTER
-            val d = dp(46)
-            minWidth = d; minHeight = d
-            background = rounded(Palette.accent, dp(23).toFloat())
-            setOnClickListener { transcriber?.stop() ?: startListening() } // corta y procesa, o reabre
+        val mic = iconChip(Icon.MIC, sizeDp = 46, primary = true) {
+            transcriber?.stop() ?: startListening() // corta y procesa, o reabre
         }
         pill.addView(mic)
         sheet.addView(pill)
@@ -96,7 +90,7 @@ class AssistActivity : Activity() {
     private fun startListening() {
         if (transcriber != null) return
         face.thinking = true
-        hint.text = "🎤 te escucho… (toca el micrófono al terminar, o escribe)"
+        hint.text = "Te escucho… (toca el micrófono al terminar, o escribe)"
         val t = defaultTranscriber(this)
         transcriber = t
         scope.launch {
@@ -104,7 +98,7 @@ class AssistActivity : Activity() {
             transcriber = null
             face.thinking = false
             if (transcript.isBlank()) {
-                hint.text = "No te escuché — habla de nuevo tocando 🎤 o escribe 👇"
+                hint.text = "No te escuché — toca el micrófono o escribe"
                 return@launch
             }
             hint.text = "✨ entendiendo…"

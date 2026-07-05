@@ -68,6 +68,26 @@ class FaceView(context: Context) : View(context) {
         color = Color.argb(28, 0, 0, 0)
     }
     private val path = Path()
+    private val squircle = Path()
+
+    /**
+     * Squircle (superelipse |x|^n+|y|^n=1, n≈4): el "cuadrado de bordes con curva de Euler" de Apple,
+     * en vez de un círculo perfecto. Se recalcula cuando cambia el tamaño de la vista.
+     */
+    private fun squirclePath(cx: Float, cy: Float, r: Float): Path {
+        squircle.reset()
+        val n = 4.0
+        val steps = 72
+        for (i in 0..steps) {
+            val t = 2.0 * Math.PI * i / steps
+            val ct = Math.cos(t); val st = Math.sin(t)
+            val px = cx + (r * Math.signum(ct) * Math.pow(Math.abs(ct), 2.0 / n)).toFloat()
+            val py = cy + (r * Math.signum(st) * Math.pow(Math.abs(st), 2.0 / n)).toFloat()
+            if (i == 0) squircle.moveTo(px, py) else squircle.lineTo(px, py)
+        }
+        squircle.close()
+        return squircle
+    }
 
     override fun onDraw(canvas: Canvas) {
         val s = minOf(width, height) / 150f // unidades del viewBox → px
@@ -79,9 +99,10 @@ class FaceView(context: Context) : View(context) {
         fill.shader = LinearGradient(
             0f, 0f, width.toFloat(), height.toFloat(),
             Color.WHITE, Color.parseColor("#EEF2F6"), Shader.TileMode.CLAMP) // fill blanco
-        canvas.drawCircle(cx, cy, minOf(width, height) / 2f - s, fill)
+        val r = minOf(width, height) / 2f - s
+        canvas.drawPath(squirclePath(cx, cy, r), fill)
         border.strokeWidth = 1.5f * s
-        canvas.drawCircle(cx, cy, minOf(width, height) / 2f - s, border)
+        canvas.drawPath(squirclePath(cx, cy, r), border)
 
         stroke.strokeWidth = 4f * s
         canvas.save()
