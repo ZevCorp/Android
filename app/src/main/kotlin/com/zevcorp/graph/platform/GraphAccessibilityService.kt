@@ -51,7 +51,30 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         super.onDestroy()
     }
 
-    override fun onAccessibilityEvent(event: AccessibilityEvent) {}
+    /* Clics del usuario durante la enseñanza: SEÑALES para que el cerebro generalice. */
+    @Volatile private var capturing = false
+    private val clickBuffer = ArrayDeque<String>()
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        if (!capturing || event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
+        if (event.packageName == packageName) return
+        val label = event.source?.let { labelOf(it) } ?: return
+        if (label.isBlank()) return
+        synchronized(clickBuffer) { clickBuffer.addLast(label); if (clickBuffer.size > 40) clickBuffer.removeFirst() }
+        LogBus.log("learn", "señal clic: \"$label\"")
+    }
+
+    override fun setCapturing(enabled: Boolean) {
+        capturing = enabled
+        if (!enabled) synchronized(clickBuffer) { clickBuffer.clear() }
+    }
+
+    override fun drainClicks(): List<String> = synchronized(clickBuffer) {
+        val out = clickBuffer.toList()
+        clickBuffer.clear()
+        out
+    }
+
     override fun onInterrupt() {}
 
     /* ---------- Estado de pantalla (georreferenciación por árbol de UI) ---------- */

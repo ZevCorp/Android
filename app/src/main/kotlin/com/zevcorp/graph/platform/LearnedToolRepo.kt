@@ -5,7 +5,7 @@ import graph.core.domain.LearnedToolRepository
 import java.io.File
 import kotlinx.serialization.json.Json
 
-/** Persistencia simple de herramientas aprendidas: un JSON por herramienta en files/learned/. */
+/** Persistencia simple de mapas aprendidos: un JSON por herramienta en files/learned/. */
 class LearnedToolRepo(root: File) : LearnedToolRepository {
 
     private val dir = File(root, "learned").apply { mkdirs() }

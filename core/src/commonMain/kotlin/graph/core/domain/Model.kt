@@ -108,11 +108,18 @@ class Mcp(
             listOf(McpParam("text", "Texto a copiar"))) { system.setClipboard(it.str("text")) },
     )
 
-    // Herramientas aprendidas en sesiones de enseñanza: cada una reproduce su secuencia de toques.
+    // Herramientas aprendidas: el mapa de una pantalla estructurado en la enseñanza. El modelo compone
+    // en runtime la secuencia que necesite (taps) con el catálogo de elementos; se toca por árbol de UI.
     private val learnedTools = learned.map { lt ->
-        McpTool(sanitize(lt.name), "${lt.description} (aprendido: ${lt.steps.size} toques)", via = "workflow aprendido") {
-            var ok = true
-            for (label in lt.steps) {
+        McpTool(
+            sanitize(lt.name),
+            "${lt.description} Elementos disponibles (etiquetas exactas): ${lt.elements.joinToString(", ")}.",
+            listOf(McpParam("taps", "Etiquetas a tocar EN ORDEN, separadas por comas (usa solo las disponibles)")),
+            via = "aprendido (árbol de UI)",
+        ) { args ->
+            val labels = (args["taps"] ?: "").split(',').map { it.trim() }.filter { it.isNotBlank() }
+            var ok = labels.isNotEmpty()
+            for (label in labels) {
                 if (player?.tapLabel(label) != true) ok = false
                 delay(350)
             }

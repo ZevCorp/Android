@@ -2,7 +2,7 @@ package com.zevcorp.graph.platform
 
 import graph.core.domain.LearnedTool
 import graph.core.domain.LearningBrain
-import graph.core.domain.Proposal
+import graph.core.domain.TeachTurn
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
@@ -10,8 +10,9 @@ import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
 /**
- * Cerebro de la sesión de enseñanza (generateContent con salida JSON). Convierte la explicación hablada
- * del usuario + el árbol de UI en una secuencia de toques, y al final la organiza en una herramienta MCP.
+ * Cerebro de la enseñanza (generateContent con salida JSON). Ve TODO el árbol de UI; la voz y los
+ * clics del usuario son SEÑALES para generalizar. Su trabajo es estructurar el mapa MCP completo de
+ * la pantalla: agrupar elementos, preguntar iluminando, demostrar y, al cierre, documentarlo todo.
  */
 class GeminiLearning(
     private val apiKey: () -> String,
@@ -49,45 +50,64 @@ class GeminiLearning(
     private fun JsonObject.str(k: String) = this[k]?.jsonPrimitive?.contentOrNull ?: ""
     private fun JsonObject.strList(k: String) = this[k]?.jsonArray?.mapNotNull { it.jsonPrimitive.contentOrNull } ?: emptyList()
 
-    override suspend fun propose(explanation: String, screen: String, elements: List<String>): Proposal =
+    private fun context(transcript: String, screen: String, elements: List<String>) = """
+        Pantalla actual: $screen
+        TODOS los elementos tocables del árbol de UI (etiquetas EXACTAS): ${elements.joinToString(" | ").ifBlank { "(ninguno)" }}
+        Transcripción de la sesión hasta ahora (voz del usuario, sus toques como señales, y respuestas):
+        "$transcript"
+    """.trimIndent()
+
+    override suspend fun step(transcript: String, screen: String, elements: List<String>): TeachTurn =
         withContext(Dispatchers.IO) {
             val prompt = """
-                Eres Graph, aprendiendo una tarea que el usuario te explica en su teléfono. Tu meta es convertir
-                su explicación + el árbol de UI actual en una SECUENCIA concreta de toques sobre elementos.
-                Explicación acumulada del usuario: "$explanation"
-                Pantalla actual: $screen
-                Elementos tocables visibles (etiquetas EXACTAS): ${elements.joinToString(" | ").ifBlank { "(ninguno)" }}
-                ¿Ya entiendes una secuencia concreta usando SOLO esas etiquetas? Si te falta información, understood=false.
-                La secuencia debe usar etiquetas EXACTAS de la lista, en el orden de ejecución.
-                Responde SOLO JSON: {"understood": true|false, "name": "nombre corto", "description": "qué hace",
-                "sequence": ["etiqueta1","etiqueta2",...], "say": "frase corta y con chispa para el usuario"}
+                Eres Graph, aprendiendo una pantalla que el usuario te enseña en su teléfono Android.
+                TU META: estructurar el mapa COMPLETO de esta pantalla (qué es cada elemento, cómo se agrupan,
+                cómo se componen para tareas). La voz y los TOQUES del usuario son SEÑALES para GENERALIZAR:
+                si tocó "5" y "7" y habló de cálculos, infiere que TODOS los dígitos y operadores importan,
+                sin que los toque todos. No copies sus clics: entiende la estructura.
+                ${context(transcript, screen, elements)}
+                Decide UNA cosa para este turno:
+                - Si ya entiendes un grupo o el uso general: demuéstralo iluminando (highlight) una secuencia
+                  ilustrativa (p.ej. 5 + 7 + 8 =) y di algo corto (say). Propón en test esa secuencia si
+                  quieres probarla tocando de verdad.
+                - Si te falta UNA cosa por confirmar (p.ej. "¿este es el de borrar?"): pon la pregunta en
+                  question (sí/no) e ilumina en highlight el elemento del que hablas.
+                - Si aún no tienes suficiente señal: say vacío o una frase breve, y nada más.
+                Usa SOLO etiquetas exactas de la lista. Responde SOLO JSON:
+                {"say": "", "highlight": [], "question": "", "test": []}
             """.trimIndent()
             runCatching {
                 val o = ask(prompt)
-                Proposal(
-                    understood = o["understood"]?.jsonPrimitive?.booleanOrNull ?: false,
-                    name = o.str("name"),
-                    description = o.str("description"),
-                    sequence = o.strList("sequence"),
+                TeachTurn(
                     say = o.str("say"),
+                    highlight = o.strList("highlight"),
+                    question = o.str("question").ifBlank { null },
+                    test = o.strList("test"),
                 )
-            }.getOrElse { Proposal(understood = false, say = "") }
+            }.getOrElse { TeachTurn() }
         }
 
-    override suspend fun consolidate(explanation: String, sequence: List<String>): LearnedTool =
+    override suspend fun consolidate(transcript: String, screen: String, elements: List<String>): LearnedTool =
         withContext(Dispatchers.IO) {
             val prompt = """
-                El usuario terminó de enseñarte. Organiza lo aprendido en una herramienta reutilizable.
-                Explicación del usuario: "$explanation"
-                Secuencia confirmada de toques (etiquetas del árbol de UI): ${sequence.joinToString(" | ")}
-                Responde SOLO JSON: {"name": "nombre_en_snake_case", "description": "qué hace; menciona que se
-                ejecuta tocando elementos del árbol de UI", "steps": ["etiqueta1","etiqueta2",...]}
-                steps normalmente es la misma secuencia confirmada.
+                La sesión de enseñanza terminó. Estructura TODO lo aprendido como una herramienta MCP.
+                ${context(transcript, screen, elements)}
+                La herramienta funciona así en ejecución: otro asistente (otra ventana de contexto) leerá tu
+                descripción y llamará la herramienta con "taps": las etiquetas a tocar EN ORDEN. Así que tu
+                descripción es LA DOCUMENTACIÓN: explica qué hace la pantalla/app, qué es cada grupo de
+                elementos (p.ej. dígitos 0-9, operadores, igual, borrar) y cómo componer secuencias para
+                tareas típicas, con un ejemplo. En elements incluye TODAS las etiquetas útiles de la pantalla
+                (generaliza: no solo las que el usuario tocó), copiadas EXACTAS de la lista.
+                Responde SOLO JSON:
+                {"name": "nombre_snake_case", "description": "documentación completa", "elements": ["...", "..."]}
             """.trimIndent()
             runCatching {
                 val o = ask(prompt)
-                val steps = o.strList("steps").ifEmpty { sequence }
-                LearnedTool(o.str("name").ifBlank { "tarea_aprendida" }, o.str("description"), steps)
-            }.getOrElse { LearnedTool("tarea_aprendida", "Secuencia aprendida de toques.", sequence) }
+                LearnedTool(
+                    o.str("name").ifBlank { "pantalla_aprendida" },
+                    o.str("description"),
+                    o.strList("elements").ifEmpty { elements },
+                )
+            }.getOrElse { LearnedTool("pantalla_aprendida", "Mapa de pantalla aprendido. Toca elementos por etiqueta.", elements) }
         }
 }

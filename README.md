@@ -42,14 +42,14 @@ Estas usan los **Common Intents de Android** — llamadas de sistema directas, n
 
 **Herramientas aprendidas** (capa de enseñanza): además, el asistente puede *crear* herramientas MCP nuevas enseñándole (ver abajo). Se ejecutan reproduciendo una secuencia de toques sobre el árbol de UI.
 
-## Capa de enseñanza (crear MCP mostrándole)
+## Capa de enseñanza (el asistente estructura el MCP de la pantalla)
 
-Toca **🎓** en la burbuja e inicia una sesión: le muestras algo en el teléfono y se lo explicas hablando (🎤). El asistente lee el **árbol de UI en vivo** y, cuando entiende una secuencia concreta, **te interrumpe**: la **ilumina** elemento por elemento (recuadro azul, tin·tin·tin) y pregunta *"¿Es así?"*. Si confirmas, se ofrece a **probarla** (*"¿La puedo hacer?"*) y ejecuta los toques. Al pulsar **✅ terminar**, el LLM organiza todo en una **herramienta MCP documentada** (`LearnedTool`), que queda disponible como cualquier otra: la próxima vez que le pidas esa tarea, la ejecuta directo por el árbol de UI.
+Toca **🎓** en la burbuja e inicia una sesión. El asistente ve **todo el árbol de UI en vivo**; tu **voz** y tus **toques son señales para generalizar** — no se guardan tus clics: tocas "5" y "7" hablando de cálculos y él infiere que *todos* los dígitos y operadores importan. Conversa contigo: cuando entiende algo lo **demuestra iluminando** una secuencia ilustrativa (recuadro azul, tin·tin·tin), pregunta cosas puntuales **iluminando el elemento** (*"¿este es el de borrar?"* → Sí/No) y se ofrece a **probar** tocando de verdad. Al pulsar **✅ terminar**, estructura el **mapa completo de la pantalla** como herramienta MCP documentada.
 
-Es la v1 de los "workflows powered by MCP": el asistente construye el MCP a partir del árbol de UI + tu explicación. En esta versión guarda una **secuencia fija** de toques (la parametrización llega después).
+**En ejecución** la herramienta aprendida es generalista: su descripción documenta los grupos de elementos y cómo componerlos, y el modelo pasa `taps` con la secuencia que necesite (`calculadora(taps="5,+,7,+,8,=")`) — cualquier cálculo, no solo el que enseñaste. Se reproduce por árbol de UI, sin imagen.
 
-- `core`: `LearningSession` orquesta el flujo; `LearningBrain`, `LearningSurface`, `Teacher` son los puertos; `LearnedTool` el resultado.
-- `app`: `GeminiLearning` (entiende/consolida), `HighlightOverlay` (recuadro), el servicio implementa `LearningSurface`, la burbuja implementa `Teacher`.
+- `core`: `LearningSession` (orquestación); puertos `LearningBrain`, `LearningSurface`, `Teacher`; `LearnedTool` = nombre + documentación + catálogo de elementos.
+- `app`: `GeminiLearning` (generaliza/estructura), `HighlightOverlay` (recuadro), el servicio captura clics-señal e implementa `LearningSurface`, la burbuja implementa `Teacher`.
 
 ## Las dos vías, un solo cerebro
 
