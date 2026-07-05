@@ -30,11 +30,15 @@ class ExecutionEngine(
     /** Pausa entre steps enviados juntos en un mismo turno (ajustable desde la app). */
     private val stepDelay: () -> Long = { 350 },
 ) {
-    /** Ejecuta un objetivo hasta que el modelo devuelve el control con texto. Devuelve ese resumen. */
-    suspend fun run(goal: String): String {
+    /**
+     * Ejecuta un objetivo hasta que el modelo devuelve el control con texto. Devuelve ese resumen.
+     * `announce=false` para objetivos internos (reencaminado / acción anticipada): no narra el texto
+     * del objetivo (que puede ser largo) ni el "¡Listo!" final.
+     */
+    suspend fun run(goal: String, announce: Boolean = true): String {
         val b = brain()
         b.begin(goal)
-        voice.narrate("¡Vamos! $goal")
+        if (announce) voice.narrate("¡Vamos! $goal")
         log.log("run", "▶ \"$goal\"")
         val started = TimeSource.Monotonic.markNow()
 
@@ -84,13 +88,13 @@ class ExecutionEngine(
         // Terminó con un mensaje: dilo en voz alta.
         if (summary.isNotBlank()) {
             voice.speak(summary)
-        } else if (actions == 0) {
+        } else if (actions == 0 && announce) {
             // No dijo nada y no hizo nada: una frase corta y humana, jamás un listado técnico.
             summary = "Mmm, no estoy seguro de haberte entendido. ¿Me lo dices de otra forma?"
             voice.speak(summary)
         }
         log.log("run", "■ ${turns} turnos · $actions acciones · ${secs}s · ${summary.take(120)}")
-        voice.narrate("¡Listo! 🎉")
+        if (announce) voice.narrate("¡Listo! 🎉")
         return summary.ifBlank { "Hecho" }
     }
 

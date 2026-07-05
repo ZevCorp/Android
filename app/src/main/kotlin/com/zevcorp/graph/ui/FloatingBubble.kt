@@ -28,6 +28,7 @@ import android.widget.Toast
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.MicService
+import com.zevcorp.graph.voice.Transcriber
 import com.zevcorp.graph.voice.defaultTranscriber
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
@@ -254,6 +255,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         speech?.let { runCatching { wm.removeView(it) } }
         stopButton?.let { runCatching { wm.removeView(it) } }
         answerMic?.let { runCatching { wm.removeView(it) } }
+        execMic?.let { runCatching { wm.removeView(it) } }
     }
 
     /* ---------- Voz y narración (globo de diálogo + TTS) ---------- */
@@ -663,5 +665,59 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         answerMic?.let { runCatching { wm.removeView(it) } }
         answerMic = null
         answerMicParams = null
+    }
+
+    /* ---------- Mensaje-sobre-mensaje: micrófono casi invisible durante la ejecución ---------- */
+
+    private var execMic: View? = null
+    private var execTranscriber: Transcriber? = null
+
+    /**
+     * Micrófono STICKY y muy transparente (casi invisible) abajo mientras el asistente ejecuta:
+     * puedes decirle algo más y se reinterpreta junto con lo anterior (no se encola). Tocarlo empieza
+     * a escuchar; al terminar, el texto va a augmentExecution y el motor se reencamina.
+     */
+    fun showExecutionMic(on: Boolean) {
+        scope.launch {
+            if (!on) {
+                execTranscriber?.stop()
+                execMic?.let { runCatching { wm.removeView(it) } }
+                execMic = null
+                return@launch
+            }
+            if (execMic != null) return@launch
+            val c = service
+            val d = c.dp(54)
+            val mic = IconView(c, Icon.MIC, tint = Color.WHITE).apply {
+                val pad = c.dp(14)
+                setPadding(pad, pad, pad, pad)
+                background = rounded(Palette.accent, (d / 2).toFloat())
+                elevation = 26f
+                alpha = 0.16f // casi invisible; sube al tocar
+                setOnClickListener { startExecVoice(this) }
+            }
+            val p = overlayParams(d, d, focusable = false).apply {
+                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
+                y = c.dp(96)
+            }
+            runCatching { wm.addView(mic, p) }
+            execMic = mic
+        }
+    }
+
+    private fun startExecVoice(mic: View) {
+        if (execTranscriber != null) { execTranscriber?.stop(); return } // ya escuchando → corta
+        val t = defaultTranscriber(service)
+        execTranscriber = t
+        mic.animate().alpha(0.95f).scaleX(1.1f).scaleY(1.1f).setDuration(150).start()
+        MicService.start(service)
+        toast("Dime, lo sumo a lo que estoy haciendo…")
+        scope.launch {
+            val text = withContext(Dispatchers.IO) { runCatching { t.listen() }.getOrElse { "" } }
+            MicService.stop(service)
+            execTranscriber = null
+            mic.animate().alpha(0.16f).scaleX(1f).scaleY(1f).setDuration(400).start()
+            if (text.isNotBlank()) app.augmentExecution(text)
+        }
     }
 }

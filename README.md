@@ -61,6 +61,14 @@ Mientras el modo está activo, el asistente puede **interrumpirte y preguntarte 
 
 `GeminiBrain` declara al modelo, en el mismo turno, la herramienta nativa `computer_use` **y** las herramientas MCP como funciones. Cuando el modelo llama una función MCP → `Mcp.call()`; cuando usa computer-use → primitivas de `Phone`. El bucle vive en `ExecutionEngine` (core).
 
+## Mensaje-sobre-mensaje (reencaminado en caliente)
+
+Mientras el asistente ejecuta aparece un **micrófono casi invisible** abajo. Si le dices algo más, **no se encola**: se cancela el motor y se **reinterpretan todos los prompts juntos** (uno puede anular, modificar o ampliar al otro — decisión pura del LLM). `GraphApp.run` corre un bucle que reconstruye el objetivo con `buildGoal(prompts)` y relanza el motor cada vez que `augmentExecution` añade un audio.
+
+## El amigo prevenido (anticipación)
+
+Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, `set_volume alarm 100`); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible.
+
 ## La burbuja flotante
 
 Al activar el servicio de accesibilidad aparece la carita de Graph como overlay permanente sobre cualquier app (`TYPE_ACCESSIBILITY_OVERLAY`, sin permisos extra). Es arrastrable y desde ella:

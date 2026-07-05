@@ -112,6 +112,12 @@ class Mcp(
             listOf(McpParam("text", "Texto a compartir"))) { system.shareText(it.str("text")) },
         McpTool("set_clipboard", "Copia un texto al portapapeles (sin UI).",
             listOf(McpParam("text", "Texto a copiar"))) { system.setClipboard(it.str("text")) },
+        McpTool("set_volume", "Ajusta el volumen de un canal de audio directamente (sin UI). Útil para " +
+            "asegurar que una alarma/llamada/medio se oiga.",
+            listOf(
+                McpParam("stream", "Canal de audio", listOf("media", "ring", "alarm", "notification", "call")),
+                McpParam("percent", "Nivel 0-100 (usa 100 para asegurar que se oiga)"),
+            )) { system.setVolume(it.str("stream").ifBlank { "media" }, it.int("percent", 100)) },
     )
 
     // Herramientas aprendidas: el mapa de una pantalla estructurado en la enseñanza. El modelo compone

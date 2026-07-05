@@ -45,6 +45,8 @@ interface SystemApi {
     suspend fun openSettings(section: String): Boolean
     suspend fun shareText(text: String): Boolean
     suspend fun setClipboard(text: String): Boolean
+    /** Ajusta el volumen de un stream (media/ring/alarm/notification/call) a un porcentaje 0..100. */
+    suspend fun setVolume(stream: String, percent: Int): Boolean
 }
 
 /* ---------- El cerebro (Gemini 3.5 Flash): computer-use + herramientas MCP ---------- */

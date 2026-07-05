@@ -8,6 +8,7 @@ import android.app.PendingIntent
 import android.content.Intent
 import android.content.SharedPreferences
 import com.zevcorp.graph.platform.AndroidSystemApi
+import com.zevcorp.graph.platform.Anticipation
 import com.zevcorp.graph.platform.CloudSync
 import com.zevcorp.graph.platform.GeminiBrain
 import com.zevcorp.graph.platform.LearningInquiry
@@ -98,9 +99,30 @@ class GraphApp : Application() {
             .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
     }, memory = { memories.promptBlock() })
 
+    private val anticipation by lazy { Anticipation(apiKey, model) }
+
+    /** Prompts que componen el objetivo vivo: crecen si llega un audio nuevo durante la ejecución. */
+    private val goalPrompts = mutableListOf<String>()
+
+    private fun newEngine(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, maxTurns: Int = 40): ExecutionEngine {
+        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
+        return ExecutionEngine(
+            brain = { newBrain(mcp) }, phone = surface, mcp = mcp, user = user,
+            voice = voice, log = LogBus, mode = modeSignal, stepDelay = stepDelay, maxTurns = maxTurns,
+        )
+    }
+
+    private fun buildGoal(prompts: List<String>): String =
+        if (prompts.size == 1) prompts[0]
+        else "El usuario te pidió esto, en orden, mientras ejecutabas:\n" +
+            prompts.mapIndexed { i, p -> "${i + 1}) \"$p\"" }.joinToString("\n") +
+            "\nReinterpreta TODO como UN SOLO objetivo y complétalo. Las instrucciones posteriores " +
+            "pueden anular, modificar o ampliar las anteriores; usa tu criterio para decidir qué hacer con todo."
+
     /**
-     * Pídele algo por texto o voz. Gemini 3.5 Flash lo ejecuta con el motor mixto: elige entre
-     * gestos MCP y computer-use. Devuelve el resumen final del asistente.
+     * Pídele algo por texto o voz. Gemini 3.5 Flash lo ejecuta con el motor mixto. Si mientras
+     * ejecuta llega otro audio (augmentExecution), se cancela y REINTERPRETA ambos prompts juntos.
+     * Al terminar, una cadena de pensamiento breve decide si anticipar una acción segura.
      */
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
@@ -110,28 +132,61 @@ class GraphApp : Application() {
             memoryDistiller.capture(prompt)?.let { note ->
                 if (memories.add(note)) {
                     LogBus.log("memory", "🧠 recordado${if (note.app.isNotBlank()) " [${note.app}]" else ""}: ${note.note}")
-                    voice.narrate("🧠 Lo recordaré")
+                    voice.narrate("Lo recordaré")
                 }
             }
         }
-        // MCP = gestos de accesibilidad + acciones del sistema por Intent + herramientas aprendidas.
-        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
-        val engine = ExecutionEngine(
-            brain = { newBrain(mcp) },
-            phone = surface,
-            mcp = mcp,
-            user = user,
-            voice = voice,
-            log = LogBus,
-            mode = modeSignal,
-            stepDelay = stepDelay,
-        )
-        return running { engine.run(prompt) }
+        synchronized(goalPrompts) { goalPrompts.clear(); goalPrompts.add(prompt.trim()) }
+        return running {
+            var summary = ""
+            var round = 0
+            // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
+            while (true) {
+                val (goal, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
+                bubble?.showExecutionMic(true)
+                val engine = newEngine(surface, service, user)
+                val holder = arrayOf("")
+                val announce = round == 0 // en reencaminados no narra el objetivo largo
+                val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
+                    holder[0] = try { engine.run(goal, announce) }
+                        catch (ce: CancellationException) { throw ce }
+                        catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
+                }
+                engineCanceller = { child.cancel(CancellationException("reencaminar")) }
+                child.join()
+                engineCanceller = null
+                val grew = synchronized(goalPrompts) { goalPrompts.size > builtCount }
+                if (!grew) { summary = holder[0]; break }
+                round++
+                LogBus.log("run", "↻ reencaminando: ahora son ${synchronized(goalPrompts) { goalPrompts.size }} prompts")
+                voice.narrate("Ok, lo ajusto sobre la marcha")
+            }
+            bubble?.showExecutionMic(false)
+            // El amigo prevenido: ¿alguna acción de certeza total que convenga hacer justo ahora?
+            anticipate(surface, service, user, summary)
+            summary
+        }
+    }
+
+    /** Cadena de pensamiento breve al terminar → acción autónoma segura y/o aviso hablado. */
+    private suspend fun anticipate(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, summary: String) {
+        val request = synchronized(goalPrompts) { goalPrompts.joinToString(" · ") }
+        val tools = Mcp(service, AndroidSystemApi(service), learnedTools.list()).tools.joinToString(", ") { it.name }
+        val foresight = runCatching { anticipation.consider(request, summary, tools) }.getOrNull() ?: return
+        if (foresight.say.isNotBlank()) voice.speak(foresight.say)
+        if (foresight.task.isNotBlank()) {
+            LogBus.log("run", "🤝 acción anticipada: ${foresight.task}")
+            val goal = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de " +
+                "certeza total y le conviene): ${foresight.task}. Hazla de forma directa y para."
+            runCatching { newEngine(surface, service, user, maxTurns = 12).run(goal, announce = false) }
+                .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }
+        }
     }
 
     /* ---------- Detener la ejecución (botón rojo flotante + notificación) ---------- */
 
     @Volatile private var runJob: Job? = null
+    @Volatile private var engineCanceller: (() -> Unit)? = null
 
     /** Hay una ejecución autónoma en curso: no es momento de que el aprendizaje interrumpa por voz. */
     val executing get() = runJob != null
@@ -139,6 +194,23 @@ class GraphApp : Application() {
     fun stopExecution() {
         LogBus.log("app", "⏹ detención solicitada por el usuario")
         runJob?.cancel(CancellationException("Detenida por ti ✋"))
+    }
+
+    /**
+     * Un audio nuevo llegó mientras el asistente ejecutaba: NO se encola: se añade al objetivo y el
+     * motor se reinterpreta desde cero con AMBOS prompts (uno puede anular o modificar el otro). Si
+     * ya no hay ejecución, arranca una normal.
+     */
+    fun augmentExecution(extra: String) {
+        val e = extra.trim()
+        if (e.isBlank()) return
+        if (executing) {
+            synchronized(goalPrompts) { goalPrompts.add(e) }
+            LogBus.log("run", "＋ audio durante ejecución: \"${e.take(80)}\"")
+            engineCanceller?.invoke()
+        } else {
+            scope.launch { runCatching { run(e, bubble) } }
+        }
     }
 
     /** Envuelve la ejecución: rastrea el Job para cancelarlo y muestra los controles de stop. */
@@ -156,8 +228,10 @@ class GraphApp : Application() {
             return block()
         } finally {
             runJob = null
+            engineCanceller = null
             bubble?.companion(false)
             bubble?.showStop(false)
+            bubble?.showExecutionMic(false) // limpia el micrófono de ejecución también si te detienen
             notifyRunning(false)
             if (autoLearn && passive.active) scope.launch(Dispatchers.IO) { passive.stop(quiet = true) }
         }

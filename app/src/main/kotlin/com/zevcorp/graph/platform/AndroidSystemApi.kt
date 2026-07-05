@@ -132,4 +132,19 @@ class AndroidSystemApi(private val ctx: Context) : SystemApi {
             .setPrimaryClip(ClipData.newPlainText("graph", text))
         LogBus.log("api", "portapapeles ← \"${text.take(40)}\""); true
     }.getOrDefault(false)
+
+    override suspend fun setVolume(stream: String, percent: Int): Boolean = runCatching {
+        val am = ctx.getSystemService(android.media.AudioManager::class.java)
+        val type = when (stream.trim().lowercase()) {
+            "ring", "ringtone" -> android.media.AudioManager.STREAM_RING
+            "alarm" -> android.media.AudioManager.STREAM_ALARM
+            "notification" -> android.media.AudioManager.STREAM_NOTIFICATION
+            "call", "voice" -> android.media.AudioManager.STREAM_VOICE_CALL
+            else -> android.media.AudioManager.STREAM_MUSIC // media/música por defecto
+        }
+        val max = am.getStreamMaxVolume(type)
+        val index = (percent.coerceIn(0, 100) * max / 100).coerceIn(if (percent > 0) 1 else 0, max)
+        am.setStreamVolume(type, index, 0)
+        LogBus.log("api", "set_volume $stream → $index/$max"); true
+    }.getOrElse { LogBus.log("api", "set_volume falló (¿acceso a No molestar?): ${it.message?.take(80)}"); false }
 }
