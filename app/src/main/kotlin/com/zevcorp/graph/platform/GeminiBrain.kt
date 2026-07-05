@@ -105,24 +105,37 @@ class GeminiBrain(
             "data" to js(Base64.encodeToString(png, Base64.NO_WRAP)),
         )
 
+        fun textItem(t: String) = jo("type" to js("text"), "text" to js(t))
+        fun jsonItem(o: JsonObject) = textItem(Json.encodeToString(JsonObject.serializer(), o))
+        // Bloque de georreferenciación: dónde está el asistente, en texto (sin imagen).
+        val stateBlock = "Pantalla actual: ${state.screen}\nDónde estás (árbol de UI de Android):\n${state.uiContext}"
+
         val input = mutableListOf<JsonElement>()
         if (previousId.isBlank()) {
-            input += jo("type" to js("text"), "text" to js(goalPrompt(state)))
+            input += textItem(goalPrompt(state, stateBlock))
             state.screenshotPng?.let { input += image(it) }
         } else if (pending.isEmpty()) {
-            input += jo("type" to js("text"), "text" to js(informText.ifBlank { "Continúa." }))
+            input += textItem(informText.ifBlank { "Continúa." } + "\n$stateBlock")
             state.screenshotPng?.let { input += image(it) }
             informText = ""
         } else {
             pending.forEachIndexed { i, call ->
-                val payload = when {
-                    call.name == "ask_user" -> jo("answer" to js(informText.ifBlank { "(sin respuesta)" }))
-                    internalResults.containsKey(call.id) -> internalResults.getValue(call.id)
-                    else -> jo("url" to js(state.screen), "result" to js(actionResults.getOrElse(i) { "ok" }))
+                val result = mutableListOf<JsonElement>()
+                when {
+                    // take_screenshot: ES el momento de mandar la imagen (computer-use bajo demanda).
+                    call.name == "take_screenshot" -> {
+                        result += textItem("Captura de la pantalla actual.")
+                        state.screenshotPng?.let { result += image(it) }
+                    }
+                    call.name == "ask_user" -> result += jsonItem(jo("answer" to js(informText.ifBlank { "(sin respuesta)" })))
+                    internalResults.containsKey(call.id) -> result += jsonItem(internalResults.getValue(call.id))
+                    else -> {
+                        result += jsonItem(jo("screen" to js(state.screen), "ui" to js(state.uiContext),
+                            "result" to js(actionResults.getOrElse(i) { "ok" })))
+                        // imagen solo si el modelo la pidió (tras un tap/type de computer-use)
+                        if (i == pending.lastIndex) state.screenshotPng?.let { result += image(it) }
+                    }
                 }
-                val result = mutableListOf<JsonElement>(
-                    jo("type" to js("text"), "text" to js(Json.encodeToString(JsonObject.serializer(), payload))))
-                if (i == pending.lastIndex) state.screenshotPng?.let { result += image(it) }
                 val fields = mutableListOf(
                     "type" to js("function_result"), "name" to js(call.name),
                     "call_id" to js(call.id), "result" to JsonArray(result))
@@ -214,6 +227,9 @@ class GeminiBrain(
         }
         pending = calls
         speech?.let { s -> calls.firstOrNull { it.name == "speak" }?.let { internalResults[it.id] = jo("said" to js("true")) } }
+        // El próximo turno adjunta screenshot si el modelo pidió ver o va a tocar por coordenadas.
+        val needsShot = calls.any { it.name == "take_screenshot" } ||
+            actions.any { it is AgentAction.Tap || it is AgentAction.Type }
         when {
             calls.isNotEmpty() ->
                 LogBus.log("gemini", "decide: ${calls.joinToString(", ") { it.name }}" + (question?.let { " · pregunta" } ?: ""))
@@ -222,25 +238,32 @@ class GeminiBrain(
             else -> // ni acciones ni texto: diagnóstico del "final vacío"
                 LogBus.log("gemini", "final VACÍO · items recibidos: [${items.joinToString(", ") { it.jsonObject.str("type") }}]")
         }
-        return BrainTurn(actions, question, done = calls.isEmpty(), text = text,
+        return BrainTurn(actions, question, done = calls.isEmpty(), text = text, needsScreenshot = needsShot,
             narration = intents.firstOrNull { it.isNotBlank() } ?: "", speech = speech, intents = intents)
     }
 
-    private fun goalPrompt(state: ScreenState) = """
+    private fun goalPrompt(state: ScreenState, stateBlock: String) = """
         Eres Graph, un asistente con PERSONALIDAD viva y divertida que controla un teléfono Android REAL.
         Objetivo del usuario: $goal
 
-        Tienes DOS formas de actuar y eliges la más directa en cada momento:
-        1) HERRAMIENTAS MCP (gestos rápidos y limpios): ${tools.joinToString("; ") { "${it.name} (${it.description})" }}.
-        2) COMPUTER-USE: mira la pantalla y toca/escribe donde haga falta (open_app para abrir apps).
-        Prefiere una herramienta MCP cuando encaje (p.ej. ir al home, abrir el cajón de apps, notificaciones);
-        usa computer-use para tocar elementos concretos de una app.
+        CÓMO VES LA PANTALLA: por defecto NO recibes una imagen, sino una descripción de TEXTO del árbol de
+        UI (paquete, tipo de pantalla, etiquetas visibles). Con eso ubícate (home, cajón de apps, una app,
+        notificaciones…) y decide. Solo cuando necesites tocar un elemento visual concreto, llama
+        take_screenshot para obtener una imagen y en el siguiente turno haz click con coordenadas.
 
-        En el campo "intent" de cada acción escribe una frase corta y con chispa de lo que haces (ej: "Abro el cajón de apps 📲").
+        DOS formas de actuar, elige la más directa:
+        1) HERRAMIENTAS MCP (gestos rápidos, sin imagen): ${tools.joinToString("; ") { "${it.name} (${it.description})" }}.
+        2) COMPUTER-USE (requiere imagen): take_screenshot y luego click/type; open_app para abrir apps.
+        Prefiere MCP cuando encaje. IMPORTANTE: si el plan son varios gestos MCP encadenados y predecibles
+        (p.ej. ir al home y luego abrir el cajón), LLÁMALOS TODOS EN UNA SOLA RESPUESTA (varias function_call
+        juntas) para ahorrar turnos. Solo separa en turnos cuando necesites ver el resultado intermedio.
+
+        En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").
         Usa speak SOLO para avisos importantes y ask_user SOLO para dudas reales. No hables por hablar.
-        Si el usuario solo quiere saber qué puedes hacer, respóndele con texto describiendo tus herramientas (sin actuar).
+        Si el usuario solo quiere saber qué puedes hacer, respóndele con TEXTO describiendo tus herramientas (sin actuar).
         Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones).
-        IMPORTANTE: en las capturas aparece una pequeña carita blanca flotante (Graph). IGNÓRALA: nunca la toques.
-        Pantalla actual: ${state.screen}
+        En las capturas puede aparecer una carita blanca flotante (Graph): IGNÓRALA, nunca la toques.
+
+        $stateBlock
     """.trimIndent()
 }

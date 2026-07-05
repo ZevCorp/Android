@@ -4,7 +4,8 @@ package graph.core.domain
 
 /** Primitivas de computer-use: el modelo mira la pantalla y actúa por coordenadas 0..width/height. */
 interface Phone {
-    suspend fun state(): ScreenState
+    /** Estado de la pantalla. Solo captura el screenshot si `withScreenshot` (para computer-use). */
+    suspend fun state(withScreenshot: Boolean = false): ScreenState
     suspend fun tap(x: Int, y: Int): Boolean
     suspend fun type(x: Int, y: Int, text: String): Boolean
     suspend fun openApp(query: String): Boolean
@@ -44,6 +45,8 @@ class BrainTurn(
     val question: String? = null,
     val done: Boolean = false,
     val text: String = "",
+    /** El modelo va a usar computer-use: el próximo turno debe adjuntar un screenshot. */
+    val needsScreenshot: Boolean = false,
     /** Globo de diálogo con personalidad (narración silenciosa). */
     val narration: String = "",
     /** Frase para decir en voz alta (solo cosas importantes). */

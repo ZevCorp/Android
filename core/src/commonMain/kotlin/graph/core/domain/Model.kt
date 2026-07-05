@@ -1,8 +1,14 @@
 package graph.core.domain
 
-/** Captura del estado de la pantalla que ve el cerebro en cada turno. */
+/**
+ * Estado de la pantalla que ve el cerebro en cada turno.
+ * Por defecto es TEXTO (georreferenciación por árbol de UI): `screen` (paquete·título) y `uiContext`
+ * (tipo de pantalla + etiquetas visibles) bastan para que el modelo sepa dónde está y actúe con MCP.
+ * El `screenshotPng` solo se adjunta cuando el modelo va a usar computer-use (mirar y tocar).
+ */
 class ScreenState(
     val screen: String,
+    val uiContext: String,
     val width: Int,
     val height: Int,
     val screenshotPng: ByteArray? = null,

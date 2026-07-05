@@ -38,18 +38,21 @@ class ExecutionEngine(
         var summary = ""
         var turns = 0
         var actions = 0
+        var wantShot = false // el screenshot solo se adjunta cuando el modelo va a usar computer-use
         while (turns < maxTurns) {
             turns++
             val turnStart = TimeSource.Monotonic.markNow()
-            val state = phone.state()
+            val state = phone.state(withScreenshot = wantShot)
             val turn = b.next(state, results)
+            wantShot = turn.needsScreenshot
             val ms = turnStart.elapsedNow().inWholeMilliseconds
+            val via = if (state.screenshotPng != null) "👁 imagen" else "📝 texto"
             val decided = when {
                 turn.actions.isNotEmpty() -> turn.actions.joinToString(", ") { describe(it) }
                 turn.question != null -> "pregunta"
                 else -> "fin"
             }
-            log.log("run", "turno $turns · ${ms}ms · pantalla \"${state.screen.take(40)}\" · decide: $decided")
+            log.log("run", "turno $turns · ${ms}ms · $via · \"${state.screen.take(36)}\" · decide: $decided")
 
             if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
             if (turn.speech != null) { voice.speak(turn.speech); log.log("run", "🗣 ${turn.speech}") }
@@ -61,6 +64,7 @@ class ExecutionEngine(
                 turn.intents.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { voice.narrate(it) }
                 out += execute(action)
                 actions++
+                if (turn.actions.size > 1) delay(350) // deja asentar la UI entre gestos encadenados
             }
             results = out
 

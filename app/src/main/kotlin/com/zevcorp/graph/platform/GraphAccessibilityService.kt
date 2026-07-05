@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.accessibilityservice.GestureDescription
 import android.content.Intent
 import android.graphics.Bitmap
+import android.content.pm.PackageManager
 import android.graphics.Path
 import android.graphics.Rect
 import android.net.Uri
@@ -11,6 +12,7 @@ import android.os.Bundle
 import android.view.Display
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import android.view.accessibility.AccessibilityWindowInfo
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.ui.FloatingBubble
 import graph.core.domain.Gestures
@@ -45,11 +47,12 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures {
     override fun onAccessibilityEvent(event: AccessibilityEvent) {}
     override fun onInterrupt() {}
 
-    /* ---------- Estado de pantalla ---------- */
+    /* ---------- Estado de pantalla (georreferenciación por árbol de UI) ---------- */
 
-    override suspend fun state(): ScreenState {
-        val metrics = resources.displayMetrics
-        return ScreenState(currentScreen(), metrics.widthPixels, metrics.heightPixels, screenshot())
+    override suspend fun state(withScreenshot: Boolean): ScreenState {
+        val m = resources.displayMetrics
+        return ScreenState(currentScreen(), uiContext(), m.widthPixels, m.heightPixels,
+            if (withScreenshot) screenshot() else null)
     }
 
     private fun currentScreen(): String {
@@ -57,6 +60,55 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures {
         val title = windows.firstOrNull { it.isActive }?.title?.toString() ?: ""
         return "$pkg · $title".trim(' ', '·')
     }
+
+    /** Paquete del launcher por defecto: sirve para reconocer que estamos en el home/cajón de apps. */
+    private val launcherPkg: String by lazy {
+        val intent = android.content.Intent(android.content.Intent.ACTION_MAIN)
+            .addCategory(android.content.Intent.CATEGORY_HOME)
+        packageManager.resolveActivity(intent, PackageManager.MATCH_DEFAULT_ONLY)?.activityInfo?.packageName ?: ""
+    }
+
+    /**
+     * Resumen TEXTUAL de dónde está parado el asistente, sin imagen. Reúne las señales genéricas que,
+     * sumadas, permiten al modelo inferir el contexto: paquete, tipo de pantalla (home/cajón, sistema,
+     * teclado, app), conteo de clickeables/campos, campo enfocado y las etiquetas visibles más útiles.
+     */
+    private fun uiContext(): String {
+        val root = rootInActiveWindow ?: return "sin contenido accesible (pantalla vacía o protegida)"
+        val pkg = root.packageName?.toString() ?: ""
+        val kb = windows.any { it.type == AccessibilityWindowInfo.TYPE_INPUT_METHOD }
+        val kind = when {
+            pkg == launcherPkg -> "launcher de Android (home o cajón de apps)"
+            pkg == "com.android.systemui" -> "interfaz del sistema (barra de notificaciones / ajustes rápidos)"
+            else -> "aplicación"
+        }
+        val labels = LinkedHashSet<String>()
+        var clickables = 0
+        var fields = 0
+        var focused = ""
+        fun walk(n: AccessibilityNodeInfo?) {
+            n ?: return
+            if (n.isClickable) clickables++
+            if (n.isEditable) { fields++; if (n.isFocused) focused = labelOf(n) }
+            labelOf(n).takeIf { it.isNotBlank() && it.length <= 40 }?.let { labels += it }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return buildString {
+            append("paquete: ${pkg.ifBlank { "?" }}\n")
+            append("tipo: $kind${if (kb) " · teclado abierto" else ""}\n")
+            append("clickeables: $clickables · campos de texto: $fields")
+            if (focused.isNotBlank()) append(" (enfocado: \"$focused\")")
+            append("\netiquetas visibles: ")
+            append(labels.take(28).joinToString(" · ").ifBlank { "(ninguna)" })
+        }
+    }
+
+    private fun labelOf(n: AccessibilityNodeInfo): String = sequenceOf(
+        n.contentDescription,
+        if (n.isEditable) n.hintText else n.text,
+        n.viewIdResourceName?.substringAfterLast('/'),
+    ).firstOrNull { !it.isNullOrBlank() }?.toString()?.take(40) ?: ""
 
     private suspend fun screenshot(): ByteArray? = suspendCancellableCoroutine { cont ->
         takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {
