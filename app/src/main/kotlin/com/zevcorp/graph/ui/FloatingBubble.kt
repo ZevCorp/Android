@@ -26,8 +26,6 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
-import graph.core.domain.Answer
-import graph.core.domain.Lesson
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import java.util.Locale
@@ -35,11 +33,10 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.*
 
 /**
- * La burbuja flotante de Graph: la carita del asistente siempre encima de cualquier app,
- * dibujada como overlay del servicio de accesibilidad (TYPE_ACCESSIBILITY_OVERLAY, sin
- * permisos extra). Arrastrable; al tocarla abre el panel con las tres etapas. Durante el
- * Learning desaparece (para no salir en las capturas del agente) y reaparece para preguntar;
- * en modo demostración un toque la convierte en el botón de "terminé".
+ * La burbuja flotante de Graph: la carita del asistente siempre encima de cualquier app, dibujada
+ * como overlay del servicio de accesibilidad (TYPE_ACCESSIBILITY_OVERLAY, sin permisos extra).
+ * Arrastrable; al tocarla abre el chat para pedirle algo (texto o voz). Durante la ejecución vuela
+ * hacia donde actúa y muestra el botón de detener; si el asistente duda, pregunta aquí mismo.
  */
 class FloatingBubble(private val service: AccessibilityService) : UserChannel, Voice {
 
@@ -50,8 +47,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private lateinit var bubble: FaceView
     private lateinit var bubbleParams: WindowManager.LayoutParams
     private var panel: View? = null
-    private var demoEnd: CompletableDeferred<Unit>? = null
-    private var demoBadge: TextView? = null
     private var dragAnimator: ValueAnimator? = null
 
     private var speech: TextView? = null
@@ -76,17 +71,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
         bubble.elevation = 12f
         attachDrag(size)
-        bubble.setOnClickListener {
-            when {
-                demoEnd != null -> { demoBadge?.let { runCatching { wm.removeView(it) } }; demoBadge = null; demoEnd?.complete(Unit); demoEnd = null }
-                panel == null -> openPanel()
-                else -> closePanel()
-            }
-        }
+        bubble.setOnClickListener { if (panel == null) openPanel() else closePanel() }
         wm.addView(bubble, bubbleParams)
     }
 
-    /** Arrastre fluido con inercia: un flick corto la lanza a la esquina; siempre "aterriza" pegada al borde. */
+    /** Arrastre fluido con inercia: un flick corto la lanza a la esquina; siempre "aterriza" al borde. */
     private fun attachDrag(size: Int) {
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
         var tracker: VelocityTracker? = null
@@ -110,7 +99,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                     if (!moved) v.performClick()
                     else {
                         val vt = tracker
-                        vt?.addMovement(e); vt?.computeCurrentVelocity(1000) // px/s
+                        vt?.addMovement(e); vt?.computeCurrentVelocity(1000)
                         flingToEdge(size, vt?.xVelocity ?: 0f, vt?.yVelocity ?: 0f)
                     }
                     tracker?.recycle(); tracker = null
@@ -127,7 +116,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         val maxY = m.heightPixels - size
         val projX = bubbleParams.x + vx * 0.12f
         val projY = bubbleParams.y + vy * 0.12f
-        val destX = if (projX + size / 2 < m.widthPixels / 2) 0 else maxX // pega al borde según hacia dónde va
+        val destX = if (projX + size / 2 < m.widthPixels / 2) 0 else maxX
         val destY = projY.toInt().coerceIn(service.dp(24), maxY - service.dp(24))
         val speed = kotlin.math.hypot(vx.toDouble(), vy.toDouble()).toFloat()
         val dur = (260 + (kotlin.math.hypot((destX - bubbleParams.x).toDouble(), (destY - bubbleParams.y).toDouble()) / (0.6f + speed / 4000f))).toLong().coerceIn(200, 620)
@@ -153,7 +142,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         tts?.shutdown()
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
-        demoBadge?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
         stopButton?.let { runCatching { wm.removeView(it) } }
     }
@@ -199,13 +187,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         runCatching { wm.updateViewLayout(view, p) }
     }
 
-    /* ---------- Modo acompañante: la carita vuela hacia donde se va a hacer clic ---------- */
+    /* ---------- Modo acompañante: la carita vuela hacia donde se va a actuar ---------- */
 
-    /**
-     * Vuela suave hacia el objetivo con curva de velocidad ascendente (ease-in:
-     * arranca lento y llega rápido). Se queda flotando justo encima del punto.
-     * En este modo la burbuja es pass-through: los taps del agente la atraviesan.
-     */
+    /** Vuela suave hacia el objetivo (ease-in) y se queda flotando encima; pass-through para no estorbar. */
     suspend fun flyTo(targetX: Int, targetY: Int) = withContext(Dispatchers.Main) {
         setPassThrough(true)
         bubble.visibility = View.VISIBLE
@@ -218,7 +202,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         suspendCancellableCoroutine { cont ->
             ValueAnimator.ofFloat(0f, 1f).apply {
                 duration = 480
-                interpolator = AccelerateInterpolator(1.7f) // curva de velocidad: despacio → rápido
+                interpolator = AccelerateInterpolator(1.7f)
                 addUpdateListener { a ->
                     val f = a.animatedValue as Float
                     bubbleParams.x = (startX + (destX - startX) * f).toInt()
@@ -226,32 +210,26 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                     runCatching { wm.updateViewLayout(bubble, bubbleParams) }
                 }
                 addListener(object : AnimatorListenerAdapter() {
-                    override fun onAnimationEnd(animation: Animator) {
-                        if (cont.isActive) cont.resume(Unit)
-                    }
+                    override fun onAnimationEnd(animation: Animator) { if (cont.isActive) cont.resume(Unit) }
                 })
                 start()
             }
         }
-        delay(60) // un respiro sobre el objetivo antes del clic
+        delay(60)
     }
 
-    /** on=true durante la ejecución (pass-through, carita pensativa siempre visible); on=false restaura. */
+    /** on=true durante la ejecución (pass-through, carita pensativa); on=false restaura. */
     fun companion(on: Boolean) {
         scope.launch {
             setPassThrough(on)
-            bubble.visibility = View.VISIBLE // siempre visible: ya no parpadea por capturas
+            bubble.visibility = View.VISIBLE
             bubble.thinking = on
         }
     }
 
     private var stopButton: TextView? = null
 
-    /**
-     * Botón rojo ⏹ arriba-centro de la pantalla mientras el asistente ejecuta (imita el chip de la
-     * grabación de pantalla): un solo toque detiene, sin expandir nada. Es su propia ventana
-     * TOCABLE, aunque la carita esté en pass-through y el agente esté clickeando rápido.
-     */
+    /** Botón rojo ⏹ arriba-centro mientras el asistente ejecuta: un toque detiene. Ventana propia y tocable. */
     fun showStop(on: Boolean) {
         scope.launch {
             if (!on) {
@@ -268,14 +246,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 background = rounded(Palette.danger, service.dp(22).toFloat())
                 setPadding(service.dp(16), service.dp(7), service.dp(16), service.dp(7))
                 elevation = 22f
-                setOnClickListener {
-                    GraphApp.instance.stopExecution()
-                    toast("Detenido ✋")
-                }
+                setOnClickListener { app.stopExecution(); toast("Detenido ✋") }
             }
             val params = overlayParams(-2, -2, focusable = false).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
-                y = service.dp(8) // pegado a la barra de estado, como el punto rojo de grabación
+                y = service.dp(8)
             }
             runCatching { wm.addView(button, params) }
             stopButton = button
@@ -298,7 +273,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         PixelFormat.TRANSLUCENT,
     )
 
-    /* ---------- Panel principal ---------- */
+    /* ---------- Chat: pídele algo por texto o voz ---------- */
 
     private fun openPanel() {
         val c = service
@@ -312,24 +287,12 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         header.addView(FaceView(c), LinearLayout.LayoutParams(c.dp(38), c.dp(38)))
         val titles = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(c.dp(10), 0, 0, 0) }
         titles.addView(c.title("Graph", 16f))
-        titles.addView(c.caption(if (app.ui != null) "Pídeme algo o enséñame ✏️" else "Activa accesibilidad"))
+        titles.addView(c.caption(if (app.ui != null) "Pídeme algo 👇" else "Activa accesibilidad"))
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(iconButton("✕") { closePanel() })
         body.addView(header)
         body.gap(c.dp(10))
 
-        // Accesos rápidos: workflows aprendidos (el % sube al re-ejecutar). Tocar = ejecutar y consolidar.
-        val workflows = app.workflows.list().takeLast(4).reversed()
-        workflows.forEach { w ->
-            body.addView(c.button("⚡ ${w.name.take(38)} · ${w.learnedPct()}%") {
-                closePanel()
-                scope.launch { toast(withContext(Dispatchers.Default) { app.runWorkflow(w.id, emptyMap()) }) }
-            })
-            body.gap(c.dp(6))
-        }
-        if (workflows.isNotEmpty()) body.gap(c.dp(4))
-
-        // Barra de chat: lápiz (enseñar) · input · micrófono · enviar
         val input = EditText(c).apply {
             hint = "Pídeme algo…"
             setHintTextColor(Palette.textDim)
@@ -348,21 +311,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         input.setOnEditorActionListener { _, _, _ -> submit(input.text.toString()); true }
 
         val bar = c.row()
-        bar.addView(iconButton("✏️") {
-            if (!app.teachingActive) {
-                closePanel()
-                c.startActivity(Intent(c, MainActivity::class.java)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK).putExtra("action", "teach"))
-            } else {
-                closePanel(); app.teachingActive = false; toast("Analizando el tutorial…")
-                scope.launch {
-                    runCatching { withContext(Dispatchers.Default) { app.teaching.stopAndAnalyze() } }
-                        .onSuccess { toast("Lección aprendida: ${it.goal}") }
-                        .onFailure { toast("Error al analizar: ${it.message}") }
-                }
-            }
-        })
-        bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
         bar.addView(iconButton("🎤") {
@@ -376,7 +324,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         val params = overlayParams(c.dp(316), -2, focusable = true).apply {
             gravity = Gravity.TOP or Gravity.START
             x = (bubbleParams.x - c.dp(322)).coerceAtLeast(c.dp(4))
-            y = bubbleParams.y.coerceAtMost(service.resources.displayMetrics.heightPixels - c.dp(420))
+            y = bubbleParams.y.coerceAtMost(service.resources.displayMetrics.heightPixels - c.dp(240))
             softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
         }
         wm.addView(scroll, params)
@@ -393,18 +341,18 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             val d = service.dp(42)
             minWidth = d; minHeight = d
             setPadding(service.dp(10), service.dp(8), service.dp(10), service.dp(8))
-            background = rounded(if (primary) android.graphics.Color.WHITE else Palette.card,
+            background = rounded(if (primary) Color.WHITE else Palette.card,
                 service.dp(21).toFloat(), if (primary) 0 else Palette.cardBorder)
             setOnClickListener { onClick() }
         }
 
-    /** Ejecuta un prompt libre con el motor de ejecución (Gemini computer use + aprendizaje por workflow). */
+    /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {
         if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
         narrate("¡Vamos! $prompt")
         scope.launch {
-            runCatching { withContext(Dispatchers.Default) { app.runPrompt(prompt, this@FloatingBubble) } }
-                .onSuccess { toast("Hecho · ${it.steps.size} steps (workflow ${it.id})") }
+            runCatching { withContext(Dispatchers.Default) { app.run(prompt, this@FloatingBubble) } }
+                .onSuccess { toast(it) }
                 .onFailure { toast(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
         }
     }
@@ -414,19 +362,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         panel = null
     }
 
-    /* ---------- Learning desde la burbuja ---------- */
+    /* ---------- El asistente pregunta: respuesta por texto o voz ---------- */
 
-    private fun learn(lesson: Lesson) {
-        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
-        toast("Aprendiendo: ${lesson.goal.take(40)}")
-        scope.launch {
-            runCatching { withContext(Dispatchers.Default) { app.runLearning(lesson, this@FloatingBubble) } }
-                .onSuccess { toast("Workflow aprendido: ${it.name.take(32)} (${it.steps.size} steps)") }
-                .onFailure { toast(if (it is CancellationException) "Ejecución detenida ✋" else "Error en learning: ${it.message}") }
-        }
-    }
-
-    override suspend fun ask(question: String): Answer = withContext(Dispatchers.Main) {
+    override suspend fun ask(question: String): String = withContext(Dispatchers.Main) {
         bubble.visibility = View.VISIBLE
         bubble.thinking = true
         suspendCancellableCoroutine { cont ->
@@ -437,10 +375,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 setPadding(c.dp(16), c.dp(16), c.dp(16), c.dp(16))
             }
             lateinit var window: View
-            fun finish(answer: Answer) {
+            fun finish(answer: String) {
                 runCatching { wm.removeView(window) }
-                bubble.visibility = View.VISIBLE // la ejecución sigue: la carita se queda
-                cont.resume(answer)
+                bubble.visibility = View.VISIBLE
+                if (cont.isActive) cont.resume(answer)
             }
             val header = c.row()
             header.addView(FaceView(c).apply { thinking = true }, LinearLayout.LayoutParams(c.dp(36), c.dp(36)))
@@ -458,21 +396,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             }
             body.addView(input)
             body.gap(c.dp(10))
-            body.addView(c.button("Responder", primary = true) { finish(Answer(input.text.toString())) })
+            body.addView(c.button("Responder", primary = true) { finish(input.text.toString()) })
             body.gap(c.dp(6))
-            val actions = c.row()
-            actions.addView(c.button("🎤 Voz") {
-                listen { heard -> if (heard != null) finish(Answer(heard)) else toast("No te escuché, intenta de nuevo") }
-            }, LinearLayout.LayoutParams(0, -2, 1f))
-            actions.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
-            actions.addView(c.button("👋 Te lo muestro") {
-                demoEnd = CompletableDeferred()
-                setPassThrough(false) // la burbuja vuelve a ser tocable: es el botón de "terminé"
-                showDemoBadge()
-                toast("Hazlo tú; cuando termines toca la burbuja ✅")
-                finish(Answer(demo = true))
-            }, LinearLayout.LayoutParams(0, -2, 1f))
-            body.addView(actions)
+            body.addView(c.button("🎤 Voz") {
+                listen { heard -> if (heard != null) finish(heard) else toast("No te escuché, intenta de nuevo") }
+            })
 
             window = ScrollView(c).apply { addView(body); elevation = 20f }
             val params = overlayParams(c.dp(310), -2, focusable = true).apply {
@@ -482,28 +410,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             wm.addView(window, params)
             cont.invokeOnCancellation { runCatching { wm.removeView(window) } }
         }
-    }
-
-    override suspend fun awaitDemoEnd() {
-        demoEnd?.await()
-        demoEnd = null
-        withContext(Dispatchers.Main) { setPassThrough(true) } // el agente retoma el control
-    }
-
-    private fun showDemoBadge() {
-        val badge = TextView(service).apply {
-            text = "✅"
-            textSize = 14f
-            background = rounded(Palette.accent, service.dp(20).toFloat())
-            setPadding(service.dp(6), service.dp(2), service.dp(6), service.dp(2))
-        }
-        val params = overlayParams(-2, -2, focusable = false).apply {
-            gravity = Gravity.TOP or Gravity.START
-            x = bubbleParams.x + service.dp(36)
-            y = bubbleParams.y - service.dp(8)
-        }
-        wm.addView(badge, params)
-        demoBadge = badge
     }
 
     /* ---------- Voz sin Activity: SpeechRecognizer directo en el servicio ---------- */

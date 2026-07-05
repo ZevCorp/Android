@@ -1,137 +1,82 @@
 package graph.core.domain
 
-import kotlinx.coroutines.flow.Flow
+/* ---------- Superficie del teléfono (una implementación por plataforma) ---------- */
 
-/* ---------- Etapa 1 · Teaching ---------- */
-
-interface ScreenRecorder {
-    fun start()
-    /** Detiene la grabación y devuelve la ruta del video. */
-    suspend fun stop(): String
-}
-
-interface TutorialAnalyzer {
-    suspend fun analyze(videoPath: String): Lesson
-}
-
-/**
- * Capa de inteligencia previa al guardado: con el contexto del video (incluida la narración del
- * usuario sobre qué es opcional) organiza los steps capturados en TRONCO y RAMAS situacionales.
- */
-interface WorkflowCurator {
-    suspend fun curate(lesson: Lesson, workflow: Workflow): Workflow
-}
-
-/* ---------- Superficie de UI (una implementación por plataforma) ---------- */
-
-class ScreenState(
-    val screen: String,
-    val width: Int,
-    val height: Int,
-    val screenshotPng: ByteArray? = null,
-)
-
-interface UiSurface {
+/** Primitivas de computer-use: el modelo mira la pantalla y actúa por coordenadas 0..width/height. */
+interface Phone {
     suspend fun state(): ScreenState
-
-    /** Ejecución semántica de un step grabado (etapa subconsciente). */
-    suspend fun perform(step: Step, value: String): Boolean
-
-    /** Ejecutan la acción y devuelven el step semántico resuelto desde el árbol de UI (para grabar el workflow). */
-    suspend fun tapAt(x: Int, y: Int): Step?
-    suspend fun typeAt(x: Int, y: Int, text: String): Step?
-    suspend fun launch(query: String): Step?
+    suspend fun tap(x: Int, y: Int): Boolean
+    suspend fun type(x: Int, y: Int, text: String): Boolean
+    suspend fun openApp(query: String): Boolean
     suspend fun scroll(down: Boolean): Boolean
     suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long): Boolean
-    fun pressKey(key: String): Boolean
-
-    /** Acciones del usuario capturadas del árbol de UI (demos durante Learning). */
-    val userActions: Flow<Step>
-    fun setCapturing(enabled: Boolean)
+    suspend fun pressKey(key: String): Boolean
 }
 
-/* ---------- Etapa 2 · Learning (computer use) ---------- */
+/** Gestos semánticos expuestos como herramientas MCP (ver `Mcp`). */
+interface Gestures {
+    suspend fun home(): Boolean
+    suspend fun appDrawer(): Boolean
+    suspend fun notifications(): Boolean
+    suspend fun panHome(right: Boolean): Boolean
+    suspend fun scrollMenu(down: Boolean): Boolean
+}
 
+/* ---------- El cerebro (Gemini 3.5 Flash): computer-use + herramientas MCP ---------- */
+
+/** Una acción que el cerebro decide ejecutar en un turno. */
 sealed interface AgentAction {
-    class ClickAt(val x: Int, val y: Int) : AgentAction
-    class TypeAt(val x: Int, val y: Int, val text: String) : AgentAction
+    class Tap(val x: Int, val y: Int) : AgentAction
+    class Type(val x: Int, val y: Int, val text: String) : AgentAction
+    class OpenApp(val name: String) : AgentAction
     class Scroll(val down: Boolean) : AgentAction
     class Swipe(val x1: Int, val y1: Int, val x2: Int, val y2: Int, val ms: Long) : AgentAction
-    class OpenApp(val name: String) : AgentAction
     class Key(val key: String) : AgentAction
     class Wait(val ms: Long) : AgentAction
+
+    /** Llamada a una herramienta MCP (gesto declarado). */
+    class Mcp(val tool: String, val args: Map<String, String>) : AgentAction
 }
 
+/** Lo que el cerebro devuelve en un turno: acciones + narración/voz/pregunta, o fin con texto. */
 class BrainTurn(
     val actions: List<AgentAction> = emptyList(),
     val question: String? = null,
     val done: Boolean = false,
     val text: String = "",
-    /** Narración con personalidad de lo que hará/piensa (globo de diálogo de la carita). */
+    /** Globo de diálogo con personalidad (narración silenciosa). */
     val narration: String = "",
-    /** Frase que el asistente quiere DECIR en voz alta (solo cosas importantes). */
+    /** Frase para decir en voz alta (solo cosas importantes). */
     val speech: String? = null,
-    /** intent por acción, para narrar en tiempo real cada paso. */
+    /** Intención por acción, para narrar en tiempo real cada paso. */
     val intents: List<String> = emptyList(),
 )
 
-class Verdict(val valid: Boolean, val reason: String = "", val applicable: Boolean = true)
-
-/** El modelo con computer use (Gemini 3.5 Flash en Android). Mantiene su propia conversación. */
-interface ComputerUseBrain {
-    fun begin(lesson: Lesson, instructions: String = "")
+/**
+ * El modelo con computer-use nativo (Gemini 3.5 Flash) que además conoce las herramientas MCP y decide,
+ * turno a turno, si usar un gesto MCP (rápido y limpio) o computer-use (visual y flexible).
+ */
+interface Brain {
+    fun begin(goal: String)
     suspend fun next(state: ScreenState, actionResults: List<String>): BrainTurn
-    /** Respuesta del usuario (texto/voz) o resumen de su demostración. */
+    /** Inyecta una respuesta del usuario u otra instrucción para el siguiente turno. */
     fun inform(message: String)
-    /** Supervisor del learning: juzga si un step reproducido por árbol de UI quedó bien aplicado. */
-    suspend fun judge(goal: String, step: Step, performed: Boolean, state: ScreenState): Verdict
-    /**
-     * Observador en vivo durante el Teaching: mira la pantalla mientras el usuario enseña y puede
-     * hablar (speak) o preguntar algo importante (ask_user). No ejecuta acciones. Devuelve null si no
-     * tiene nada que decir en este momento.
-     */
-    suspend fun observe(lesson: Lesson, state: ScreenState, recentActions: List<String>): BrainTurn?
 }
 
-/**
- * Canal de voz/narración del asistente hacia el usuario (TTS + globo de diálogo).
- * Disponible en cualquier etapa; la voz se usa solo para lo importante.
- */
+/* ---------- Canales hacia el usuario ---------- */
+
+/** Voz/narración del asistente (TTS + globo de diálogo). Solo se usa para lo importante. */
 interface Voice {
-    /** Globo de diálogo silencioso (narración con personalidad del paso actual). */
     fun narrate(text: String)
-    /** Habla en voz alta (y también muestra el globo). */
     fun speak(text: String)
 }
 
-/** Reporta el estado de la ejecución en vivo (dashboard en tiempo real + narración). */
-fun interface RunReporter {
-    fun report(workflow: Workflow, activeOrder: Int, note: String)
-}
-
-/* ---------- Feedback del usuario durante Learning ---------- */
-
-class Answer(val text: String = "", val demo: Boolean = false)
-
+/** El asistente puede preguntar algo al usuario (respuesta por texto o voz). */
 interface UserChannel {
-    suspend fun ask(question: String): Answer
-    suspend fun awaitDemoEnd()
+    suspend fun ask(question: String): String
 }
 
-/** Log estructurado del núcleo; cada plataforma decide dónde mostrarlo (panel de desarrollador en Android). */
+/** Log estructurado del núcleo; cada plataforma decide dónde mostrarlo. */
 fun interface GraphLog {
     fun log(tag: String, message: String)
-}
-
-/* ---------- Persistencia ---------- */
-
-interface WorkflowRepository {
-    fun save(workflow: Workflow)
-    fun get(id: String): Workflow?
-    fun list(): List<Workflow>
-}
-
-interface LessonRepository {
-    fun save(lesson: Lesson)
-    fun list(): List<Lesson>
 }

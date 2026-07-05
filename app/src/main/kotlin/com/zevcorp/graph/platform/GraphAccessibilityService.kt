@@ -13,27 +13,19 @@ import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.ui.FloatingBubble
-import graph.core.domain.*
+import graph.core.domain.Gestures
+import graph.core.domain.Phone
+import graph.core.domain.ScreenState
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
-import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.flow.MutableSharedFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.coroutines.withContext
 
 /**
- * Superficie de UI de Android: el análogo del recorder DOM de la extensión de Chrome de Graph.
- * Captura clics/texto del usuario desde el árbol de accesibilidad y ejecuta steps sobre él.
+ * Superficie del teléfono para Android: implementa las primitivas de computer-use (`Phone`) y los
+ * gestos semánticos que se exponen como herramientas MCP (`Gestures`), todo vía accesibilidad.
  */
-class GraphAccessibilityService : AccessibilityService(), UiSurface {
-
-    private val _userActions = MutableSharedFlow<Step>(extraBufferCapacity = 128)
-    override val userActions = _userActions.asSharedFlow()
-
-    @Volatile private var capturing = false
-    private val pendingInputs = LinkedHashMap<String, Step>()
+class GraphAccessibilityService : AccessibilityService(), Phone, Gestures {
 
     var bubble: FloatingBubble? = null
         private set
@@ -50,46 +42,12 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         super.onDestroy()
     }
 
+    override fun onAccessibilityEvent(event: AccessibilityEvent) {}
     override fun onInterrupt() {}
-
-    /* ---------- Captura de acciones del usuario (Teaching feedback / demos en Learning) ---------- */
-
-    override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (!capturing || event.packageName == packageName) return
-        when (event.eventType) {
-            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                flushInputs()
-                event.source?.let {
-                    val step = stepFor(ActionType.CLICK, it)
-                    LogBus.log("uitree", "evento CLICK ${step.selector.short()}")
-                    _userActions.tryEmit(step)
-                }
-            }
-            // Como en Graph: los eventos de tecleo se funden y gana el último valor por selector.
-            AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
-                val node = event.source ?: return
-                val step = stepFor(ActionType.INPUT, node, node.text?.toString() ?: "")
-                pendingInputs[step.selector.toString()] = step
-            }
-            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> flushInputs()
-        }
-    }
-
-    private fun flushInputs() {
-        pendingInputs.values.forEach { _userActions.tryEmit(it) }
-        pendingInputs.clear()
-    }
-
-    override fun setCapturing(enabled: Boolean) {
-        if (!enabled) flushInputs()
-        capturing = enabled
-    }
 
     /* ---------- Estado de pantalla ---------- */
 
     override suspend fun state(): ScreenState {
-        // La carita se queda visible durante la ejecución (flota sobre el objetivo, arriba del punto de
-        // clic, sin taparlo y en modo pass-through). A Gemini se le indica en el prompt que la ignore.
         val metrics = resources.displayMetrics
         return ScreenState(currentScreen(), metrics.widthPixels, metrics.heightPixels, screenshot())
     }
@@ -118,97 +76,7 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         })
     }
 
-    /* ---------- Selectores semánticos (≈ buildElementSelector del content script) ---------- */
-
-    private fun selectorOf(node: AccessibilityNodeInfo) = Selector(
-        viewId = node.viewIdResourceName ?: "",
-        // en campos editables el texto es el valor tecleado: no sirve como localizador
-        text = if (node.isEditable) "" else node.text?.toString()?.take(60) ?: "",
-        contentDesc = node.contentDescription?.toString() ?: "",
-        className = node.className?.toString() ?: "",
-        pkg = node.packageName?.toString() ?: "",
-        // NUNCA se guardan coordenadas: los workflows se reproducen solo por árbol de UI.
-    )
-
-    private fun labelOf(node: AccessibilityNodeInfo): String = sequenceOf(
-        node.hintText,
-        node.contentDescription,
-        if (node.isEditable) null else node.text,
-        node.viewIdResourceName?.substringAfterLast('/'),
-    ).firstOrNull { !it.isNullOrBlank() }?.toString()?.take(80) ?: ""
-
-    private fun stepFor(action: ActionType, node: AccessibilityNodeInfo?, value: String = "") = Step(
-        order = 0,
-        action = action,
-        selector = node?.let { selectorOf(it) } ?: Selector(),
-        value = value,
-        label = node?.let { labelOf(it) } ?: "",
-        screen = currentScreen(),
-        peers = if (action == ActionType.CLICK && node != null) collectPeers(node) else emptyList(),
-    )
-
-    /**
-     * Elementos "paralelos" del nodo clickeado (como collectAlternativeTargets de Graph): sube por
-     * los ancestros y, cuando un contenedor tiene ≥2 hijos clickeables del MISMO tipo (className),
-     * devuelve sus etiquetas. Así "5" trae ["0".."9","+","−","×","="] y "pepperoni" trae los otros sabores.
-     */
-    private fun collectPeers(node: AccessibilityNodeInfo): List<String> {
-        val cls = node.className?.toString() ?: return emptyList()
-        val mine = labelOf(node)
-        var ancestor = node.parent
-        var depth = 0
-        while (ancestor != null && depth < 5) {
-            val siblings = LinkedHashSet<String>()
-            fun scan(n: AccessibilityNodeInfo?) {
-                n ?: return
-                if (n.className?.toString() == cls && (n.isClickable || n.parent?.isClickable == true)) {
-                    val l = labelOf(n)
-                    if (l.isNotBlank() && l != mine) siblings += l
-                }
-                for (i in 0 until n.childCount) scan(n.getChild(i))
-            }
-            scan(ancestor)
-            if (siblings.size >= 2) return siblings.take(24).toList()
-            ancestor = ancestor.parent
-            depth++
-        }
-        return emptyList()
-    }
-
-    /* ---------- Búsqueda en el árbol ---------- */
-
-    /** Localiza el nodo SOLO por localizadores semánticos del árbol de UI (nunca por coordenadas). */
-    private fun find(sel: Selector): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
-        if (sel.viewId.isNotBlank())
-            root.findAccessibilityNodeInfosByViewId(sel.viewId)?.firstOrNull()?.let { return it }
-        if (sel.text.isNotBlank())
-            root.findAccessibilityNodeInfosByText(sel.text)?.firstOrNull()?.let { return it }
-        if (sel.contentDesc.isBlank()) return null
-        var byDesc: AccessibilityNodeInfo? = null
-        fun walk(n: AccessibilityNodeInfo?) {
-            n ?: return
-            if (byDesc == null && n.contentDescription?.toString() == sel.contentDesc) byDesc = n
-            for (i in 0 until n.childCount) walk(n.getChild(i))
-        }
-        walk(root)
-        return byDesc
-    }
-
-    /** Localiza un paralelo por su etiqueta (texto o contentDesc), para ejecutar una variante. */
-    private fun findByLabel(label: String): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
-        root.findAccessibilityNodeInfosByText(label)?.firstOrNull { it.text?.toString() == label }?.let { return it }
-        var byDesc: AccessibilityNodeInfo? = null
-        fun walk(n: AccessibilityNodeInfo?) {
-            n ?: return
-            if (byDesc == null && (n.contentDescription?.toString() == label ||
-                    n.viewIdResourceName?.substringAfterLast('/') == label)) byDesc = n
-            for (i in 0 until n.childCount) walk(n.getChild(i))
-        }
-        walk(root)
-        return byDesc ?: root.findAccessibilityNodeInfosByText(label)?.firstOrNull()
-    }
+    /* ---------- Búsqueda en el árbol para computer-use ---------- */
 
     private fun nodeAt(x: Int, y: Int): AccessibilityNodeInfo? {
         var best: AccessibilityNodeInfo? = null
@@ -232,52 +100,40 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
     private fun editableSelf(node: AccessibilityNodeInfo?) =
         node?.let { n -> generateSequence(n) { it.parent }.firstOrNull { it.isEditable } }
 
-    /* ---------- Ejecución ---------- */
+    /* ---------- Phone: primitivas de computer-use ---------- */
 
-    override suspend fun tapAt(x: Int, y: Int): Step? {
+    override suspend fun tap(x: Int, y: Int): Boolean {
         bubble?.flyTo(x, y)
-        val node = nodeAt(x, y)
-        val clickable = clickableAncestor(node)
+        val clickable = clickableAncestor(nodeAt(x, y))
         val ok = clickable?.performAction(AccessibilityNodeInfo.ACTION_CLICK) == true || tapGesture(x, y)
-        val resolved = clickable ?: node
-        LogBus.log("ui", "tap($x,$y) → " +
-            (resolved?.let { "${it.viewIdResourceName ?: it.className}" } ?: "sin nodo, gesto directo") + " · ok=$ok")
-        if (!ok) return null
-        // El step se graba SIN coordenadas: si no hubo nodo semántico, queda rojo (lo hará Gemini en vivo).
-        return stepFor(ActionType.CLICK, resolved)
+        LogBus.log("ui", "tap($x,$y) · ok=$ok")
+        return ok
     }
 
-    override suspend fun typeAt(x: Int, y: Int, text: String): Step? {
-        val node = editableSelf(nodeAt(x, y)) ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT)
-        if (node == null) {
-            LogBus.log("ui", "type($x,$y): sin campo editable ni foco")
-            return null
-        }
+    override suspend fun type(x: Int, y: Int, text: String): Boolean {
+        val node = editableSelf(nodeAt(x, y)) ?: findFocus(AccessibilityNodeInfo.FOCUS_INPUT) ?: return false
         val r = Rect().also { node.getBoundsInScreen(it) }
         bubble?.flyTo(r.centerX(), r.centerY())
-        val ok = setText(node, text)
-        LogBus.log("ui", "type(${node.viewIdResourceName ?: node.className}) = \"${text.take(30)}\" · ok=$ok")
-        return if (ok) stepFor(ActionType.INPUT, node, text) else null
+        return setText(node, text)
     }
 
-    override suspend fun launch(query: String): Step? {
+    override suspend fun openApp(query: String): Boolean {
         val q = query.trim()
         if (q.startsWith("http")) {
             startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(q)).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
             delay(1500)
-            return Step(0, ActionType.LAUNCH, Selector(pkg = q), label = q, screen = currentScreen())
+            return true
         }
         val pm = packageManager
         val apps = pm.getInstalledApplications(0)
         val match = apps.firstOrNull { it.packageName.equals(q, true) }
             ?: apps.firstOrNull { pm.getApplicationLabel(it).toString().contains(q, true) }
-            ?: return null
-        val intent = pm.getLaunchIntentForPackage(match.packageName) ?: return null
+            ?: return false
+        val intent = pm.getLaunchIntentForPackage(match.packageName) ?: return false
         startActivity(intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-        LogBus.log("ui", "launch: ${match.packageName}")
+        LogBus.log("ui", "openApp: ${match.packageName}")
         delay(1500)
-        return Step(0, ActionType.LAUNCH, Selector(pkg = match.packageName),
-            label = pm.getApplicationLabel(match).toString(), screen = currentScreen())
+        return true
     }
 
     override suspend fun scroll(down: Boolean): Boolean {
@@ -294,7 +150,7 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
             if (x1 != x2 || y1 != y2) lineTo(x2.toFloat(), y2.toFloat())
         }, ms.coerceIn(80, 10_000))
 
-    override fun pressKey(key: String): Boolean = when {
+    override suspend fun pressKey(key: String): Boolean = when {
         key.contains("back", true) -> performGlobalAction(GLOBAL_ACTION_BACK)
         key.contains("home", true) -> performGlobalAction(GLOBAL_ACTION_HOME)
         key.contains("enter", true) || key.contains("return", true) ->
@@ -303,33 +159,29 @@ class GraphAccessibilityService : AccessibilityService(), UiSurface {
         else -> false
     }
 
-    override suspend fun perform(step: Step, value: String): Boolean = when (step.action) {
-        ActionType.LAUNCH -> launch(step.selector.pkg.ifBlank { step.label }) != null
-        ActionType.CLICK -> {
-            // value = variante pedida (pick): se localiza ese paralelo por su etiqueta en el árbol vivo.
-            // Sin value, se usa el selector aprendido. Nunca por coordenadas guardadas.
-            val found = if (value.isNotBlank() && value != step.label) findByLabel(value) else find(step.selector)
-            val target = clickableAncestor(found) ?: found
-            if (target == null) false
-            else {
-                val r = Rect().also { target.getBoundsInScreen(it) }
-                bubble?.flyTo(r.centerX(), r.centerY())
-                // clic al nodo; si no es clickable, gesto sobre su posición VIVA (no una coordenada guardada)
-                target.performAction(AccessibilityNodeInfo.ACTION_CLICK) || tapGesture(r.centerX(), r.centerY())
-            }
-        }
-        ActionType.INPUT -> {
-            val node = editableSelf(find(step.selector))
-            if (node != null) {
-                val r = Rect().also { node.getBoundsInScreen(it) }
-                bubble?.flyTo(r.centerX(), r.centerY())
-                setText(node, value)
-            } else false
-        }
-        ActionType.SCROLL -> scroll(value != "up")
-        ActionType.KEY -> pressKey(value)
-        ActionType.WAIT -> { delay(value.toLongOrNull() ?: 500); true }
+    /* ---------- Gestures: herramientas MCP ---------- */
+
+    override suspend fun home(): Boolean = performGlobalAction(GLOBAL_ACTION_HOME)
+
+    override suspend fun notifications(): Boolean = performGlobalAction(GLOBAL_ACTION_NOTIFICATIONS)
+
+    override suspend fun appDrawer(): Boolean {
+        val m = resources.displayMetrics
+        val x = m.widthPixels / 2f
+        return gesture(Path().apply { moveTo(x, m.heightPixels * 0.92f); lineTo(x, m.heightPixels * 0.30f) }, 260)
     }
+
+    override suspend fun panHome(right: Boolean): Boolean {
+        val m = resources.displayMetrics
+        val y = m.heightPixels * 0.5f
+        val (x1, x2) = if (right) m.widthPixels * 0.82f to m.widthPixels * 0.18f
+        else m.widthPixels * 0.18f to m.widthPixels * 0.82f
+        return gesture(Path().apply { moveTo(x1, y); lineTo(x2, y) }, 240)
+    }
+
+    override suspend fun scrollMenu(down: Boolean): Boolean = scroll(down)
+
+    /* ---------- Primitivas de accesibilidad ---------- */
 
     private fun setText(node: AccessibilityNodeInfo, value: String): Boolean {
         node.performAction(AccessibilityNodeInfo.ACTION_FOCUS)
