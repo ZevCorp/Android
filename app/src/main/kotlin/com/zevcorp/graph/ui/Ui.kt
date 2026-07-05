@@ -11,16 +11,59 @@ import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.TextView
 
-/** Tokens de diseño de Graph (paleta del icon.svg / asistente del repo Graph). */
+/** Los tres modos de la app y de la cara. Todo en blanco/negro puro (nunca azul). */
+enum class ThemeMode { LIGHT, DARK, TRANSPARENT }
+
+/**
+ * Tokens de diseño de Graph. Tres modos que se alternan tocando la carita del cuadro de diálogo:
+ * CLARO (cara blanca · fondo blanco), OSCURO (cara oscura · fondo negro) y TRANSPARENCIA (relleno de
+ * la cara transparente, líneas negras). El acento es siempre el OPUESTO del fondo, de modo que el
+ * contraste es siempre blanco↔negro. Nunca hay azul.
+ */
 object Palette {
-    val bg = Color.parseColor("#0D141C")
-    val card = Color.parseColor("#16202C")
-    val cardBorder = Color.parseColor("#243244")
-    val accent = Color.parseColor("#2F8CFF")
-    val accentDark = Color.parseColor("#1E5FB4")
-    val text = Color.parseColor("#E9EEF5")
-    val textDim = Color.parseColor("#8FA3B8")
-    val danger = Color.parseColor("#E5534B")
+    @Volatile var mode: ThemeMode = ThemeMode.LIGHT
+
+    private const val WHITE = 0xFFFFFFFF.toInt()
+    private const val BLACK = 0xFF000000.toInt()
+    private val dark get() = mode == ThemeMode.DARK
+
+    /** Fondo de ventanas, tarjetas y cuadros de diálogo. */
+    val bg: Int get() = when (mode) {
+        ThemeMode.LIGHT -> WHITE
+        ThemeMode.DARK -> BLACK
+        ThemeMode.TRANSPARENT -> 0xF2FFFFFF.toInt() // blanco casi opaco
+    }
+    val card: Int get() = when (mode) {
+        ThemeMode.LIGHT -> WHITE
+        ThemeMode.DARK -> 0xFF0F0F0F.toInt()
+        ThemeMode.TRANSPARENT -> 0xF2FFFFFF.toInt()
+    }
+    val cardBorder: Int get() = if (dark) 0xFF2A2A2A.toInt() else 0xFFDADADA.toInt()
+    /** Acento = opuesto del fondo (negro sobre claro, blanco sobre oscuro). */
+    val accent: Int get() = if (dark) WHITE else BLACK
+    val accentDark: Int get() = if (dark) 0xFFCCCCCC.toInt() else 0xFF2B2B2B.toInt()
+    val text: Int get() = if (dark) 0xFFF5F5F5.toInt() else 0xFF0A0A0A.toInt()
+    val textDim: Int get() = if (dark) 0xFF9AA0A6.toInt() else 0xFF6B6B6B.toInt()
+    val danger = 0xFFE5534B.toInt()
+
+    /* ---------- La cara (FaceView) ---------- */
+    val faceLine: Int get() = if (dark) WHITE else BLACK
+    val faceFillTop: Int get() = if (dark) 0xFF1A1A1A.toInt() else WHITE
+    val faceFillBottom: Int get() = if (dark) BLACK else 0xFFEFEFEF.toInt()
+    val faceBorder: Int get() = if (dark) 0x33FFFFFF else 0x1F000000
+    val faceTransparent: Boolean get() = mode == ThemeMode.TRANSPARENT
+
+    /** Siguiente modo del ciclo claro → oscuro → transparencia → claro. */
+    fun next(): ThemeMode = when (mode) {
+        ThemeMode.LIGHT -> ThemeMode.DARK
+        ThemeMode.DARK -> ThemeMode.TRANSPARENT
+        ThemeMode.TRANSPARENT -> ThemeMode.LIGHT
+    }
+    fun label(): String = when (mode) {
+        ThemeMode.LIGHT -> "claro"
+        ThemeMode.DARK -> "oscuro"
+        ThemeMode.TRANSPARENT -> "transparente"
+    }
 }
 
 fun Context.dp(v: Int) = (v * resources.displayMetrics.density).toInt()
@@ -34,9 +77,9 @@ fun rounded(color: Int, radiusPx: Float, borderColor: Int = 0) = GradientDrawabl
 fun Context.pill(text: String): TextView = TextView(this).apply {
     this.text = text
     textSize = 11f
-    setTextColor(Palette.accent)
+    setTextColor(Palette.bg)
     typeface = Typeface.DEFAULT_BOLD
-    background = rounded(Color.argb(36, 47, 140, 255), dp(20).toFloat())
+    background = rounded(Palette.accent, dp(20).toFloat())
     setPadding(dp(10), dp(4), dp(10), dp(4))
 }
 
@@ -70,9 +113,9 @@ fun Context.button(text: String, primary: Boolean = false, onClick: () -> Unit):
         setTextColor(if (primary) Palette.bg else Palette.text)
         typeface = Typeface.DEFAULT_BOLD
         stateListAnimator = null
-        val base = rounded(if (primary) Color.WHITE else Palette.card, dp(14).toFloat(),
+        val base = rounded(if (primary) Palette.accent else Palette.card, dp(14).toFloat(),
             if (primary) 0 else Palette.cardBorder)
-        val ripple = if (primary) Color.parseColor("#33000000") else Palette.accentDark
+        val ripple = if (primary) Color.argb(48, 128, 128, 128) else Palette.accentDark
         background = RippleDrawable(ColorStateList.valueOf(ripple), base, null)
         setPadding(dp(16), dp(12), dp(16), dp(12))
         setOnClickListener { onClick() }

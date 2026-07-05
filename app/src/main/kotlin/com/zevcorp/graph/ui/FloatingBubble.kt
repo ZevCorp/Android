@@ -52,6 +52,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private lateinit var bubble: FaceView
     private lateinit var bubbleParams: WindowManager.LayoutParams
     private var panel: View? = null
+    /** Momento del último autocierre por toque-fuera: evita que ese mismo toque en la carita reabra. */
+    private var outsideCloseAt = 0L
     private var dragAnimator: ValueAnimator? = null
 
     private var speech: TextView? = null
@@ -91,7 +93,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             x = service.resources.displayMetrics.widthPixels - size - service.dp(8)
             y = service.resources.displayMetrics.heightPixels / 3
         }
-        bubble.elevation = 12f
+        bubble.elevation = 30f // sombra profunda que contrasta con el fondo (outline en FaceView)
         attachDrag(size)
         bubble.setOnClickListener {
             when {
@@ -105,7 +107,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 execLive -> stopExecLive()
                 // Durante la escucha por esquina: el toque termina la grabación y procesa.
                 voiceDock.listening -> voiceDock.stopNow()
-                panel == null -> openPanel()
+                // Re-tocar la carita cierra/abre el panel. Si el panel se acaba de cerrar porque este
+                // mismo toque cayó "fuera", no lo reabrimos.
+                panel == null -> if (android.os.SystemClock.uptimeMillis() - outsideCloseAt > 350) openPanel()
                 else -> closePanel()
             }
         }
@@ -120,9 +124,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var idleJob: Job? = null
     private var idleAnimator: ValueAnimator? = null
     @Volatile private var shrunk = false
-    // Curva suave estilo Euler/Material (ease-in-out) para una transición placentera.
-    private val idleEase = android.view.animation.PathInterpolator(0.4f, 0f, 0.2f, 1f)
-    private val idleGrow = OvershootInterpolator(1.2f)
+    // Transición "dopamínica": encoge con un rebote suave y agranda con un pop marcado (overshoot).
+    private val idleEase = OvershootInterpolator(1.6f)
+    private val idleGrow = OvershootInterpolator(3.4f)
 
     /** Reinicia el temporizador de reposo; si estaba encogida, la agranda de nuevo. */
     private fun wake() {
@@ -135,7 +139,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         idleJob?.cancel()
         idleJob = scope.launch {
             delay(15_000) // ~15 s sin usarla → se encoge para no estorbar
-            if (!shrunk) { animateScale(0.34f, idleEase); startWander() }
+            // Nunca se encoge con el cuadro de diálogo abierto: se mantiene grande mientras lo usas.
+            if (!shrunk && panel == null) { animateScale(0.56f, idleEase); startWander() }
         }
     }
 
@@ -311,7 +316,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scope.launch {
             wake() // si está hablando/narrando, que esté a tamaño completo
             val bubbleText = speech ?: TextView(service).apply {
-                setTextColor(Color.WHITE)
+                setTextColor(Palette.bg)
                 textSize = 13f
                 typeface = Typeface.DEFAULT_BOLD
                 setPadding(service.dp(14), service.dp(10), service.dp(14), service.dp(10))
@@ -448,12 +453,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
 
         val header = c.row()
-        header.addView(FaceView(c), LinearLayout.LayoutParams(c.dp(38), c.dp(38)))
+        // La carita del panel: TÓCALA para alternar el tema (claro → oscuro → transparencia).
+        val headFace = FaceView(c)
+        headFace.setOnClickListener { cycleTheme() }
+        header.addView(headFace, LinearLayout.LayoutParams(c.dp(40), c.dp(40)))
         val titles = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(c.dp(10), 0, 0, 0) }
         titles.addView(c.title("Graph", 16f))
-        titles.addView(c.caption(if (app.ui != null) "Pídeme algo 👇" else "Activa accesibilidad"))
+        titles.addView(c.caption(if (app.ui != null) "Toca mi cara: tema ${Palette.label()}" else "Activa accesibilidad"))
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
-        header.addView(c.iconChip(Icon.CLOSE) { closePanel() })
         body.addView(header)
         body.gap(c.dp(10))
 
@@ -486,8 +493,22 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         bar.addView(c.iconChip(Icon.SEND, primary = true) { submit(input.text.toString()) })
         body.addView(bar)
 
-        val scroll = ScrollView(c).apply { addView(body); elevation = 16f }
-        val params = overlayParams(c.dp(316), -2, focusable = true).apply {
+        val scroll = ScrollView(c).apply {
+            addView(body); elevation = 16f
+            // Un toque FUERA del panel lo cierra y deja pasar el toque al teléfono (no bloquea nada).
+            setOnTouchListener { _, e ->
+                if (e.action == MotionEvent.ACTION_OUTSIDE) { onOutsidePanelTouch(); true } else false
+            }
+        }
+        // Focusable (para poder escribir) pero NO modal: los toques fuera van al resto del teléfono y,
+        // con WATCH_OUTSIDE_TOUCH, recibimos ACTION_OUTSIDE para autocerrarnos. Antes era modal y
+        // bloqueaba todo el teléfono hasta tocar la X (que ya no existe).
+        val params = WindowManager.LayoutParams(
+            c.dp(316), WindowManager.LayoutParams.WRAP_CONTENT,
+            WindowManager.LayoutParams.TYPE_ACCESSIBILITY_OVERLAY,
+            WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL or WindowManager.LayoutParams.FLAG_WATCH_OUTSIDE_TOUCH,
+            PixelFormat.TRANSLUCENT,
+        ).apply {
             gravity = Gravity.TOP or Gravity.START
             x = (bubbleParams.x - c.dp(322)).coerceAtLeast(c.dp(4))
             y = bubbleParams.y.coerceAtMost(service.resources.displayMetrics.heightPixels - c.dp(240))
@@ -495,6 +516,25 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
         wm.addView(scroll, params)
         panel = scroll
+        wake()            // asegura que la carita esté grande…
+        idleJob?.cancel() // …y no se encoja mientras el panel esté abierto
+    }
+
+    /** Toque fuera del panel: se cierra y el toque pasa al teléfono (marca la hora para no reabrir). */
+    private fun onOutsidePanelTouch() {
+        outsideCloseAt = android.os.SystemClock.uptimeMillis()
+        closePanel()
+    }
+
+    /** Alterna el tema de TODA la app (claro → oscuro → transparencia) tocando la carita del panel. */
+    private fun cycleTheme() {
+        Palette.mode = Palette.next()
+        app.prefs.edit().putString("theme", Palette.mode.name).apply()
+        bubble.invalidate() // la carita grande cambia de tema al instante
+        toast("Tema ${Palette.label()}")
+        // Repinta el panel con los nuevos colores en el próximo frame (no lo removemos durante su
+        // propio evento de toque).
+        scope.launch { closePanel(); openPanel() }
     }
 
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
@@ -516,6 +556,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private fun closePanel() {
         panel?.let { runCatching { wm.removeView(it) } }
         panel = null
+        scheduleIdleShrink() // al cerrar, retoma el ciclo de reposo (encoger tras un rato)
     }
 
     /* ---------- El asistente pregunta: respuesta por texto o voz ---------- */
@@ -682,7 +723,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         if (answerMic != null) return
         val c = service
         val d = c.dp(52)
-        val mic = IconView(c, Icon.MIC, tint = Color.WHITE).apply {
+        val mic = IconView(c, Icon.MIC, tint = Palette.bg).apply {
             val pad = c.dp(13)
             setPadding(pad, pad, pad, pad)
             background = rounded(Palette.accent, (d / 2).toFloat())
@@ -752,7 +793,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             if (execMic != null) return@launch
             val c = service
             val d = c.dp(54)
-            val mic = IconView(c, Icon.MIC, tint = Color.WHITE).apply {
+            val mic = IconView(c, Icon.MIC, tint = Palette.bg).apply {
                 val pad = c.dp(14)
                 setPadding(pad, pad, pad, pad)
                 background = rounded(Palette.accent, (d / 2).toFloat())

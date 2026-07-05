@@ -167,7 +167,7 @@ class VoiceDock(
 
     private fun showBadge(text: String) {
         val b = badge ?: TextView(service).apply {
-            setTextColor(Color.WHITE)
+            setTextColor(Palette.bg)
             textSize = 13f
             typeface = Typeface.DEFAULT_BOLD
             setPadding(service.dp(14), service.dp(8), service.dp(14), service.dp(8))

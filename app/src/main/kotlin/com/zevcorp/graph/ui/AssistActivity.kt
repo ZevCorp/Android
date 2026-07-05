@@ -262,7 +262,7 @@ class AssistActivity : Activity() {
         val tv = TextView(this).apply {
             this.text = text
             textSize = 16f
-            setTextColor(if (mine) Color.WHITE else Palette.text)
+            setTextColor(if (mine) Palette.bg else Palette.text)
             setLineSpacing(dp(3).toFloat(), 1f)
             setPadding(dp(16), dp(11), dp(16), dp(11))
             maxWidth = resources.displayMetrics.widthPixels * 78 / 100

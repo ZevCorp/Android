@@ -34,11 +34,15 @@ class MainActivity : Activity(), UserChannel {
     private lateinit var logView: TextView
     private lateinit var mcpPanel: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
+    /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
+    private var builtWithMode = Palette.mode
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        builtWithMode = Palette.mode
         window.statusBarColor = Palette.bg
         window.navigationBarColor = Palette.bg
+        applyBarIcons()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -258,7 +262,19 @@ class MainActivity : Activity(), UserChannel {
 
     override fun onResume() {
         super.onResume()
+        // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
+        // colores nuevos (blanco/negro coherente con la carita).
+        if (builtWithMode != Palette.mode) { recreate(); return }
         if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
+    }
+
+    /** Íconos de la barra de estado/navegación: oscuros sobre fondo claro, claros sobre fondo oscuro. */
+    private fun applyBarIcons() {
+        val lightBg = Palette.mode != ThemeMode.DARK
+        val controller = window.insetsController ?: return
+        val mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+            android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+        controller.setSystemBarsAppearance(if (lightBg) mask else 0, mask)
     }
 
     /** Herramientas aprendidas por enseñanza: nombre, cuántos elementos y tocable para ver todo. */

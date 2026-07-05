@@ -16,6 +16,8 @@ import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.MemoryStore
+import com.zevcorp.graph.ui.Palette
+import com.zevcorp.graph.ui.ThemeMode
 import com.zevcorp.graph.voice.IntentDistiller
 import com.zevcorp.graph.platform.GeminiLearning
 import com.zevcorp.graph.platform.GraphAccessibilityService
@@ -273,6 +275,9 @@ class GraphApp : Application() {
         super.onCreate()
         instance = this
         prefs = getSharedPreferences("graph", MODE_PRIVATE)
+        // Tema guardado (claro por defecto): cara y app en blanco/negro, sin azul.
+        Palette.mode = runCatching { ThemeMode.valueOf(prefs.getString("theme", ThemeMode.LIGHT.name)!!) }
+            .getOrDefault(ThemeMode.LIGHT)
         // Trae los aprendizajes y la memoria de la nube (y sube lo local que falte allá).
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()

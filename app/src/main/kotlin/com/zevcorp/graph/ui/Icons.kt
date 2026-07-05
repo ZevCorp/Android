@@ -139,7 +139,7 @@ fun Context.iconChip(
     container.addView(iv)
     container.layoutParams = FrameLayout.LayoutParams(d, d)
     container.background = rounded(
-        if (primary) android.graphics.Color.WHITE else Palette.card,
+        if (primary) Palette.accent else Palette.card,
         (sizeDp / 2).toFloat() * resources.displayMetrics.density,
         if (primary) 0 else Palette.cardBorder,
     )

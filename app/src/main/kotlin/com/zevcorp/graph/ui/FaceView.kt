@@ -60,15 +60,23 @@ class FaceView(context: Context) : View(context) {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
         strokeJoin = Paint.Join.ROUND
-        color = Color.parseColor("#0B0E12") // líneas del rostro negras
     }
     private val fill = Paint(Paint.ANTI_ALIAS_FLAG)
-    private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        style = Paint.Style.STROKE
-        color = Color.argb(28, 0, 0, 0)
-    }
+    private val border = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.STROKE }
     private val path = Path()
     private val squircle = Path()
+
+    init {
+        // Sombra profunda: el contorno squircle proyecta una sombra nítida y grande incluso cuando el
+        // relleno es transparente (modo transparencia). La elevación real la fija la burbuja.
+        outlineProvider = object : android.view.ViewOutlineProvider() {
+            override fun getOutline(view: View, outline: android.graphics.Outline) {
+                val s = minOf(view.width, view.height)
+                val inset = (s * 0.02f).toInt()
+                outline.setOval(inset, inset, view.width - inset, view.height - inset)
+            }
+        }
+    }
 
     /**
      * Squircle (superelipse |x|^n+|y|^n=1, n≈4): el "cuadrado de bordes con curva de Euler" de Apple,
@@ -96,14 +104,24 @@ class FaceView(context: Context) : View(context) {
         fun x(v: Float) = cx + v * s
         fun y(v: Float) = cy + v * s
 
-        fill.shader = LinearGradient(
-            0f, 0f, width.toFloat(), height.toFloat(),
-            Color.WHITE, Color.parseColor("#EEF2F6"), Shader.TileMode.CLAMP) // fill blanco
         val r = minOf(width, height) / 2f - s
-        canvas.drawPath(squirclePath(cx, cy, r), fill)
-        border.strokeWidth = 1.5f * s
-        canvas.drawPath(squirclePath(cx, cy, r), border)
+        // Relleno del rostro: opaco en claro/oscuro; en modo transparencia NO se rellena (solo líneas).
+        if (!Palette.faceTransparent) {
+            fill.shader = LinearGradient(
+                0f, 0f, width.toFloat(), height.toFloat(),
+                Palette.faceFillTop, Palette.faceFillBottom, Shader.TileMode.CLAMP)
+            canvas.drawPath(squirclePath(cx, cy, r), fill)
+            border.color = Palette.faceBorder
+            border.strokeWidth = 1.5f * s
+            canvas.drawPath(squirclePath(cx, cy, r), border)
+        } else {
+            // Sin relleno: dibuja el contorno del rostro con la misma línea (negra) para que se lea.
+            border.color = Palette.faceLine
+            border.strokeWidth = 2.4f * s
+            canvas.drawPath(squirclePath(cx, cy, r), border)
+        }
 
+        stroke.color = Palette.faceLine
         stroke.strokeWidth = 4f * s
         canvas.save()
         canvas.rotate(-2f, cx, cy)

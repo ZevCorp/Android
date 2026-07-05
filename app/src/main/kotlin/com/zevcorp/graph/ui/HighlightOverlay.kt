@@ -57,14 +57,16 @@ class HighlightOverlay(private val service: AccessibilityService) {
         var boxes: List<RectF> = emptyList()
         private val screenLoc = IntArray(2)
         private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE; strokeWidth = 7f; color = Color.parseColor("#2F8CFF")
+            style = Paint.Style.STROKE; strokeWidth = 7f
         }
-        private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL; color = Color.parseColor("#262F8CFF")
-        }
+        private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
         override fun onDraw(canvas: Canvas) {
             if (boxes.isEmpty()) return
+            // Contorno en el acento del tema (negro en claro, blanco en oscuro): nunca azul.
+            val a = Palette.accent
+            stroke.color = a
+            glow.color = Color.argb(38, Color.red(a), Color.green(a), Color.blue(a))
             // Los bounds son coordenadas de PANTALLA (getBoundsInScreen); la ventana puede no
             // empezar en (0,0), así que se resta su posición real — igual que hace TalkBack.
             getLocationOnScreen(screenLoc)
