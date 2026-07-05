@@ -96,8 +96,10 @@ class GeminiLearning(
                 descripción y llamará la herramienta con "taps": las etiquetas a tocar EN ORDEN. Así que tu
                 descripción es LA DOCUMENTACIÓN: explica qué hace la pantalla/app, qué es cada grupo de
                 elementos (p.ej. dígitos 0-9, operadores, igual, borrar) y cómo componer secuencias para
-                tareas típicas, con un ejemplo. En elements incluye TODAS las etiquetas útiles de la pantalla
-                (generaliza: no solo las que el usuario tocó), copiadas EXACTAS de la lista.
+                tareas típicas, con un ejemplo. En elements incluye SOLO las etiquetas que IMPORTAN para las
+                tareas de esta pantalla (generaliza al grupo completo relevante —no solo lo que el usuario
+                tocó— pero DESCARTA el ruido: barras del sistema, decoraciones, elementos irrelevantes).
+                Menos elementos = ejecución más rápida y barata. Cópialas EXACTAS de la lista.
                 Responde SOLO JSON:
                 {"name": "nombre_snake_case", "description": "documentación completa", "elements": ["...", "..."]}
             """.trimIndent()

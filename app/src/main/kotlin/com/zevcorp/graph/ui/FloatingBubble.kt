@@ -63,7 +63,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 ttsReady = true
             }
         }
-        val size = service.dp(62)
+        val size = service.dp(82)
         bubble = FaceView(service)
         bubbleParams = overlayParams(size, size, focusable = false).apply {
             gravity = Gravity.TOP or Gravity.START
@@ -184,7 +184,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         view.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
         val w = view.measuredWidth.coerceAtLeast(service.dp(60))
         val onLeftHalf = bubbleParams.x < service.resources.displayMetrics.widthPixels / 2
-        p.x = if (onLeftHalf) bubbleParams.x + service.dp(66) else (bubbleParams.x - w - service.dp(10)).coerceAtLeast(service.dp(4))
+        p.x = if (onLeftHalf) bubbleParams.x + bubbleParams.width + service.dp(4) else (bubbleParams.x - w - service.dp(10)).coerceAtLeast(service.dp(4))
         p.y = (bubbleParams.y + service.dp(6)).coerceAtLeast(service.dp(4))
         runCatching { wm.updateViewLayout(view, p) }
     }
