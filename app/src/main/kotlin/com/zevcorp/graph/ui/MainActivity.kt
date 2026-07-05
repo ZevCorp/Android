@@ -42,7 +42,6 @@ class MainActivity : Activity(), UserChannel {
         builtWithMode = Palette.mode
         window.statusBarColor = Palette.bg
         window.navigationBarColor = Palette.bg
-        applyBarIcons()
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -242,6 +241,7 @@ class MainActivity : Activity(), UserChannel {
         root.addView(mcp)
 
         setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
+        applyBarIcons() // tras setContentView: ya existe el decorView (antes daba NPE)
         requestPermissions(arrayOf(
             android.Manifest.permission.RECORD_AUDIO,
             android.Manifest.permission.POST_NOTIFICATIONS,
@@ -270,11 +270,14 @@ class MainActivity : Activity(), UserChannel {
 
     /** Íconos de la barra de estado/navegación: oscuros sobre fondo claro, claros sobre fondo oscuro. */
     private fun applyBarIcons() {
-        val lightBg = Palette.mode != ThemeMode.DARK
-        val controller = window.insetsController ?: return
-        val mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-            android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
-        controller.setSystemBarsAppearance(if (lightBg) mask else 0, mask)
+        // Llamar SOLO tras setContentView: antes, window.insetsController lanza NPE (decorView aún nulo).
+        runCatching {
+            val lightBg = Palette.mode != ThemeMode.DARK
+            val controller = window.decorView.windowInsetsController ?: return
+            val mask = android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS
+            controller.setSystemBarsAppearance(if (lightBg) mask else 0, mask)
+        }
     }
 
     /** Herramientas aprendidas por enseñanza: nombre, cuántos elementos y tocable para ver todo. */
