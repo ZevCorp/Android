@@ -49,6 +49,13 @@ Hoy los gestos están hardcodeados contra la superficie de accesibilidad; en v2 
 
 `Phone` son las primitivas de computer-use (tap/type/openApp/scroll/swipe/pressKey + `state()` con screenshot). `Gestures` son los gestos semánticos que MCP expone (home, appDrawer, notifications, panHome, scrollMenu). En Android ambos los implementa `GraphAccessibilityService` vía `dispatchGesture` y `performGlobalAction`. Para otra plataforma (DOM, macOS AX, Windows UIA) se implementan estos dos puertos sin tocar `core/`.
 
-## Fuera de v1 (se integran después)
+## Enseñanza: pasiva y activa
 
-Modo enseñanza, compartir pantalla, workflows y control por terminal. La base actual está pensada para crecer: los workflows futuros serán capacidades MCP autogeneradas y documentadas por el asistente.
+Sobre el motor mixto viven dos capas de enseñanza que alimentan la capa MCP:
+
+- **Pasiva** — se activa en la **app principal**. El `GraphAccessibilityService` observa clics + árbol de UI y `PassiveLearning` (core) consolida el mapa MCP de cada app al salir de ella (`GeminiLearning` en app). Mantener oprimido el 🎓 de la burbuja dibuja los contornos de lo aprendido (`HighlightOverlay`).
+- **Activa** — el **🎓 de la burbuja**, al tocarlo. `ActiveLearning` (app) lanza `ScreenTeachActivity` (permiso de captura) → `ScreenTeachService` graba pantalla + audio (MediaProjection + MediaRecorder). Al terminar, `GeminiVideo` sube el mp4 a la Files API de Gemini y lo estructura como **conocimiento textual por app**, guardado en `MemoryStore` (memoria durable) y consumido fielmente por el motor al operar esa app. **Fase 1: solo texto, sin árbol de UI.**
+
+## Fuera de esta fase (se integran después)
+
+Workflows, control por terminal, y la estructuración del **árbol de UI** en la enseñanza activa. La base está pensada para crecer: los workflows futuros serán capacidades MCP autogeneradas y documentadas por el asistente.

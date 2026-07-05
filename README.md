@@ -7,7 +7,7 @@ Un asistente con carita flotante que controla tu teléfono Android. Le pides alg
 
 No hay modos separados: es **un solo motor de ejecución mixto**. El modelo decide, turno a turno, si usar un gesto MCP o computer-use.
 
-> **v1 intencionalmente mínima.** Esta versión es la base limpia. No hay modo enseñanza, ni compartir pantalla, ni workflows, ni terminal — se integrarán después sobre esta base. Sí está el botón de **detener**.
+> **Base mínima que crece.** El corazón es el motor mixto. Encima ya viven: enseñanza **pasiva** (observación silenciosa) y enseñanza **activa** (compartir pantalla → conocimiento textual por app, fase 1 sin árbol de UI). Aún no hay workflows ni terminal — se integrarán después. Está el botón de **detener**.
 
 ## Herramientas MCP
 
@@ -42,11 +42,23 @@ Estas usan los **Common Intents de Android** — llamadas de sistema directas, n
 
 **Herramientas aprendidas** (capa de enseñanza): además, el asistente puede *crear* herramientas MCP nuevas enseñándole (ver abajo). Se ejecutan reproduciendo una secuencia de toques sobre el árbol de UI.
 
-## Capa de enseñanza PASIVA (el asistente estructura el MCP de cada app)
+## Dos capas de enseñanza (el asistente estructura el MCP de cada app)
 
-Toca **🎓** en la burbuja para **activar/desactivar** el modo enseñanza pasiva (el botón cambia de estado). No hay barra, ni botón de detener, ni popups, ni iluminación: usas el teléfono **con normalidad** y el asistente solo observa — captura el **árbol de UI completo** y tus **clics como señales de valor**. Cuando **sales de una app** (o apagas el modo), estructura lo observado como herramienta MCP con criterio estricto: **solo guarda lo que entendió con certeza muy alta y tiene valor real según tus clics**; si la app ya tenía mapa, lo **refina** en vez de duplicarlo.
+Hay **dos modos** de enseñanza, separados a propósito:
 
-**Mantén oprimido el 🎓** para ver lo que ya sabe: se iluminan los contornos de todos los elementos ya trackeados en MCPs de la app visible, y el overlay se actualiza mientras navegas a otras apps. Vuelve a mantenerlo oprimido para ocultarlo.
+### Enseñanza PASIVA (se activa en la app principal)
+
+Actívala/desactívala desde el botón **"Aprendizaje pasivo"** de la **app principal** (antes estaba en la burbuja). No hay barra, ni botón de detener, ni popups, ni iluminación: usas el teléfono **con normalidad** y el asistente solo observa — captura el **árbol de UI completo** y tus **clics como señales de valor**. Cuando **sales de una app** (o apagas el modo), estructura lo observado como herramienta MCP con criterio estricto: **solo guarda lo que entendió con certeza muy alta y tiene valor real según tus clics**; si la app ya tenía mapa, lo **refina** en vez de duplicarlo.
+
+**Mantén oprimido el 🎓** de la burbuja para ver lo que ya sabe: se iluminan los contornos de todos los elementos ya trackeados en MCPs de la app visible, y el overlay se actualiza mientras navegas a otras apps. Vuelve a mantenerlo oprimido para ocultarlo. (Esto no cambió.)
+
+### Enseñanza ACTIVA (el 🎓 de la burbuja, al tocarlo — compartir pantalla)
+
+**Toca el 🎓** de la burbuja para iniciar la enseñanza **activa**: se **comparte la pantalla** (se graba video **y audio**) y le enseñas al asistente hablándole mientras le muestras cosas. Vuelve a tocar el 🎓 (o la acción de la notificación) para **terminar**. Al terminar, **todo el video se procesa con Gemini** y se estructura como **conocimiento textual por app** en la capa MCP (la memoria durable / knowledge-base): p.ej. *"el contacto de mi mamá en WhatsApp se llama 'Ale', no 'mamá'"*. Cuando después el asistente vaya a **usar esa app**, consume **fielmente** ese contexto completo.
+
+Como el micrófono está ocupado grabando, si al procesar el video queda algo por confirmar, el asistente te lo **pregunta por voz al terminar** (igual que puede preguntarte durante la enseñanza pasiva), y tu respuesta también se guarda.
+
+> **Fase 1 (esta versión):** la enseñanza activa **aún no** estructura el árbol de UI — guarda **solo texto** de cómo usar las apps en la knowledge-base MCP. El árbol de UI llegará después.
 
 Mientras el modo está activo, el asistente puede **intervenir por voz por iniciativa propia**, con una cadena de pensamiento corta que decide entre tres: **proponer ayuda** con algo concreto y pendiente que ve en pantalla ("veo que te escribieron, ¿quieres que te ayude con eso?" — si aceptas, lo ejecuta), **preguntar** una duda genuinamente útil (se guarda como memoria durable de esa app), o **quedarse callado** (el default). Siempre que interviene por voz, respondes con el **micrófono sticky** que aparece bajo la carita.
 
@@ -76,6 +88,7 @@ Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`)
 Al activar el servicio de accesibilidad aparece la carita de Graph como overlay permanente sobre cualquier app (`TYPE_ACCESSIBILITY_OVERLAY`, sin permisos extra). Es arrastrable y desde ella:
 
 - 💬 le pides algo por **texto** o **voz** (🎤 dicta sin abrir la app)
+- 🎓 **toque**: inicia/termina la enseñanza **activa** (compartir pantalla); **mantener oprimido**: muestra/oculta lo aprendido en la app visible
 - 🚀 durante la ejecución vuela hacia donde actúa y narra con personalidad (TTS + globo de diálogo)
 - ⏹ un botón rojo permite **detener** en cualquier momento
 - ❓ si el asistente tiene una duda real, te pregunta ahí mismo (respondes por texto o voz)

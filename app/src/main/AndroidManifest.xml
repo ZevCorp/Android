@@ -8,6 +8,7 @@
     <uses-permission android:name="android.permission.CALL_PHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
 
     <application
         android:name=".GraphApp"
@@ -57,6 +58,21 @@
             android:name=".platform.MicService"
             android:exported="false"
             android:foregroundServiceType="microphone" />
+
+        <!-- Aprendizaje ACTIVO: compartir pantalla (video) + audio del micrófono para que el
+             usuario le enseñe cómo usa sus apps; el video se estructura como conocimiento MCP. -->
+        <service
+            android:name=".platform.ScreenTeachService"
+            android:exported="false"
+            android:foregroundServiceType="mediaProjection|microphone" />
+
+        <!-- Actividad transparente que pide el permiso de captura de pantalla (MediaProjection). -->
+        <activity
+            android:name=".ui.ScreenTeachActivity"
+            android:exported="false"
+            android:excludeFromRecents="true"
+            android:launchMode="singleInstance"
+            android:theme="@style/AssistTheme" />
 
         <receiver
             android:name=".platform.StopReceiver"

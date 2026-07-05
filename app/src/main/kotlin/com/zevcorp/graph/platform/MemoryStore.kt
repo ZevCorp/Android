@@ -41,14 +41,29 @@ class MemoryStore(root: File, private val pushToCloud: (MemoryNote) -> Unit = {}
         return true
     }
 
-    /** Bloque para el system prompt del motor de ejecución (vacío si no hay memoria). */
+    /**
+     * Bloque para el system prompt del motor de ejecución (vacío si no hay memoria). Se agrupa por
+     * app y las notas de una app NUNCA se recortan: cuando el asistente vaya a usar esa app debe
+     * tener su contexto COMPLETO (p.ej. todo lo que sabe de WhatsApp). Solo las notas generales
+     * (sin app) se limitan si fueran muchísimas.
+     */
     fun promptBlock(): String {
-        val notes = all().takeLast(40)
+        val notes = all()
         if (notes.isEmpty()) return ""
-        return notes.joinToString("\n") { n ->
-            if (n.app.isBlank()) "- ${n.note}" else "- [${n.app}] ${n.note}"
-        }
+        val general = notes.filter { it.app.isBlank() }.takeLast(40)
+        val byApp = notes.filter { it.app.isNotBlank() }.groupBy { it.app }
+        return buildString {
+            general.forEach { appendLine("- ${it.note}") }
+            byApp.forEach { (app, ns) ->
+                appendLine("· $app:")
+                ns.forEach { appendLine("   - ${it.note}") }
+            }
+        }.trim()
     }
+
+    /** Todas las notas de una app concreta, sin recortar (contexto completo al abrir esa app). */
+    fun notesForApp(app: String): List<MemoryNote> =
+        all().filter { it.app.isNotBlank() && it.app.equals(app, ignoreCase = true) }
 
     /** Arranque: baja la nube y sube lo local que falte allá. Llamar desde IO. */
     fun syncFromCloud(remote: List<MemoryNote>) {

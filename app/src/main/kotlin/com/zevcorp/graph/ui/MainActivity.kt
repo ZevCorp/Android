@@ -10,6 +10,7 @@ import android.speech.RecognizerIntent
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
@@ -133,6 +134,30 @@ class MainActivity : Activity(), UserChannel {
         bar.addView(iconChip(Icon.SEND, sizeDp = 44, primary = true) { submitPrompt() })
         ask.addView(bar)
         root.addView(ask)
+        root.gap(dp(14))
+
+        // Aprendizaje pasivo: se activa/desactiva AQUÍ (antes estaba en la burbuja). Graph observa
+        // el uso normal del teléfono y estructura el mapa MCP de cada app al salir de ella.
+        val learn = card()
+        val learnHead = row()
+        learnHead.addView(iconChip(Icon.TEACH, sizeDp = 34, tint = Palette.accent))
+        learnHead.addView(title("Aprendizaje pasivo").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        learn.addView(learnHead)
+        learn.gap(dp(4))
+        learn.addView(caption("Graph observa cómo usas tus apps (sin interrumpir) y estructura su mapa " +
+            "MCP al salir de cada una. Para ver lo aprendido, mantén oprimido el 🎓 de la burbuja. " +
+            "El 🎓 de la burbuja, al tocarlo, es el aprendizaje activo (compartir pantalla)."))
+        learn.gap(dp(10))
+        var learnBtn: Button? = null
+        fun paintLearn() {
+            learnBtn?.text = if (app.passive.active) "Desactivar aprendizaje pasivo" else "Activar aprendizaje pasivo"
+        }
+        val learnButton = button("Activar aprendizaje pasivo") { togglePassive { paintLearn() } }
+        learnBtn = learnButton
+        learn.addView(learnButton)
+        paintLearn()
+        root.addView(learn)
         root.gap(dp(14))
 
         // Velocidad de ejecución: pausa entre los steps de un MCP que se envían juntos
@@ -276,6 +301,21 @@ class MainActivity : Activity(), UserChannel {
     }
 
     private fun log(message: String) = LogBus.log("app", message)
+
+    /** Activa/desactiva el aprendizaje pasivo (movido aquí desde la burbuja). */
+    private fun togglePassive(after: () -> Unit) {
+        if (app.ui == null) {
+            log("Activa el servicio de accesibilidad de Graph")
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return
+        }
+        val passive = app.passive
+        if (!passive.active) { passive.start(); after() }
+        else scope.launch {
+            runCatching { withContext(Dispatchers.Default) { passive.stop() } }
+                .onFailure { log("Aprendizaje pasivo: ${it.message}") }
+            after()
+        }
+    }
 
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {

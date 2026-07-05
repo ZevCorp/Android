@@ -593,17 +593,18 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
     }
 
-    /* ---------- Enseñanza PASIVA: el 🎓 alterna el modo; mantenerlo oprimido muestra lo aprendido ---------- */
+    /* ---------- Enseñanza ACTIVA: el 🎓 comparte pantalla; mantenerlo oprimido muestra lo aprendido ---------- */
 
     /**
-     * Botón 🎓 del panel. Toque: activa/desactiva la enseñanza pasiva (sin barra, sin botón de
-     * detener, sin popups: el asistente solo observa el uso normal y consolida al salir de cada
-     * app). Mantener oprimido: alterna la visualización de los elementos ya trackeados en MCPs.
+     * Botón 🎓 del panel. Toque: activa/detiene la enseñanza ACTIVA (comparte pantalla: graba video +
+     * audio y al terminar estructura lo enseñado como conocimiento MCP por app). Mantener oprimido:
+     * alterna la visualización de los elementos ya trackeados en MCPs (igual que antes). La activación
+     * de la enseñanza PASIVA se movió a la app principal.
      */
     private fun learnToggleButton(): View {
-        val active = app.passive.active
-        // Cuando está activo, el chip se pinta en acento y el ícono en blanco.
-        val button = service.iconChip(Icon.TEACH, primary = active) { toggleTeaching() }
+        val active = app.activeLearning.busy
+        // Cuando está grabando/procesando, el chip se pinta en acento y el ícono en blanco.
+        val button = service.iconChip(Icon.TEACH, primary = active) { toggleActiveLearning() }
         if (active) button.background = rounded(Palette.accent, service.dp(21).toFloat())
         button.setOnLongClickListener {
             val on = (service as? GraphAccessibilityService)?.toggleLearnedVisualization() ?: false
@@ -614,15 +615,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         return button
     }
 
-    private fun toggleTeaching() {
+    private fun toggleActiveLearning() {
         if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
         closePanel()
-        val passive = app.passive
-        if (!passive.active) passive.start()
-        else scope.launch {
-            runCatching { withContext(Dispatchers.Default) { passive.stop() } }
-                .onFailure { toast("Enseñanza: ${it.message}") }
-        }
+        app.activeLearning.toggle()
     }
 
     /** Parpadeo de la carita: 1 vez al pasar a ejecución consciente, 2 al pasar a subconsciente. */

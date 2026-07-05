@@ -321,7 +321,10 @@ class GeminiBrain(
             if (mem.isBlank()) return ""
             return """
         MEMORIA DEL USUARIO (reglas y preferencias que te ha enseñado; aplícalas cuando la tarea lo
-        amerite, sin que te las repita):
+        amerite, sin que te las repita). Está agrupada por app: cuando vayas a USAR una app (abrirla u
+        operarla, p.ej. WhatsApp), aplica AL PIE DE LA LETRA todo lo que aparece bajo esa app — es su
+        contexto completo (nombres de contactos, cuentas, preferencias). Nunca ignores ni "aproximes"
+        un dato que ya conoces de la app que vas a usar.
         $mem
             """.trimIndent()
         }

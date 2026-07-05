@@ -7,10 +7,12 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.SharedPreferences
+import com.zevcorp.graph.platform.ActiveLearning
 import com.zevcorp.graph.platform.AndroidSystemApi
 import com.zevcorp.graph.platform.Anticipation
 import com.zevcorp.graph.platform.CloudSync
 import com.zevcorp.graph.platform.GeminiBrain
+import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.MemoryStore
@@ -58,16 +60,27 @@ class GraphApp : Application() {
     }
 
     /**
-     * Enseñanza PASIVA: se alterna con el 🎓 de la burbuja. Observa los clics del usuario usando el
-     * teléfono con normalidad y consolida el MCP de cada app cuando el usuario sale de ella. En el
-     * modo iniciado por el usuario, el asistente puede interrumpir y preguntarle cosas por voz.
+     * Enseñanza PASIVA: se activa/desactiva desde la APP PRINCIPAL (antes en la burbuja). Observa los
+     * clics del usuario usando el teléfono con normalidad y consolida el MCP de cada app cuando el
+     * usuario sale de ella. En el modo iniciado por el usuario, el asistente puede interrumpir y
+     * preguntarle cosas por voz.
      */
     val passive by lazy {
         PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus,
             inquirer = LearningInquiry(apiKey, model, memories, scope,
-                busy = { executing || bubble?.voiceBusy == true },
+                busy = { executing || bubble?.voiceBusy == true || activeLearning.busy },
                 askByVoice = { q -> bubble?.askAloud(q) ?: "" },
                 runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }))
+    }
+
+    /**
+     * Enseñanza ACTIVA: se activa TOCANDO el 🎓 de la burbuja. Comparte pantalla (video + audio), y al
+     * terminar procesa TODO el video con Gemini para estructurar conocimiento textual por app en la
+     * capa MCP (memoria durable). Fase 1: sin árbol de UI, solo texto de cómo usar las apps.
+     */
+    val activeLearning by lazy {
+        ActiveLearning(this, GeminiVideo(apiKey, model), memories, voice,
+            askAloud = { q -> bubble?.askAloud(q) ?: "" }, apiKey = apiKey, model = model)
     }
 
     /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube). */
