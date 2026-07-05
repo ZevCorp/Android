@@ -145,13 +145,17 @@ class GeminiBrain(
         )
         if (previousId.isNotBlank()) fields += "previous_interaction_id" to js(previousId)
 
+        val kb = (state.screenshotPng?.size ?: 0) / 1024
+        val t0 = android.os.SystemClock.elapsedRealtime()
         val res = http(
             "$BASE/v1beta/interactions",
             mapOf("Content-Type" to "application/json", "x-goog-api-key" to apiKey()),
             Json.encodeToString(JsonObject.serializer(), JsonObject(fields.toMap())).toByteArray(),
         )
+        val ms = android.os.SystemClock.elapsedRealtime() - t0
+        LogBus.log("gemini", "interacción → HTTP ${res.code} · ${ms}ms · envié ${kb}KB de pantalla · recibí ${res.body.length}B")
         if (res.code >= 300) {
-            LogBus.log("gemini", "HTTP ${res.code}: ${res.body.take(300)}")
+            LogBus.log("gemini", "ERROR ${res.code}: ${res.body.take(300)}")
             error("Gemini HTTP ${res.code}: ${res.body.take(200)}")
         }
         parseTurn(Json.parseToJsonElement(res.body).jsonObject, state)
@@ -210,8 +214,14 @@ class GeminiBrain(
         }
         pending = calls
         speech?.let { s -> calls.firstOrNull { it.name == "speak" }?.let { internalResults[it.id] = jo("said" to js("true")) } }
-        LogBus.log("gemini", if (calls.isEmpty()) "turno final: ${text.take(120)}"
-        else "turno: ${calls.joinToString(", ") { it.name }}" + (question?.let { " · pregunta" } ?: ""))
+        when {
+            calls.isNotEmpty() ->
+                LogBus.log("gemini", "decide: ${calls.joinToString(", ") { it.name }}" + (question?.let { " · pregunta" } ?: ""))
+            text.isNotBlank() ->
+                LogBus.log("gemini", "responde con texto (${text.length} chars): ${text.take(160)}")
+            else -> // ni acciones ni texto: diagnóstico del "final vacío"
+                LogBus.log("gemini", "final VACÍO · items recibidos: [${items.joinToString(", ") { it.jsonObject.str("type") }}]")
+        }
         return BrainTurn(actions, question, done = calls.isEmpty(), text = text,
             narration = intents.firstOrNull { it.isNotBlank() } ?: "", speech = speech, intents = intents)
     }

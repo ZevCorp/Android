@@ -17,8 +17,8 @@ android {
         applicationId = "com.zevcorp.graph"
         minSdk = 30
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.13"
+        versionCode = 14
+        versionName = "0.14"
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
     }
     buildFeatures { buildConfig = true }

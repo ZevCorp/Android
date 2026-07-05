@@ -2,6 +2,7 @@ package graph.core.application
 
 import graph.core.domain.*
 import kotlinx.coroutines.delay
+import kotlin.time.TimeSource
 
 private val NO_LOG = GraphLog { _, _ -> }
 private val NO_VOICE = object : Voice {
@@ -30,15 +31,28 @@ class ExecutionEngine(
         val b = brain()
         b.begin(goal)
         voice.narrate("¡Vamos! $goal")
-        log.log("run", "▶ $goal")
+        log.log("run", "▶ \"$goal\"")
+        val started = TimeSource.Monotonic.markNow()
 
         var results = emptyList<String>()
         var summary = ""
         var turns = 0
-        while (turns++ < maxTurns) {
-            val turn = b.next(phone.state(), results)
+        var actions = 0
+        while (turns < maxTurns) {
+            turns++
+            val turnStart = TimeSource.Monotonic.markNow()
+            val state = phone.state()
+            val turn = b.next(state, results)
+            val ms = turnStart.elapsedNow().inWholeMilliseconds
+            val decided = when {
+                turn.actions.isNotEmpty() -> turn.actions.joinToString(", ") { describe(it) }
+                turn.question != null -> "pregunta"
+                else -> "fin"
+            }
+            log.log("run", "turno $turns · ${ms}ms · pantalla \"${state.screen.take(40)}\" · decide: $decided")
+
             if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
-            if (turn.speech != null) voice.speak(turn.speech)
+            if (turn.speech != null) { voice.speak(turn.speech); log.log("run", "🗣 ${turn.speech}") }
             if (turn.text.isNotBlank()) summary = turn.text
             if (turn.done) break
 
@@ -46,32 +60,57 @@ class ExecutionEngine(
             turn.actions.forEachIndexed { i, action ->
                 turn.intents.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { voice.narrate(it) }
                 out += execute(action)
+                actions++
             }
             results = out
 
             turn.question?.let { q ->
+                log.log("run", "❓ $q")
                 voice.speak(q)
                 b.inform(user?.ask(q)?.ifBlank { "usa tu mejor criterio" } ?: "No hay usuario; usa tu mejor criterio.")
             }
-            delay(500)
+            delay(400)
         }
-        log.log("run", "■ $summary")
+
+        val secs = started.elapsedNow().inWholeSeconds
+        // Terminó con un mensaje (p.ej. "¿qué puedes hacer?"): dilo en voz alta.
+        if (summary.isNotBlank()) {
+            voice.speak(summary)
+        } else if (actions == 0) {
+            // No dijo nada y no hizo nada: al menos enumera sus capacidades.
+            summary = "Puedo hacer estos gestos: " + mcp.tools.joinToString(", ") { it.name } +
+                "; y además tocar y escribir en la pantalla."
+            voice.speak(summary)
+        }
+        log.log("run", "■ ${turns} turnos · $actions acciones · ${secs}s · ${summary.take(120)}")
         voice.narrate("¡Listo! 🎉")
         return summary.ifBlank { "Hecho" }
     }
 
     private suspend fun execute(action: AgentAction): String {
-        val (ok, kind) = when (action) {
-            is AgentAction.Mcp -> mcp.call(action.tool, action.args).let { (it == "ok") to "mcp:${action.tool}" }
-            is AgentAction.Tap -> phone.tap(action.x, action.y) to "tap"
-            is AgentAction.Type -> phone.type(action.x, action.y, action.text) to "type"
-            is AgentAction.OpenApp -> phone.openApp(action.name) to "open_app"
-            is AgentAction.Scroll -> phone.scroll(action.down) to "scroll"
-            is AgentAction.Swipe -> phone.swipe(action.x1, action.y1, action.x2, action.y2, action.ms) to "swipe"
-            is AgentAction.Key -> phone.pressKey(action.key) to "key"
-            is AgentAction.Wait -> { delay(action.ms); true to "wait" }
+        val ok = when (action) {
+            is AgentAction.Mcp -> mcp.call(action.tool, action.args) == "ok"
+            is AgentAction.Tap -> phone.tap(action.x, action.y)
+            is AgentAction.Type -> phone.type(action.x, action.y, action.text)
+            is AgentAction.OpenApp -> phone.openApp(action.name)
+            is AgentAction.Scroll -> phone.scroll(action.down)
+            is AgentAction.Swipe -> phone.swipe(action.x1, action.y1, action.x2, action.y2, action.ms)
+            is AgentAction.Key -> phone.pressKey(action.key)
+            is AgentAction.Wait -> { delay(action.ms); true }
         }
-        log.log("run", "· $kind → ${if (ok) "ok" else "falló"}")
+        log.log("run", "  ▪ ${describe(action)} → ${if (ok) "ok" else "falló"}")
         return if (ok) "ok" else "no se pudo ejecutar la acción"
+    }
+
+    /** Etiqueta legible de una acción, distinguiendo la VÍA usada (MCP vs computer-use). */
+    private fun describe(a: AgentAction): String = when (a) {
+        is AgentAction.Mcp -> "MCP ${a.tool}" + if (a.args.isNotEmpty()) " ${a.args}" else ""
+        is AgentAction.Tap -> "computer-use tap(${a.x},${a.y})"
+        is AgentAction.Type -> "computer-use type(${a.x},${a.y})=\"${a.text.take(24)}\""
+        is AgentAction.OpenApp -> "computer-use open_app \"${a.name}\""
+        is AgentAction.Scroll -> "computer-use scroll ${if (a.down) "down" else "up"}"
+        is AgentAction.Swipe -> "computer-use swipe(${a.x1},${a.y1}→${a.x2},${a.y2})"
+        is AgentAction.Key -> "computer-use key ${a.key}"
+        is AgentAction.Wait -> "wait ${a.ms}ms"
     }
 }
