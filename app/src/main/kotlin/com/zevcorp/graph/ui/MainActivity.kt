@@ -16,6 +16,7 @@ import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.LogBus
+import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
 import kotlin.coroutines.resume
 import kotlinx.coroutines.*
@@ -26,6 +27,7 @@ class MainActivity : Activity(), UserChannel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private lateinit var logView: TextView
+    private lateinit var mcpPanel: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -144,6 +146,22 @@ class MainActivity : Activity(), UserChannel {
         }
         dev.addView(logScroll, LinearLayout.LayoutParams(-1, dp(260)))
         root.addView(dev)
+        root.gap(dp(14))
+
+        // Panel de MCPs: lo que el asistente ha aprendido (enseñanza) + lo incorporado de fábrica
+        val mcp = card()
+        val mcpHead = row()
+        mcpHead.addView(pill(" 🧩 "))
+        mcpHead.addView(title("Herramientas MCP").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        mcpHead.addView(button("Actualizar") { refreshMcpPanel() })
+        mcp.addView(mcpHead)
+        mcp.gap(dp(4))
+        mcp.addView(caption("Aprendidas enseñándole (🎓) + gestos y acciones de sistema incorporados."))
+        mcp.gap(dp(10))
+        mcpPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        mcp.addView(mcpPanel)
+        root.addView(mcp)
 
         setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
         requestPermissions(arrayOf(
@@ -159,6 +177,50 @@ class MainActivity : Activity(), UserChannel {
                 logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
             }
         }
+        refreshMcpPanel()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
+    }
+
+    /** Herramientas aprendidas por enseñanza: nombre, cuántos elementos y tocable para ver todo. */
+    private fun refreshMcpPanel() = scope.launch {
+        val tools = withContext(Dispatchers.IO) { app.learnedTools.list() }
+        mcpPanel.removeAllViews()
+        if (tools.isEmpty()) {
+            mcpPanel.addView(caption("Aún no has enseñado ninguna pantalla. Toca 🎓 en la burbuja."))
+            return@launch
+        }
+        tools.forEach { t ->
+            mcpPanel.addView(button("🧩 ${t.name} · ${t.elements.size} elementos") { showMcpDetail(t) })
+            mcpPanel.gap(dp(8))
+        }
+    }
+
+    private fun showMcpDetail(t: LearnedTool) {
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(12))
+        }
+        body.addView(title(t.name, 17f))
+        body.gap(dp(8))
+        body.addView(caption("Descripción (documentación que usa el modelo):"))
+        body.addView(TextView(this).apply { text = t.description; textSize = 13f; setTextColor(Palette.text) })
+        body.gap(dp(10))
+        body.addView(caption("Elementos (${t.elements.size}):"))
+        body.addView(TextView(this).apply {
+            text = t.elements.joinToString(" · ")
+            textSize = 12f
+            setTextColor(Palette.textDim)
+            setTextIsSelectable(true)
+        })
+        val scroll = ScrollView(this).apply { addView(body) }
+        AlertDialog.Builder(this)
+            .setView(scroll)
+            .setPositiveButton("Cerrar", null)
+            .show()
     }
 
     private fun log(message: String) = LogBus.log("app", message)
