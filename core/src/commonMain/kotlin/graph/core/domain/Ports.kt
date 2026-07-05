@@ -14,13 +14,37 @@ interface Phone {
     suspend fun pressKey(key: String): Boolean
 }
 
-/** Gestos semánticos expuestos como herramientas MCP (ver `Mcp`). */
+/** Gestos semánticos de navegación, expuestos como herramientas MCP (ver `Mcp`). */
 interface Gestures {
     suspend fun home(): Boolean
     suspend fun appDrawer(): Boolean
     suspend fun notifications(): Boolean
     suspend fun panHome(right: Boolean): Boolean
     suspend fun scrollMenu(down: Boolean): Boolean
+}
+
+/**
+ * Acciones "genéricas" del teléfono ejecutadas por Intents/APIs de Android (sin navegar la interfaz).
+ * Cada una se expone como herramienta MCP. Devuelven true si se lanzó la acción correctamente.
+ */
+interface SystemApi {
+    suspend fun openApp(name: String): Boolean
+    suspend fun setAlarm(hour: Int, minute: Int, message: String): Boolean
+    suspend fun setTimer(seconds: Int, message: String): Boolean
+    suspend fun showAlarms(): Boolean
+    suspend fun createEvent(title: String, startIso: String, location: String): Boolean
+    suspend fun dial(number: String): Boolean
+    suspend fun call(number: String): Boolean
+    suspend fun sendSms(number: String, message: String): Boolean
+    suspend fun sendEmail(to: String, subject: String, body: String): Boolean
+    suspend fun webSearch(query: String): Boolean
+    suspend fun openUrl(url: String): Boolean
+    suspend fun maps(query: String): Boolean
+    suspend fun directions(destination: String): Boolean
+    suspend fun openCamera(): Boolean
+    suspend fun openSettings(section: String): Boolean
+    suspend fun shareText(text: String): Boolean
+    suspend fun setClipboard(text: String): Boolean
 }
 
 /* ---------- El cerebro (Gemini 3.5 Flash): computer-use + herramientas MCP ---------- */

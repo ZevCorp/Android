@@ -146,7 +146,11 @@ class MainActivity : Activity(), UserChannel {
         root.addView(dev)
 
         setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
-        requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO, android.Manifest.permission.POST_NOTIFICATIONS), 3)
+        requestPermissions(arrayOf(
+            android.Manifest.permission.RECORD_AUDIO,
+            android.Manifest.permission.POST_NOTIFICATIONS,
+            android.Manifest.permission.CALL_PHONE,
+        ), 3)
 
         logView.text = LogBus.dump()
         scope.launch {

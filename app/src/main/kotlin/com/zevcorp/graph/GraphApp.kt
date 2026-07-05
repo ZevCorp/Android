@@ -7,11 +7,11 @@ import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Intent
 import android.content.SharedPreferences
+import com.zevcorp.graph.platform.AndroidSystemApi
 import com.zevcorp.graph.platform.GeminiBrain
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
 import graph.core.application.ExecutionEngine
-import graph.core.domain.Gestures
 import graph.core.domain.Mcp
 import graph.core.domain.Phone
 import graph.core.domain.UserChannel
@@ -53,7 +53,9 @@ class GraphApp : Application() {
      */
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
-        val mcp = Mcp(surface as Gestures)
+        val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
+        // Gestos por accesibilidad + acciones del sistema por Intent, ambos expuestos como MCP.
+        val mcp = Mcp(service, AndroidSystemApi(service))
         val engine = ExecutionEngine(
             brain = { newBrain(mcp) },
             phone = surface,

@@ -25,56 +25,108 @@ class McpParam(
 
 /**
  * Una herramienta MCP: una capacidad con nombre único, descripción, esquema de parámetros y ejecutor.
- * Hoy son gestos básicos hardcodeados; en v2 el asistente añadirá herramientas aprendidas del árbol de UI.
+ * `via` documenta CÓMO se ejecuta (gesto de accesibilidad vs Intent/API del sistema, sin tocar la UI).
+ * Hoy están hardcodeadas; en v2 el asistente añadirá herramientas aprendidas del árbol de UI.
  */
 class McpTool(
     val name: String,
     val description: String,
     val params: List<McpParam> = emptyList(),
+    val via: String = "Intent/API de Android",
     val run: suspend (Map<String, String>) -> Boolean,
 )
 
-/**
- * El "servidor" MCP: el catálogo de herramientas que el asistente puede invocar por function-calling.
- * Expone el esquema (para declararlas al modelo), la documentación (semilla de los workflows-MCP de v2)
- * y el despacho de una llamada. Añadir una capacidad = añadir una entrada a `tools`.
- */
-class Mcp(gestures: Gestures) {
+private fun Map<String, String>.int(key: String, default: Int) = this[key]?.trim()?.toIntOrNull() ?: default
+private fun Map<String, String>.str(key: String) = this[key]?.trim() ?: ""
 
-    val tools: List<McpTool> = listOf(
-        McpTool("go_home", "Vuelve a la pantalla de inicio (home) de Android.") { gestures.home() },
-        McpTool("open_app_drawer", "Abre el cajón de aplicaciones deslizando hacia arriba desde el home.") { gestures.appDrawer() },
-        McpTool("open_notifications", "Despliega la barra de notificaciones deslizando desde el borde superior.") { gestures.notifications() },
-        McpTool(
-            "pan_home", "Cambia de panel dentro del home moviéndote hacia los lados.",
-            listOf(McpParam("direction", "Hacia dónde moverse en el home", listOf("left", "right"))),
-        ) { gestures.panHome(it["direction"] == "right") },
-        McpTool(
-            "scroll_menu", "Desliza (scroll) dentro de una lista o del cajón de aplicaciones.",
-            listOf(McpParam("direction", "Dirección del desplazamiento", listOf("up", "down"))),
-        ) { gestures.scrollMenu(it["direction"] != "up") },
+/**
+ * El "servidor" MCP: el catálogo de herramientas que el asistente invoca por function-calling.
+ * Dos familias hoy:
+ *  - GESTOS de accesibilidad (navegación: home, cajón, notificaciones, paneo, scroll).
+ *  - ACCIONES del sistema por Intent/API (abrir apps, alarmas, timers, llamadas, SMS, correo,
+ *    calendario, búsqueda web, mapas, ajustes, portapapeles…): directas, sin navegar la interfaz.
+ * Expone el esquema (para declararlas al modelo), la documentación (semilla de los workflows-MCP de
+ * v2) y el despacho. Añadir una capacidad = añadir una entrada a `tools`.
+ */
+class Mcp(gestures: Gestures, system: SystemApi) {
+
+    private val gestureTools = listOf(
+        McpTool("go_home", "Vuelve a la pantalla de inicio (home) de Android.", via = GESTURE) { gestures.home() },
+        McpTool("open_app_drawer", "Abre el cajón de aplicaciones deslizando hacia arriba desde el home.", via = GESTURE) { gestures.appDrawer() },
+        McpTool("open_notifications", "Despliega la barra de notificaciones deslizando desde el borde superior.", via = GESTURE) { gestures.notifications() },
+        McpTool("pan_home", "Cambia de panel dentro del home moviéndote hacia los lados.",
+            listOf(McpParam("direction", "Hacia dónde moverse en el home", listOf("left", "right"))), GESTURE) { gestures.panHome(it["direction"] == "right") },
+        McpTool("scroll_menu", "Desliza (scroll) dentro de una lista o del cajón de aplicaciones.",
+            listOf(McpParam("direction", "Dirección del desplazamiento", listOf("up", "down"))), GESTURE) { gestures.scrollMenu(it["direction"] != "up") },
     )
+
+    private val systemTools = listOf(
+        McpTool("launch_app", "Abre una aplicación por su nombre directamente (Intent de lanzamiento), sin navegar la UI.",
+            listOf(McpParam("app", "Nombre visible o paquete de la app"))) { system.openApp(it.str("app")) },
+        McpTool("set_alarm", "Crea una alarma vía la API AlarmClock, sin abrir la interfaz del reloj.",
+            listOf(McpParam("hour", "Hora 0-23"), McpParam("minute", "Minuto 0-59"), McpParam("message", "Etiqueta (opcional)"))) {
+            system.setAlarm(it.int("hour", 8), it.int("minute", 0), it.str("message")) },
+        McpTool("set_timer", "Inicia un temporizador vía AlarmClock, sin UI.",
+            listOf(McpParam("seconds", "Duración en segundos"), McpParam("message", "Etiqueta (opcional)"))) {
+            system.setTimer(it.int("seconds", 60), it.str("message")) },
+        McpTool("show_alarms", "Abre la lista de alarmas del reloj.") { system.showAlarms() },
+        McpTool("create_event", "Crea un evento de calendario vía Intent (prellenado).",
+            listOf(McpParam("title", "Título del evento"), McpParam("start", "Inicio ISO-8601 local, p.ej. 2026-07-06T15:00 (opcional)"), McpParam("location", "Lugar (opcional)"))) {
+            system.createEvent(it.str("title"), it.str("start"), it.str("location")) },
+        McpTool("dial", "Abre el marcador con un número (sin llamar todavía).",
+            listOf(McpParam("number", "Número de teléfono"))) { system.dial(it.str("number")) },
+        McpTool("call", "Llama directamente a un número vía Intent (requiere permiso de llamada).",
+            listOf(McpParam("number", "Número de teléfono"))) { system.call(it.str("number")) },
+        McpTool("send_sms", "Abre un SMS prellenado a un número (el usuario confirma el envío).",
+            listOf(McpParam("number", "Destinatario"), McpParam("message", "Texto (opcional)"))) {
+            system.sendSms(it.str("number"), it.str("message")) },
+        McpTool("send_email", "Abre un correo prellenado.",
+            listOf(McpParam("to", "Destinatario (opcional)"), McpParam("subject", "Asunto (opcional)"), McpParam("body", "Cuerpo (opcional)"))) {
+            system.sendEmail(it.str("to"), it.str("subject"), it.str("body")) },
+        McpTool("web_search", "Busca en la web vía el Intent de búsqueda del sistema.",
+            listOf(McpParam("query", "Qué buscar"))) { system.webSearch(it.str("query")) },
+        McpTool("open_url", "Abre una URL en el navegador.",
+            listOf(McpParam("url", "URL http(s)"))) { system.openUrl(it.str("url")) },
+        McpTool("open_maps", "Abre Maps en un lugar o búsqueda.",
+            listOf(McpParam("query", "Lugar o búsqueda"))) { system.maps(it.str("query")) },
+        McpTool("directions", "Abre la navegación hacia un destino.",
+            listOf(McpParam("destination", "Destino"))) { system.directions(it.str("destination")) },
+        McpTool("open_camera", "Abre la cámara para tomar una foto.") { system.openCamera() },
+        McpTool("open_settings", "Abre una pantalla de Ajustes del sistema.",
+            listOf(McpParam("section", "Sección", listOf("general", "wifi", "bluetooth", "data", "display", "sound", "battery", "location", "apps")))) {
+            system.openSettings(it["section"] ?: "general") },
+        McpTool("share_text", "Abre el diálogo de compartir con un texto.",
+            listOf(McpParam("text", "Texto a compartir"))) { system.shareText(it.str("text")) },
+        McpTool("set_clipboard", "Copia un texto al portapapeles (sin UI).",
+            listOf(McpParam("text", "Texto a copiar"))) { system.setClipboard(it.str("text")) },
+    )
+
+    val tools: List<McpTool> = gestureTools + systemTools
 
     fun tool(name: String) = tools.firstOrNull { it.name == name }
 
     /** Ejecuta una herramienta por nombre y devuelve un resultado legible para el modelo. */
     suspend fun call(name: String, args: Map<String, String>): String {
         val t = tool(name) ?: return "herramienta MCP desconocida: $name"
-        return if (t.run(args)) "ok" else "el gesto no se pudo ejecutar"
+        return if (t.run(args)) "ok" else "la herramienta no se pudo ejecutar"
     }
 
-    /** Documentación del protocolo en Markdown: qué puede hacer el asistente vía MCP. */
+    /** Documentación del protocolo en Markdown, agrupada por vía. Semilla de los workflows-MCP de v2. */
     fun docMarkdown(): String = buildString {
         appendLine("# Herramientas MCP disponibles")
-        appendLine("Gestos básicos para controlar el teléfono. El asistente elige entre estas herramientas y computer-use.")
-        for (t in tools) {
-            appendLine()
-            appendLine("## `${t.name}`")
-            appendLine(t.description)
-            t.params.forEach { p ->
-                val opts = if (p.options.isNotEmpty()) " (opciones: ${p.options.joinToString(", ")})" else ""
-                appendLine("- **${p.name}**: ${p.description}$opts")
+        appendLine("Capacidades que el asistente invoca por function-calling. Muchas usan Intents/APIs del sistema (sin tocar la interfaz).")
+        tools.groupBy { it.via }.forEach { (via, group) ->
+            appendLine("\n## Vía: $via")
+            for (t in group) {
+                appendLine("\n### `${t.name}`")
+                appendLine(t.description)
+                t.params.forEach { p ->
+                    val opts = if (p.options.isNotEmpty()) " (opciones: ${p.options.joinToString(", ")})" else ""
+                    appendLine("- **${p.name}**: ${p.description}$opts")
+                }
             }
         }
     }
+
+    private companion object { const val GESTURE = "gesto de accesibilidad" }
 }

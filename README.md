@@ -9,17 +9,36 @@ No hay modos separados: es **un solo motor de ejecución mixto**. El modelo deci
 
 > **v1 intencionalmente mínima.** Esta versión es la base limpia. No hay modo enseñanza, ni compartir pantalla, ni workflows, ni terminal — se integrarán después sobre esta base. Sí está el botón de **detener**.
 
-## Herramientas MCP iniciales (gestos básicos)
+## Herramientas MCP
+
+Dos familias, ambas declaradas en `core` (`Mcp`) con nombre, esquema de parámetros y `via` (cómo se ejecutan):
+
+**Gestos de accesibilidad** (navegación por swipe):
 
 | Herramienta | Qué hace |
 |---|---|
 | `go_home` | Vuelve al home de Android |
-| `open_app_drawer` | Abre el cajón de aplicaciones (swipe hacia arriba) |
+| `open_app_drawer` | Abre el cajón de aplicaciones |
 | `open_notifications` | Despliega la barra de notificaciones |
-| `pan_home` | Cambia de panel del home hacia los lados (`left`/`right`) |
-| `scroll_menu` | Scroll dentro de una lista o del cajón (`up`/`down`) |
+| `pan_home` | Cambia de panel del home (`left`/`right`) |
+| `scroll_menu` | Scroll dentro de una lista/cajón (`up`/`down`) |
 
-El protocolo MCP se declara una sola vez en `core` (`Mcp`), con nombre, esquema de parámetros y documentación (`docMarkdown()`). Añadir una capacidad = añadir una entrada. Esta estructura es la semilla de los futuros "workflows powered by MCP": el asistente organizará y documentará capacidades aprendidas del árbol de UI y las expondrá aquí para siguientes ejecuciones.
+**Acciones del sistema por Intent/API** (headless, sin navegar la UI):
+
+| Herramienta | API de Android |
+|---|---|
+| `launch_app` | Intent de lanzamiento por nombre/paquete |
+| `set_alarm` · `set_timer` · `show_alarms` | `AlarmClock` (con `EXTRA_SKIP_UI`) |
+| `create_event` | `CalendarContract` (Intent de inserción) |
+| `dial` · `call` | `ACTION_DIAL` / `ACTION_CALL` |
+| `send_sms` · `send_email` | `ACTION_SENDTO` (`smsto:` / `mailto:`) |
+| `web_search` · `open_url` | `ACTION_WEB_SEARCH` / `ACTION_VIEW` |
+| `open_maps` · `directions` | `geo:` / `google.navigation:` |
+| `open_camera` | `MediaStore.ACTION_IMAGE_CAPTURE` |
+| `open_settings` | `Settings.ACTION_*` por sección |
+| `share_text` · `set_clipboard` | `ACTION_SEND` / `ClipboardManager` |
+
+Estas usan los **Common Intents de Android** — llamadas de sistema directas, no interacción con la pantalla. El modelo las prefiere sobre computer-use para tareas del sistema. Añadir una capacidad = añadir una entrada a `tools`. Esta estructura es la semilla de los futuros "workflows powered by MCP".
 
 ## Las dos vías, un solo cerebro
 

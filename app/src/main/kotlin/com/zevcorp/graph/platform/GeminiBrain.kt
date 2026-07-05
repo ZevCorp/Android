@@ -252,11 +252,16 @@ class GeminiBrain(
         take_screenshot para obtener una imagen y en el siguiente turno haz click con coordenadas.
 
         DOS formas de actuar, elige la más directa:
-        1) HERRAMIENTAS MCP (gestos rápidos, sin imagen): ${tools.joinToString("; ") { "${it.name} (${it.description})" }}.
-        2) COMPUTER-USE (requiere imagen): take_screenshot y luego click/type; open_app para abrir apps.
-        Prefiere MCP cuando encaje. IMPORTANTE: si el plan son varios gestos MCP encadenados y predecibles
-        (p.ej. ir al home y luego abrir el cajón), LLÁMALOS TODOS EN UNA SOLA RESPUESTA (varias function_call
-        juntas) para ahorrar turnos. Solo separa en turnos cuando necesites ver el resultado intermedio.
+        1) HERRAMIENTAS MCP (function-calling directo, sin imagen): gestos de navegación (home, cajón,
+           notificaciones, paneo, scroll) y ACCIONES DEL SISTEMA por Intent/API — abrir apps, alarmas,
+           timers, llamar, SMS, correo, calendario, buscar en web, mapas/rutas, cámara, ajustes,
+           portapapeles. Herramientas: ${tools.joinToString(", ") { it.name }}.
+        2) COMPUTER-USE (requiere imagen): solo para tocar elementos concretos DENTRO de una app;
+           llama take_screenshot y luego click/type.
+        REGLA: para cualquier tarea del sistema (alarma, timer, llamada, abrir app, buscar, calendario,
+        ajustes…) usa SIEMPRE la herramienta MCP correspondiente, NO computer-use: es directa y sin UI.
+        Si el plan son varias herramientas MCP encadenadas y predecibles (p.ej. ir al home y luego abrir
+        el cajón), LLÁMALAS TODAS EN UNA SOLA RESPUESTA (varias function_call juntas) para ahorrar turnos.
 
         En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").
         Usa speak SOLO para avisos importantes y ask_user SOLO para dudas reales. No hables por hablar.
