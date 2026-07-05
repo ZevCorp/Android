@@ -127,7 +127,7 @@ class MainActivity : Activity(), UserChannel {
         speed.addView(title("⚡ Velocidad de ejecución"))
         speed.gap(dp(4))
         val savedDelay = app.prefs.getInt("stepDelayMs", 350)
-        val speedCaption = caption("Pausa entre pasos MCP: $savedDelay ms · derecha = más rápido")
+        val speedCaption = caption("Vuelo del asistente y pausa entre clics MCP: $savedDelay ms · se aplica al instante")
         speed.addView(speedCaption)
         speed.gap(dp(8))
         val speedBar = SeekBar(this).apply {
@@ -139,7 +139,7 @@ class MainActivity : Activity(), UserChannel {
                 override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
                     val delay = MAX_STEP_DELAY - value * 10 // 1050..50 ms
                     app.prefs.edit().putInt("stepDelayMs", delay).apply()
-                    speedCaption.text = "Pausa entre pasos MCP: $delay ms · derecha = más rápido"
+                    speedCaption.text = "Vuelo del asistente y pausa entre clics MCP: $delay ms · se aplica al instante"
                 }
                 override fun onStartTrackingTouch(bar: SeekBar) {}
                 override fun onStopTrackingTouch(bar: SeekBar) {}

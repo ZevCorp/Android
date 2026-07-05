@@ -202,7 +202,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         val startY = bubbleParams.y
         suspendCancellableCoroutine { cont ->
             ValueAnimator.ofFloat(0f, 1f).apply {
-                duration = 480
+                // El vuelo sigue la barra de velocidad: es lo que domina el tiempo entre clics.
+                duration = (app.stepDelay() * 12 / 10).coerceIn(140, 600)
                 interpolator = AccelerateInterpolator(1.7f)
                 addUpdateListener { a ->
                     val f = a.animatedValue as Float

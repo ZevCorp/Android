@@ -76,7 +76,7 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 val visible = elementsNow()
                 app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
             }
-            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ->
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.TYPE_VIEW_SCROLLED ->
                 if (visualizing) refreshLearnedOverlay()
         }
     }
@@ -92,7 +92,8 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
 
     @Volatile private var visualizing = false
     private var learnedLabels: Map<String, Set<String>> = emptyMap() // paquete → etiquetas (minúsculas)
-    private var lastOverlayRefresh = 0L
+    private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
+    private val overlayRefresh = Runnable { refreshLearnedOverlayNow() }
 
     /** Alterna el modo: dibuja el contorno de todo elemento ya trackeado en MCPs en la app visible. */
     fun toggleLearnedVisualization(): Boolean {
@@ -102,17 +103,25 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 val tools = app.learnedTools.list()
                 learnedLabels = tools.groupBy { it.app }
                     .mapValues { (_, ts) -> ts.flatMap { t -> t.elements }.map { it.lowercase() }.toSet() }
-                withContext(Dispatchers.Main) { lastOverlayRefresh = 0; refreshLearnedOverlay() }
+                withContext(Dispatchers.Main) { refreshLearnedOverlayNow() }
             }
-        } else highlighter.hide()
+        } else {
+            uiHandler.removeCallbacks(overlayRefresh)
+            highlighter.hide()
+        }
         LogBus.log("learn", if (visualizing) "👁 visualización de lo aprendido ON" else "visualización OFF")
         return visualizing
     }
 
+    /** Debounce con cola: coalescea la ráfaga de eventos pero SIEMPRE ejecuta el último refresco,
+     *  para que los recuadros terminen alineados con la UI final (scroll, animaciones, navegación). */
     private fun refreshLearnedOverlay() {
-        val now = android.os.SystemClock.elapsedRealtime()
-        if (now - lastOverlayRefresh < 350) return
-        lastOverlayRefresh = now
+        uiHandler.removeCallbacks(overlayRefresh)
+        uiHandler.postDelayed(overlayRefresh, 90)
+    }
+
+    private fun refreshLearnedOverlayNow() {
+        if (!visualizing) return
         val root = rootInActiveWindow ?: return highlighter.show(emptyList())
         val pkg = root.packageName?.toString() ?: ""
         // Mapas de esta app + mapas antiguos sin paquete (compatibilidad): se intenta igual.
@@ -121,7 +130,7 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         val rects = mutableListOf<Rect>()
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
-            if ((n.isClickable || n.isEditable) && labelOf(n).lowercase() in labels)
+            if (n.isVisibleToUser && (n.isClickable || n.isEditable) && labelOf(n).lowercase() in labels)
                 rects += Rect().also { n.getBoundsInScreen(it) }
             for (i in 0 until n.childCount) walk(n.getChild(i))
         }
