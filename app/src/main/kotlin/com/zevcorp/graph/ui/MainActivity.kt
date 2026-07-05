@@ -3,6 +3,7 @@ package com.zevcorp.graph.ui
 import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
+import android.content.res.ColorStateList
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -12,6 +13,7 @@ import android.view.View
 import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
+import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
@@ -20,6 +22,8 @@ import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
 import kotlin.coroutines.resume
 import kotlinx.coroutines.*
+
+private const val MAX_STEP_DELAY = 1050 // ms cuando la barra está al mínimo de velocidad
 
 class MainActivity : Activity(), UserChannel {
 
@@ -118,6 +122,33 @@ class MainActivity : Activity(), UserChannel {
         root.addView(ask)
         root.gap(dp(14))
 
+        // Velocidad de ejecución: pausa entre los steps de un MCP que se envían juntos
+        val speed = card()
+        speed.addView(title("⚡ Velocidad de ejecución"))
+        speed.gap(dp(4))
+        val savedDelay = app.prefs.getInt("stepDelayMs", 350)
+        val speedCaption = caption("Pausa entre pasos MCP: $savedDelay ms · derecha = más rápido")
+        speed.addView(speedCaption)
+        speed.gap(dp(8))
+        val speedBar = SeekBar(this).apply {
+            max = 100
+            progress = ((MAX_STEP_DELAY - savedDelay) / 10).coerceIn(0, 100)
+            progressTintList = ColorStateList.valueOf(Palette.accent)
+            thumbTintList = ColorStateList.valueOf(Palette.accent)
+            setOnSeekBarChangeListener(object : SeekBar.OnSeekBarChangeListener {
+                override fun onProgressChanged(bar: SeekBar, value: Int, fromUser: Boolean) {
+                    val delay = MAX_STEP_DELAY - value * 10 // 1050..50 ms
+                    app.prefs.edit().putInt("stepDelayMs", delay).apply()
+                    speedCaption.text = "Pausa entre pasos MCP: $delay ms · derecha = más rápido"
+                }
+                override fun onStartTrackingTouch(bar: SeekBar) {}
+                override fun onStopTrackingTouch(bar: SeekBar) {}
+            })
+        }
+        speed.addView(speedBar)
+        root.addView(speed)
+        root.gap(dp(14))
+
         // Panel de desarrollador: logs en vivo
         val dev = card()
         val devHead = row()
@@ -190,7 +221,7 @@ class MainActivity : Activity(), UserChannel {
         val tools = withContext(Dispatchers.IO) { app.learnedTools.list() }
         mcpPanel.removeAllViews()
         if (tools.isEmpty()) {
-            mcpPanel.addView(caption("Aún no has enseñado ninguna pantalla. Toca 🎓 en la burbuja."))
+            mcpPanel.addView(caption("Aún no he aprendido ninguna app. Activa 🎓 en la burbuja y usa el teléfono normal."))
             return@launch
         }
         tools.forEach { t ->
@@ -205,6 +236,7 @@ class MainActivity : Activity(), UserChannel {
             setPadding(dp(18), dp(18), dp(18), dp(12))
         }
         body.addView(title(t.name, 17f))
+        if (t.app.isNotBlank()) body.addView(caption("App: ${t.app}"))
         body.gap(dp(8))
         body.addView(caption("Descripción (documentación que usa el modelo):"))
         body.addView(TextView(this).apply { text = t.description; textSize = 13f; setTextColor(Palette.text) })

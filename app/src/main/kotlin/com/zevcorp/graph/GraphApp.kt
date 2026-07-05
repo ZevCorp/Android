@@ -14,10 +14,10 @@ import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LearnedToolRepo
 import com.zevcorp.graph.platform.LogBus
 import graph.core.application.ExecutionEngine
-import graph.core.application.LearningSession
+import graph.core.application.PassiveLearning
+import graph.core.domain.ExecutionMode
 import graph.core.domain.Mcp
 import graph.core.domain.Phone
-import graph.core.domain.Teacher
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import kotlinx.coroutines.CancellationException
@@ -48,6 +48,25 @@ class GraphApp : Application() {
     /** Herramientas aprendidas en sesiones de enseñanza (se vuelven MCP ejecutables). */
     val learnedTools by lazy { LearnedToolRepo(filesDir) }
 
+    /**
+     * Enseñanza PASIVA: se alterna con el 🎓 de la burbuja. Observa los clics del usuario usando el
+     * teléfono con normalidad y consolida el MCP de cada app cuando el usuario sale de ella.
+     */
+    val passive by lazy { PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus) }
+
+    /** Pausa entre steps MCP enviados juntos, ajustable con la barra de velocidad de la app. */
+    val stepDelay = { prefs.getInt("stepDelayMs", 350).toLong() }
+
+    /* Parpadeos de la carita al CAMBIAR de vía: 1 = consciente (computer-use con screenshots),
+       2 = subconsciente (MCP). Si repite la misma vía, no parpadea. */
+    @Volatile private var lastSubconscious: Boolean? = null
+    private val modeSignal = ExecutionMode { subconscious ->
+        if (lastSubconscious != subconscious) {
+            lastSubconscious = subconscious
+            bubble?.blink(if (subconscious) 2 else 1)
+        }
+    }
+
     private fun newBrain(mcp: Mcp) = GeminiBrain(apiKey, model, mcp.tools, listApps = {
         packageManager.getInstalledApplications(0)
             .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
@@ -62,7 +81,7 @@ class GraphApp : Application() {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
         // MCP = gestos de accesibilidad + acciones del sistema por Intent + herramientas aprendidas.
-        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service)
+        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay)
         val engine = ExecutionEngine(
             brain = { newBrain(mcp) },
             phone = surface,
@@ -70,25 +89,10 @@ class GraphApp : Application() {
             user = user,
             voice = voice,
             log = LogBus,
+            mode = modeSignal,
+            stepDelay = stepDelay,
         )
         return running { engine.run(prompt) }
-    }
-
-    /**
-     * Sesión de ENSEÑANZA: el usuario muestra y explica; el asistente entiende contra el árbol de UI,
-     * ilumina la secuencia, la prueba con permiso y al terminar la organiza en una herramienta MCP.
-     */
-    suspend fun learn(teacher: Teacher): String {
-        val service = ui as? GraphAccessibilityService ?: return "Activa el servicio de accesibilidad de Graph"
-        val session = LearningSession(
-            brain = GeminiLearning(apiKey, model),
-            surface = service,
-            teacher = teacher,
-            voice = voice,
-            repo = learnedTools,
-            log = LogBus,
-        )
-        return running { session.run() }
     }
 
     /* ---------- Detener la ejecución (botón rojo flotante + notificación) ---------- */

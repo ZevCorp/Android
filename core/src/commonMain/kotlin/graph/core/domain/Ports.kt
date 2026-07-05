@@ -103,6 +103,15 @@ interface UserChannel {
     suspend fun ask(question: String): String
 }
 
+/**
+ * Vía por la que el motor está ejecutando cada acción: consciente (computer-use con screenshots)
+ * o subconsciente (herramientas MCP). La plataforma la usa para señales visuales: la carita
+ * parpadea 1 vez al pasar a consciente y 2 al pasar a subconsciente (solo cuando CAMBIA de vía).
+ */
+fun interface ExecutionMode {
+    fun executing(subconscious: Boolean)
+}
+
 /** Log estructurado del núcleo; cada plataforma decide dónde mostrarlo. */
 fun interface GraphLog {
     fun log(tag: String, message: String)

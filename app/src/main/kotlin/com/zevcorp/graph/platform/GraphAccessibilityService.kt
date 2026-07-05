@@ -24,6 +24,7 @@ import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 
@@ -51,31 +52,82 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         super.onDestroy()
     }
 
-    /* Clics del usuario durante la enseñanza: SEÑALES para que el cerebro generalice. */
-    @Volatile private var capturing = false
-    private val clickBuffer = ArrayDeque<String>()
+    /* ---------- Enseñanza pasiva: los clics del usuario usando el teléfono son las señales ---------- */
+
+    private val app get() = GraphApp.instance
+
+    /** Última app "real" en primer plano: al cambiar, se consolida lo observado en la anterior. */
+    private var foregroundApp = ""
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
-        if (!capturing || event.eventType != AccessibilityEvent.TYPE_VIEW_CLICKED) return
-        if (event.packageName == packageName) return
-        val label = event.source?.let { labelOf(it) } ?: return
-        if (label.isBlank()) return
-        synchronized(clickBuffer) { clickBuffer.addLast(label); if (clickBuffer.size > 40) clickBuffer.removeFirst() }
-        LogBus.log("learn", "señal clic: \"$label\"")
+        val pkg = event.packageName?.toString() ?: return
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                if (!isRealApp(pkg) || pkg == foregroundApp) return
+                foregroundApp = pkg
+                if (app.passive.active) app.scope.launch { app.passive.appChanged(pkg) }
+                if (visualizing) refreshLearnedOverlay()
+            }
+            AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                if (!app.passive.active || !isRealApp(pkg) || pkg == launcherPkg) return
+                val label = event.source?.let { labelOf(it) } ?: return
+                if (label.isBlank()) return
+                val screenNow = currentScreen()
+                val visible = elementsNow()
+                app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+            }
+            AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED ->
+                if (visualizing) refreshLearnedOverlay()
+        }
     }
 
-    override fun setCapturing(enabled: Boolean) {
-        capturing = enabled
-        if (!enabled) synchronized(clickBuffer) { clickBuffer.clear() }
-    }
-
-    override fun drainClicks(): List<String> = synchronized(clickBuffer) {
-        val out = clickBuffer.toList()
-        clickBuffer.clear()
-        out
-    }
+    /** Una app donde tiene sentido aprender/consolidar: ni Graph, ni sistema, ni teclado flotante. */
+    private fun isRealApp(pkg: String) = pkg.isNotBlank() && pkg != packageName &&
+        pkg != "com.android.systemui" &&
+        (pkg == launcherPkg || packageManager.getLaunchIntentForPackage(pkg) != null)
 
     override fun onInterrupt() {}
+
+    /* ---------- Ver lo aprendido (mantener oprimido el 🎓): contornos de lo ya trackeado ---------- */
+
+    @Volatile private var visualizing = false
+    private var learnedLabels: Map<String, Set<String>> = emptyMap() // paquete → etiquetas (minúsculas)
+    private var lastOverlayRefresh = 0L
+
+    /** Alterna el modo: dibuja el contorno de todo elemento ya trackeado en MCPs en la app visible. */
+    fun toggleLearnedVisualization(): Boolean {
+        visualizing = !visualizing
+        if (visualizing) {
+            app.scope.launch {
+                val tools = app.learnedTools.list()
+                learnedLabels = tools.groupBy { it.app }
+                    .mapValues { (_, ts) -> ts.flatMap { t -> t.elements }.map { it.lowercase() }.toSet() }
+                withContext(Dispatchers.Main) { lastOverlayRefresh = 0; refreshLearnedOverlay() }
+            }
+        } else highlighter.hide()
+        LogBus.log("learn", if (visualizing) "👁 visualización de lo aprendido ON" else "visualización OFF")
+        return visualizing
+    }
+
+    private fun refreshLearnedOverlay() {
+        val now = android.os.SystemClock.elapsedRealtime()
+        if (now - lastOverlayRefresh < 350) return
+        lastOverlayRefresh = now
+        val root = rootInActiveWindow ?: return highlighter.show(emptyList())
+        val pkg = root.packageName?.toString() ?: ""
+        // Mapas de esta app + mapas antiguos sin paquete (compatibilidad): se intenta igual.
+        val labels = learnedLabels[pkg].orEmpty() + learnedLabels[""].orEmpty()
+        if (labels.isEmpty()) { highlighter.show(emptyList()); return }
+        val rects = mutableListOf<Rect>()
+        fun walk(n: AccessibilityNodeInfo?) {
+            n ?: return
+            if ((n.isClickable || n.isEditable) && labelOf(n).lowercase() in labels)
+                rects += Rect().also { n.getBoundsInScreen(it) }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        highlighter.show(rects)
+    }
 
     /* ---------- Estado de pantalla (georreferenciación por árbol de UI) ---------- */
 
@@ -263,12 +315,14 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
 
     override suspend fun scrollMenu(down: Boolean): Boolean = scroll(down)
 
-    /* ---------- LearningSurface: leer, iluminar y tocar elementos por etiqueta ---------- */
+    /* ---------- LearningSurface: leer el árbol y tocar elementos por etiqueta ---------- */
 
     override suspend fun screen(): String = currentScreen()
 
     /** Etiquetas de los elementos tocables de la pantalla actual (lo que el cerebro puede secuenciar). */
-    override suspend fun elements(): List<String> {
+    override suspend fun elements(): List<String> = elementsNow()
+
+    private fun elementsNow(): List<String> {
         val out = LinkedHashSet<String>()
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
@@ -277,17 +331,6 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         }
         walk(rootInActiveWindow)
         return out.take(48).toList()
-    }
-
-    /** Ilumina en secuencia (tin·tin·tin) los elementos por su etiqueta. */
-    override suspend fun highlight(labels: List<String>) {
-        for (label in labels) {
-            val node = findByLabel(label) ?: continue
-            val r = Rect().also { node.getBoundsInScreen(it) }
-            withContext(Dispatchers.Main) { highlighter.show(r) }
-            delay(700)
-        }
-        withContext(Dispatchers.Main) { highlighter.hide() }
     }
 
     override suspend fun tapLabel(label: String): Boolean {

@@ -26,7 +26,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
-import graph.core.domain.Teacher
+import com.zevcorp.graph.platform.GraphAccessibilityService
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import java.util.Locale
@@ -39,7 +39,7 @@ import kotlinx.coroutines.*
  * Arrastrable; al tocarla abre el chat para pedirle algo (texto o voz). Durante la ejecución vuela
  * hacia donde actúa y muestra el botón de detener; si el asistente duda, pregunta aquí mismo.
  */
-class FloatingBubble(private val service: AccessibilityService) : UserChannel, Voice, Teacher {
+class FloatingBubble(private val service: AccessibilityService) : UserChannel, Voice {
 
     private val app get() = GraphApp.instance
     private val wm = service.getSystemService(WindowManager::class.java)
@@ -145,7 +145,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         panel?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
         stopButton?.let { runCatching { wm.removeView(it) } }
-        learnBar?.let { runCatching { wm.removeView(it) } }
     }
 
     /* ---------- Voz y narración (globo de diálogo + TTS) ---------- */
@@ -313,7 +312,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         input.setOnEditorActionListener { _, _, _ -> submit(input.text.toString()); true }
 
         val bar = c.row()
-        bar.addView(iconButton("🎓") { startLearning() })
+        bar.addView(learnToggleButton())
         bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
@@ -416,80 +415,43 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
     }
 
-    /* ---------- Enseñanza (Teacher): barra con 🎤 hablar y ✅ terminar ---------- */
+    /* ---------- Enseñanza PASIVA: el 🎓 alterna el modo; mantenerlo oprimido muestra lo aprendido ---------- */
 
-    private var learnBar: View? = null
-    private var listenCont: kotlinx.coroutines.CancellableContinuation<String?>? = null
+    /**
+     * Botón 🎓 del panel. Toque: activa/desactiva la enseñanza pasiva (sin barra, sin botón de
+     * detener, sin popups: el asistente solo observa el uso normal y consolida al salir de cada
+     * app). Mantener oprimido: alterna la visualización de los elementos ya trackeados en MCPs.
+     */
+    private fun learnToggleButton(): TextView {
+        val active = app.passive.active
+        val button = iconButton("🎓") { toggleTeaching() }
+        if (active) {
+            button.background = rounded(Palette.accent, service.dp(21).toFloat())
+            button.setTextColor(Color.WHITE)
+        }
+        button.setOnLongClickListener {
+            val on = (service as? GraphAccessibilityService)?.toggleLearnedVisualization() ?: false
+            toast(if (on) "👁 Te muestro lo que ya aprendí" else "Oculto lo aprendido")
+            closePanel()
+            true
+        }
+        return button
+    }
 
-    private fun startLearning() {
+    private fun toggleTeaching() {
         if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
         closePanel()
-        showLearnBar()
-        scope.launch {
-            runCatching { withContext(Dispatchers.Default) { app.learn(this@FloatingBubble) } }
-                .onSuccess { toast(it) }
-                .onFailure { toast(if (it is CancellationException) "Enseñanza detenida ✋" else "Enseñanza: ${it.message}") }
-            hideLearnBar()
+        val passive = app.passive
+        if (!passive.active) passive.start()
+        else scope.launch {
+            runCatching { withContext(Dispatchers.Default) { passive.stop() } }
+                .onFailure { toast("Enseñanza: ${it.message}") }
         }
     }
 
-    private fun showLearnBar() {
-        if (learnBar != null) return
-        val c = service
-        val body = c.row().apply {
-            background = rounded(Palette.bg, c.dp(24).toFloat(), Palette.accent)
-            setPadding(c.dp(10), c.dp(8), c.dp(10), c.dp(8))
-        }
-        body.addView(c.caption("🎓 Enséñame: habla 🎤 · ✅ al terminar"),
-            LinearLayout.LayoutParams(0, -2, 1f))
-        body.addView(iconButton("🎤") {
-            recognize { heard -> listenCont?.let { it.resume(heard ?: ""); listenCont = null } }
-        })
-        body.addView(View(c), LinearLayout.LayoutParams(c.dp(6), 1))
-        body.addView(iconButton("✅", primary = true) { listenCont?.let { it.resume(null); listenCont = null } })
-        val params = overlayParams(c.dp(300), -2, focusable = false).apply {
-            gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-            y = c.dp(28)
-        }
-        runCatching { wm.addView(body, params) }
-        learnBar = body
-    }
-
-    private fun hideLearnBar() {
-        scope.launch {
-            learnBar?.let { runCatching { wm.removeView(it) } }
-            learnBar = null
-        }
-    }
-
-    override suspend fun listen(): String? = suspendCancellableCoroutine { cont ->
-        listenCont = cont
-        cont.invokeOnCancellation { listenCont = null }
-    }
-
-    override suspend fun confirm(question: String): Boolean = withContext(Dispatchers.Main) {
-        speak(question)
-        suspendCancellableCoroutine { cont ->
-            val c = service
-            val body = LinearLayout(c).apply {
-                orientation = LinearLayout.VERTICAL
-                background = rounded(Palette.bg, c.dp(22).toFloat(), Palette.accent)
-                setPadding(c.dp(16), c.dp(16), c.dp(16), c.dp(16))
-            }
-            lateinit var window: View
-            fun answer(yes: Boolean) { runCatching { wm.removeView(window) }; if (cont.isActive) cont.resume(yes) }
-            body.addView(c.title(question, 15f))
-            body.gap(c.dp(12))
-            val row = c.row()
-            row.addView(c.button("✅ Sí", primary = true) { answer(true) }, LinearLayout.LayoutParams(0, -2, 1f))
-            row.addView(View(c), LinearLayout.LayoutParams(c.dp(8), 1))
-            row.addView(c.button("✋ No") { answer(false) }, LinearLayout.LayoutParams(0, -2, 1f))
-            body.addView(row)
-            window = ScrollView(c).apply { addView(body); elevation = 22f }
-            val params = overlayParams(c.dp(300), -2, focusable = true).apply { gravity = Gravity.CENTER }
-            runCatching { wm.addView(window, params) }
-            cont.invokeOnCancellation { runCatching { wm.removeView(window) } }
-        }
+    /** Parpadeo de la carita: 1 vez al pasar a ejecución consciente, 2 al pasar a subconsciente. */
+    fun blink(times: Int) {
+        scope.launch { bubble.blink(times) }
     }
 
     /* ---------- Voz sin Activity: SpeechRecognizer directo en el servicio ---------- */

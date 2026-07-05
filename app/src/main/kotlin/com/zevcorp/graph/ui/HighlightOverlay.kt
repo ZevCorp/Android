@@ -12,15 +12,16 @@ import android.view.View
 import android.view.WindowManager
 
 /**
- * Overlay que dibuja un recuadro brillante alrededor de un elemento del árbol de UI durante la
- * enseñanza ("mira cómo lo haría"). La secuencia (tin·tin·tin) la orquesta el servicio con delays.
+ * Overlay que dibuja recuadros brillantes alrededor de elementos del árbol de UI. Lo usa el modo
+ * "ver lo aprendido" (mantener oprimido el 🎓): ilumina a la vez el contorno de TODOS los elementos
+ * que ya están trackeados en MCPs dentro de la app visible, y se refresca al navegar.
  */
 class HighlightOverlay(private val service: AccessibilityService) {
 
     private val wm = service.getSystemService(WindowManager::class.java)
     private var view: BoxView? = null
 
-    fun show(rect: Rect) {
+    fun show(rects: List<Rect>) {
         val v = view ?: BoxView(service).also {
             view = it
             val p = WindowManager.LayoutParams(
@@ -31,12 +32,12 @@ class HighlightOverlay(private val service: AccessibilityService) {
             )
             runCatching { wm.addView(it, p) }
         }
-        v.box = RectF(rect)
+        v.boxes = rects.map { RectF(it) }
         v.invalidate()
     }
 
     fun hide() {
-        view?.let { it.box = null; it.invalidate() }
+        view?.let { it.boxes = emptyList(); it.invalidate() }
     }
 
     fun destroy() {
@@ -45,18 +46,18 @@ class HighlightOverlay(private val service: AccessibilityService) {
     }
 
     private class BoxView(c: Context) : View(c) {
-        var box: RectF? = null
+        var boxes: List<RectF> = emptyList()
         private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.STROKE; strokeWidth = 9f; color = Color.parseColor("#2F8CFF")
+            style = Paint.Style.STROKE; strokeWidth = 7f; color = Color.parseColor("#2F8CFF")
         }
         private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-            style = Paint.Style.FILL; color = Color.parseColor("#332F8CFF")
+            style = Paint.Style.FILL; color = Color.parseColor("#262F8CFF")
         }
 
         override fun onDraw(canvas: Canvas) {
-            box?.let {
-                canvas.drawRoundRect(it, 22f, 22f, glow)
-                canvas.drawRoundRect(it, 22f, 22f, stroke)
+            for (box in boxes) {
+                canvas.drawRoundRect(box, 18f, 18f, glow)
+                canvas.drawRoundRect(box, 18f, 18f, stroke)
             }
         }
     }

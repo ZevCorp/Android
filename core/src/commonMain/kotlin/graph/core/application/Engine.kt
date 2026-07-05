@@ -25,6 +25,10 @@ class ExecutionEngine(
     private val voice: Voice = NO_VOICE,
     private val log: GraphLog = NO_LOG,
     private val maxTurns: Int = 40,
+    /** Señal de vía (consciente vs subconsciente) para la plataforma; solo importa cuando cambia. */
+    private val mode: ExecutionMode? = null,
+    /** Pausa entre steps enviados juntos en un mismo turno (ajustable desde la app). */
+    private val stepDelay: () -> Long = { 350 },
 ) {
     /** Ejecuta un objetivo hasta que el modelo devuelve el control con texto. Devuelve ese resumen. */
     suspend fun run(goal: String): String {
@@ -64,7 +68,7 @@ class ExecutionEngine(
                 turn.intents.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { voice.narrate(it) }
                 out += execute(action)
                 actions++
-                if (turn.actions.size > 1) delay(350) // deja asentar la UI entre gestos encadenados
+                if (turn.actions.size > 1) delay(stepDelay()) // deja asentar la UI entre gestos encadenados
             }
             results = out
 
@@ -92,6 +96,8 @@ class ExecutionEngine(
     }
 
     private suspend fun execute(action: AgentAction): String {
+        // Aviso de vía: MCP = subconsciente, computer-use = consciente (Wait no cambia de vía).
+        if (action !is AgentAction.Wait) mode?.executing(action is AgentAction.Mcp)
         val ok = when (action) {
             is AgentAction.Mcp -> mcp.call(action.tool, action.args) == "ok"
             is AgentAction.Tap -> phone.tap(action.x, action.y)

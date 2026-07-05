@@ -19,6 +19,31 @@ class FaceView(context: Context) : View(context) {
     var thinking = false
         set(value) { field = value; invalidate() }
 
+    /* Parpadeo: señal de cambio de vía de ejecución (1 = consciente, 2 = subconsciente). */
+    private var blinkClosed = 0f // 0 = ojos abiertos, 1 = cerrados
+    private var blinkAnim: android.animation.ValueAnimator? = null
+
+    /** Parpadea `times` veces seguidas cerrando y abriendo los ojos. */
+    fun blink(times: Int) {
+        if (times <= 0) return
+        blinkAnim?.cancel()
+        blinkAnim = android.animation.ValueAnimator.ofFloat(0f, times.toFloat()).apply {
+            duration = 340L * times
+            addUpdateListener { a ->
+                val t = a.animatedValue as Float
+                val phase = t - kotlin.math.floor(t) // 0..1 dentro de cada parpadeo
+                blinkClosed = 1f - kotlin.math.abs(phase * 2f - 1f) // triángulo: abre→cierra→abre
+                invalidate()
+            }
+            addListener(object : android.animation.AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: android.animation.Animator) {
+                    blinkClosed = 0f; invalidate()
+                }
+            })
+            start()
+        }
+    }
+
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
         strokeCap = Paint.Cap.ROUND
@@ -69,8 +94,8 @@ class FaceView(context: Context) : View(context) {
             path.quadTo(x(bx), y(-34f - h - c * 15f), x(bx + 10f), y(-34f - h))
             canvas.drawPath(path, stroke)
         }
-        // ojos: líneas verticales
-        val eyeLen = 25f * eyeOpen * (1f - squint * 0.4f)
+        // ojos: líneas verticales (el parpadeo los cierra casi del todo)
+        val eyeLen = 25f * eyeOpen * (1f - squint * 0.4f) * (1f - blinkClosed * 0.92f)
         for (ex in listOf(-30f, 30f)) {
             canvas.drawLine(x(ex), y(-14f - eyeLen / 2f), x(ex), y(-14f + eyeLen / 2f), stroke)
         }

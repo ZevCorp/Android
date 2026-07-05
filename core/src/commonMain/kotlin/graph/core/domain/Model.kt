@@ -55,6 +55,8 @@ class Mcp(
     system: SystemApi,
     learned: List<LearnedTool> = emptyList(),
     player: UiPlayer? = null,
+    /** Pausa entre los steps (taps) de una herramienta aprendida enviados juntos; ajustable en la app. */
+    stepDelay: () -> Long = { 350 },
 ) {
 
     private val gestureTools = listOf(
@@ -121,7 +123,7 @@ class Mcp(
             var ok = labels.isNotEmpty()
             for (label in labels) {
                 if (player?.tapLabel(label) != true) ok = false
-                delay(350)
+                delay(stepDelay())
             }
             ok
         }
