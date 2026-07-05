@@ -53,3 +53,14 @@ interface LearnedToolRepository {
     fun save(tool: LearnedTool)
     fun list(): List<LearnedTool>
 }
+
+/**
+ * Durante la enseñanza pasiva iniciada por el usuario, el asistente puede INTERRUMPIR y preguntarle
+ * por voz cosas que le sirvan para hacer bien la tarea después (p.ej. "¿esta es la lista que usas
+ * siempre?"). La implementación (app) genera la pregunta, la dice en voz alta, escucha la respuesta
+ * y la guarda como conocimiento de esa app. Es fire-and-forget: arranca su propio trabajo async y
+ * devuelve de inmediato, sin bloquear la captura de señales.
+ */
+fun interface LearningInquirer {
+    fun maybeAsk(app: String, screen: String, recentClicks: List<String>, elements: List<String>)
+}

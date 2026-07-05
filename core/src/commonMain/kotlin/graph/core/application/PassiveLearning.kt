@@ -3,6 +3,8 @@ package graph.core.application
 import graph.core.domain.*
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlin.time.TimeMark
+import kotlin.time.TimeSource
 
 private val NO_LOG = GraphLog { _, _ -> }
 
@@ -20,6 +22,8 @@ class PassiveLearning(
     private val repo: LearnedToolRepository,
     private val voice: Voice,
     private val log: GraphLog = NO_LOG,
+    /** Si está, en el modo iniciado por el usuario el asistente puede interrumpir y preguntar. */
+    private val inquirer: LearningInquirer? = null,
 ) {
     @Volatile var active = false
         private set
@@ -30,9 +34,17 @@ class PassiveLearning(
     private val clicks = mutableListOf<String>()
     private val elements = LinkedHashSet<String>()
 
+    /** true solo cuando lo activó el usuario con el 🎓 (no en el auto-aprendizaje de una ejecución). */
+    private var userMode = false
+    private var lastInquiry: TimeMark? = null
+    private var clicksSinceInquiry = 0
+
     /** Enciende la observación. `quiet` = sin anuncios (modo automático durante una ejecución). */
     fun start(quiet: Boolean = false) {
         active = true
+        userMode = !quiet
+        lastInquiry = null
+        clicksSinceInquiry = 0
         log.log("learn", if (quiet) "▶ enseñanza pasiva automática (ejecución)" else "▶ enseñanza pasiva activada")
         if (!quiet) voice.narrate("🎓 Observo mientras usas el teléfono; aprendo solo.")
     }
@@ -48,13 +60,24 @@ class PassiveLearning(
     /** Un clic del usuario dentro de una app, con el árbol de UI visible en ese momento. */
     suspend fun signal(app: String, screen: String, label: String, visible: List<String>) {
         if (!active) return
-        mutex.withLock {
-            if (app != this.app) { consolidate(); this.app = app }
+        val ask: Triple<String, List<String>, List<String>>? = mutex.withLock {
+            if (app != this.app) { consolidate(); this.app = app; clicksSinceInquiry = 0 }
             this.screen = screen
             clicks += label
             elements += visible
+            clicksSinceInquiry++
             log.log("learn", "señal clic \"$label\" en $app · ${clicks.size} señales")
+            // ¿Toca preguntar? Solo en modo usuario, con señal fresca y sin acosar (≥3 clics y ≥20 s).
+            if (userMode && inquirer != null && clicksSinceInquiry >= 3 &&
+                (lastInquiry?.elapsedNow()?.inWholeSeconds ?: Long.MAX_VALUE) >= 20
+            ) {
+                lastInquiry = TimeSource.Monotonic.markNow()
+                clicksSinceInquiry = 0
+                Triple(app, clicks.toList().takeLast(12), elements.toList())
+            } else null
         }
+        // Fuera del lock: la pregunta corre async en la implementación (no bloquea nada).
+        ask?.let { (a, c, e) -> inquirer?.maybeAsk(a, screen, c, e) }
     }
 
     /** El usuario pasó a otra app (o al home): consolida lo observado en la anterior. */

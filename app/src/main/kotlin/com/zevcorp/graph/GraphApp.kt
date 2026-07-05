@@ -10,6 +10,7 @@ import android.content.SharedPreferences
 import com.zevcorp.graph.platform.AndroidSystemApi
 import com.zevcorp.graph.platform.CloudSync
 import com.zevcorp.graph.platform.GeminiBrain
+import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.MemoryStore
 import com.zevcorp.graph.voice.IntentDistiller
@@ -57,9 +58,14 @@ class GraphApp : Application() {
 
     /**
      * Enseñanza PASIVA: se alterna con el 🎓 de la burbuja. Observa los clics del usuario usando el
-     * teléfono con normalidad y consolida el MCP de cada app cuando el usuario sale de ella.
+     * teléfono con normalidad y consolida el MCP de cada app cuando el usuario sale de ella. En el
+     * modo iniciado por el usuario, el asistente puede interrumpir y preguntarle cosas por voz.
      */
-    val passive by lazy { PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus) }
+    val passive by lazy {
+        PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus,
+            inquirer = LearningInquiry(this, apiKey, model, voice, memories, scope,
+                busy = { executing || bubble?.voiceBusy == true }))
+    }
 
     /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube). */
     val memories by lazy {
@@ -125,6 +131,9 @@ class GraphApp : Application() {
     /* ---------- Detener la ejecución (botón rojo flotante + notificación) ---------- */
 
     @Volatile private var runJob: Job? = null
+
+    /** Hay una ejecución autónoma en curso: no es momento de que el aprendizaje interrumpa por voz. */
+    val executing get() = runJob != null
 
     fun stopExecution() {
         LogBus.log("app", "⏹ detención solicitada por el usuario")

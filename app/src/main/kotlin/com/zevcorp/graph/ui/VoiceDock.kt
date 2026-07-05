@@ -80,7 +80,7 @@ class VoiceDock(
         if (armTimer != null) return
         dockLeft = cx < service.resources.displayMetrics.widthPixels / 2
         setThinking(true)
-        showBadge("🎤 quieta ahí… escucha permanente en 2.5 s")
+        showBadge("🎤 mantén el dedo aquí… escucha en 2.5 s")
         val t = Runnable { armTimer = null; dock() }
         armTimer = t
         handler.postDelayed(t, 2500)

@@ -48,6 +48,10 @@ Toca **🎓** en la burbuja para **activar/desactivar** el modo enseñanza pasiv
 
 **Mantén oprimido el 🎓** para ver lo que ya sabe: se iluminan los contornos de todos los elementos ya trackeados en MCPs de la app visible, y el overlay se actualiza mientras navegas a otras apps. Vuelve a mantenerlo oprimido para ocultarlo.
 
+Mientras el modo está activo, el asistente puede **interrumpirte y preguntarte por voz** cosas que le sirvan para hacer bien la tarea después ("¿esta es la lista que pones siempre?"). Escucha tu respuesta y la guarda como conocimiento durable de esa app (memoria que el motor de ejecución inyecta en su prompt). No pregunta por preguntar: solo cuando tiene una duda genuinamente útil, y con moderación.
+
+**Voz por esquinas.** Arrastra la burbuja **con el dedo** hasta una esquina superior y **mantenla ahí ~2.5 s**: eso enciende la escucha permanente (transcripción → destilador de intención → motor). Lanzarla de un flick a la esquina **no** activa la voz — hace falta el dedo sostenido, que es la señal de intención clara. Sacas la burbuja de la esquina para apagarla.
+
 **En ejecución** la herramienta aprendida es generalista: su descripción documenta los grupos de elementos y cómo componerlos, y el modelo pasa `taps` con la secuencia que necesite (`calculadora(taps="5,+,7,+,8,=")`) — cualquier cálculo, no solo el que vio. Se reproduce por árbol de UI, sin imagen. La **barra de velocidad** de la app principal ajusta la pausa entre esos steps. La carita además **parpadea al cambiar de vía**: 1 vez al pasar a ejecución consciente (computer-use con screenshots), 2 veces al pasar a subconsciente (MCP).
 
 - `core`: `PassiveLearning` (acumula señales por app y consolida al salir); puertos `LearningBrain`, `LearningSurface`; `LearnedTool` = nombre + documentación + catálogo de elementos + paquete de la app.

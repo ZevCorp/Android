@@ -70,6 +70,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         return if (left) service.dp(4) else m.widthPixels - bubbleParams.width - service.dp(4)
     }
 
+    /** El micrófono está ocupado por la escucha de esquina: el aprendizaje no debe interrumpir ahora. */
+    val voiceBusy get() = voiceDock.docked || voiceDock.listening
+
     fun show() {
         tts = TextToSpeech(service) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -126,9 +129,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!moved) v.performClick()
-                    else if (voiceDock.inZone(bubbleParams.x + size / 2, bubbleParams.y + size / 2)) {
-                        snapToCorner(size) // encaje en la esquina: la cuenta de 2.5 s sigue corriendo
+                    else if (voiceDock.docked) {
+                        // El dedo se mantuvo 2.5 s en la esquina y la escucha ya arrancó: solo
+                        // asienta la burbuja en la esquina, sin volver a armar nada.
+                        snapToCorner(size)
                     } else {
+                        // Al SOLTAR el dedo se cancela cualquier cuenta pendiente: lanzar la burbuja
+                        // a la esquina (o soltarla ahí sin mantener) NO activa la voz. Solo el
+                        // arrastre-y-mantener 2.5 s la activa (lo maneja voiceDock.track en MOVE).
                         voiceDock.cancel()
                         val vt = tracker
                         vt?.addMovement(e); vt?.computeCurrentVelocity(1000)
@@ -168,13 +176,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
     }
 
-    /** Encaja la burbuja exactamente en la esquina superior más cercana (zona de escucha). */
+    /** Asienta la burbuja en la esquina más cercana (solo visual; ya está en modo escucha). */
     private fun snapToCorner(size: Int) {
         val left = bubbleParams.x + size / 2 < service.resources.displayMetrics.widthPixels / 2
-        val destX = cornerX(left)
-        val destY = service.dp(6)
-        snapTo(destX, destY)
-        voiceDock.track(destX + size / 2, destY + size / 2)
+        snapTo(cornerX(left), service.dp(6))
     }
 
     /** Animación corta de encaje hacia un punto (también para volver a la esquina tras ejecutar). */
