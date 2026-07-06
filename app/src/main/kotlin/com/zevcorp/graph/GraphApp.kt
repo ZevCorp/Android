@@ -83,7 +83,6 @@ class GraphApp : Application() {
             inquirer = LearningInquiry(apiKey, model, memories, scope,
                 busy = { executing || bubble?.voiceBusy == true || activeLearning.busy },
                 speak = { bubble?.speak(it) },
-                currentApp = { (ui as? GraphAccessibilityService)?.currentApp ?: "" },
                 pending = ::notePendingVoice))
     }
 

@@ -59,9 +59,6 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
     /** Última app "real" en primer plano: al cambiar, se consolida lo observado en la anterior. */
     private var foregroundApp = ""
 
-    /** App en primer plano AHORA (guardia de vigencia de las propuestas del aprendizaje pasivo). */
-    val currentApp get() = foregroundApp
-
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString() ?: return
         when (event.eventType) {

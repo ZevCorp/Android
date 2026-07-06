@@ -17,7 +17,22 @@ import kotlinx.serialization.json.putJsonObject
 /** Llamada mínima a Gemini generateContent con salida JSON, compartida por los destiladores. */
 object GeminiJson {
 
-    fun ask(apiKey: String, model: String, prompt: String, tag: String = "gemini"): JsonObject {
+    /**
+     * `thinkingBudget = 0` desactiva el razonamiento interno del modelo: para decisiones JSON de
+     * una frase (propuestas, destiladores) el campo "reasoning" del propio JSON ES la cadena de
+     * pensamiento, y el thinking por defecto solo agrega segundos de latencia. Si el modelo no
+     * acepta el parámetro, se reintenta una vez sin él (nunca rompe el pipeline).
+     */
+    fun ask(apiKey: String, model: String, prompt: String, tag: String = "gemini", thinkingBudget: Int? = null): JsonObject =
+        try {
+            askOnce(apiKey, model, prompt, tag, thinkingBudget)
+        } catch (t: Throwable) {
+            if (thinkingBudget == null) throw t
+            LogBus.log(tag, "reintento sin thinkingConfig: ${t.message}")
+            askOnce(apiKey, model, prompt, tag, null)
+        }
+
+    private fun askOnce(apiKey: String, model: String, prompt: String, tag: String, thinkingBudget: Int?): JsonObject {
         val req = buildJsonObject {
             putJsonArray("contents") {
                 addJsonObject {
@@ -25,7 +40,10 @@ object GeminiJson {
                     putJsonArray("parts") { addJsonObject { put("text", prompt) } }
                 }
             }
-            putJsonObject("generationConfig") { put("responseMimeType", "application/json") }
+            putJsonObject("generationConfig") {
+                put("responseMimeType", "application/json")
+                if (thinkingBudget != null) putJsonObject("thinkingConfig") { put("thinkingBudget", thinkingBudget) }
+            }
         }
         val c = URL("https://generativelanguage.googleapis.com/v1beta/models/$model:generateContent")
             .openConnection() as HttpURLConnection

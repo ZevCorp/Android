@@ -40,7 +40,13 @@ android {
     }
     buildTypes {
         getByName("debug") { signingConfig = signingConfigs.getByName("shared") }
-        getByName("release") { signingConfig = signingConfigs.getByName("shared") }
+        // A los usuarios SIEMPRE se les distribuye el build RELEASE: un APK debuggable sideloaded
+        // es lo que Play Protect marca con más agresividad. Sin minify: el APK ya es pequeño y la
+        // ofuscación de R8 levanta MÁS sospechas en el análisis, no menos.
+        getByName("release") {
+            signingConfig = signingConfigs.getByName("shared")
+            isMinifyEnabled = false
+        }
     }
     buildFeatures { buildConfig = true }
     compileOptions {

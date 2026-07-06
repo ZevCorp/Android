@@ -24,8 +24,10 @@ import kotlinx.serialization.json.jsonPrimitive
  * CÓMO RESPONDE EL USUARIO: no hay micrófono especial. El asistente habla y registra lo dicho como
  * contexto pendiente del hilo unificado (GraphApp.notePendingVoice); el usuario contesta por
  * CUALQUIER vía de siempre (tocar la carita → panel, texto o micrófono, esquinas…) y ese "sí,
- * hazlo" llega al motor CON el contexto de la propuesta. Antes de hablar hay una guardia de
- * vigencia: si el usuario ya cambió de app mientras se pensaba, el momento pasó y se calla.
+ * hazlo" llega al motor CON el contexto de la propuesta. La propuesta SIEMPRE se dice — aunque el
+ * usuario ya haya cambiado de pantalla — porque nombra su referente concreto ("en ese chat con
+ * Julián…"), así se entiende de qué habla sin estar viéndolo. Y la llamada corre SIN thinking del
+ * modelo (el campo "reasoning" del JSON es la única cadena de pensamiento): latencia mínima.
  */
 class LearningInquiry(
     private val apiKey: () -> String,
@@ -36,8 +38,6 @@ class LearningInquiry(
     private val busy: () -> Boolean,
     /** Dice la propuesta/pregunta en voz alta (TTS + globo de la burbuja). */
     private val speak: (String) -> Unit,
-    /** App en primer plano AHORA MISMO: guardia de vigencia antes de hablar. */
-    private val currentApp: () -> String,
     /** Registra lo dicho como contexto pendiente: la respuesta llega por cualquier vía de input. */
     private val pending: (kind: String, app: String, question: String, task: String) -> Unit,
 ) : LearningInquirer {
@@ -52,13 +52,6 @@ class LearningInquiry(
         scope.launch(Dispatchers.IO) {
             try {
                 val d = decide(app, screen, recentClicks, elements) ?: return@launch
-                // Guardia de vigencia: si mientras pensaba el usuario ya cambió de app, el momento
-                // pasó — proponer algo de dos pantallas atrás es peor que callar.
-                val now = currentApp()
-                if (now.isNotBlank() && now != app) {
-                    LogBus.log("learn", "🤫 el momento pasó (ya está en $now): me callo")
-                    return@launch
-                }
                 LogBus.log("learn", if (d.action == "offer") "🙋 propongo: ${d.question}" else "🙋 pregunto: ${d.question}")
                 speak(d.question)
                 pending(d.action, app, d.question, d.task)
@@ -84,7 +77,7 @@ class LearningInquiry(
             de la app aunque abajo veas el paquete Android):
             ${known.ifBlank { "(aún no sabes nada de él)" }}
 
-            Esto acaba de pasar HACE SEGUNDOS (es lo que tiene en pantalla AHORA MISMO):
+            Esto acaba de pasar HACE SEGUNDOS:
             App en primer plano (paquete Android): $app
             Pantalla: $screen
             Lo que tocó (en orden): ${clicks.joinToString(" → ").ifBlank { "(nada)" }}
@@ -93,16 +86,18 @@ class LearningInquiry(
             PIENSA PRIMERO (campo "reasoning", UNA frase brevísima) y decide UNA de tres:
             - "offer" — MINDSET PROPOSITIVO: estás viendo EN VIVO lo que él hace; detecta una
               oportunidad real de hacer TÚ algo que a él le consumiría tiempo y propón hacerlo por
-              él. SOLO sobre lo que está en pantalla AHORA: si el momento ya pasó o dudas de que
-              siga vigente, calla. Dos fuentes, en este orden:
+              él. Dos fuentes, en este orden:
               1) SUS INSTRUCCIONES de arriba: si alguna pide que seas propositivo en un escenario y
                  lo que ves en pantalla ES ese escenario (p.ej. "si en WhatsApp un usuario me pide
                  una mejora, propón hacerla tú"), esa instrucción MANDA: propónlo tal como él lo
                  pidió, sin timidez.
               2) Lo evidente y pendiente en pantalla (un mensaje que debe contestar, algo a medio
                  hacer, un trámite repetitivo) — solo si es claramente útil; nunca por cortesía.
-              Propónlo corto y natural por voz: "Veo que…, ¿quieres que lo haga yo?" y define en
-              "task" la tarea exacta e imperativa que harías, con los detalles concretos que ves.
+              La propuesta ("question") debe NOMBRAR SU REFERENTE CONCRETO — el chat, el correo, la
+              persona, la app: "En ese chat con Julián veo que te pidió X, ¿quieres que lo haga yo?"
+              — porque el usuario puede haber cambiado de pantalla cuando la oiga y debe entender de
+              qué le hablas SIN estar viéndolo. Define en "task" la tarea exacta e imperativa que
+              harías, con los detalles concretos que ves (nombres, textos, chat exacto).
             - "ask": tienes una duda que DE VERDAD te ayudaría a hacer bien esta tarea después y que
               no puedes inferir (un dato personal que solo él sabe). JAMÁS preguntes algo que ya
               esté en lo que sabes de él. El ORDEN en que hace las cosas casi nunca es una regla:
@@ -114,7 +109,9 @@ class LearningInquiry(
             {"reasoning": "una frase", "action": "offer|ask|none", "question": "lo que dirías por voz o vacío", "task": "instrucción imperativa si action=offer, si no vacío"}
         """.trimIndent()
         return runCatching {
-            val o = GeminiJson.ask(apiKey(), model(), prompt, tag = "learn")
+            // thinkingBudget = 0: sin razonamiento interno del modelo — la decisión debe salir en
+            // ~1-2 s para que la propuesta llegue mientras el momento sigue vivo.
+            val o = GeminiJson.ask(apiKey(), model(), prompt, tag = "learn", thinkingBudget = 0)
             val reasoning = o["reasoning"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val action = o["action"]?.jsonPrimitive?.contentOrNull.orEmpty()
             val question = o["question"]?.jsonPrimitive?.contentOrNull.orEmpty()
