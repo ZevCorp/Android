@@ -135,9 +135,10 @@ class GeminiBrain(
                     call.name == "ask_user" -> result += jsonItem(jo("answer" to js(informText.ifBlank { "(sin respuesta)" })))
                     internalResults.containsKey(call.id) -> result += jsonItem(internalResults.getValue(call.id))
                     else -> {
-                        // safety_acknowledgement va DENTRO del resultado (no como campo de primer nivel
-                        // del function_result: eso da HTTP 400) y SOLO para acciones nativas de
-                        // computer_use (call.safety ya está restringido a esas; nunca a funciones MCP).
+                        // safety_acknowledgement va EMBEBIDO en el JSON del resultado (nunca como campo
+                        // de primer nivel del function_result: eso da HTTP 400), para acciones nativas
+                        // y para funciones custom (MCP) que traigan safety_decision. Doc oficial:
+                        // action_result["safety_acknowledgement"] = true, y ese dict se json.dumps al "text".
                         val resObj = linkedMapOf(
                             "screen" to js(state.screen), "ui" to js(state.uiContext),
                             "result" to js(actionResults.getOrElse(i) { "ok" }))
@@ -211,11 +212,11 @@ class GeminiBrain(
                     val name = item.str("name")
                     val id = item.str("call_id").ifBlank { item.str("id") }.ifBlank { "call_${calls.size}" }
                     val args = (item["arguments"] as? JsonObject) ?: (item["args"] as? JsonObject) ?: JsonObject(emptyMap())
-                    // safety_acknowledgement SOLO aplica a acciones nativas de computer_use. Para
-                    // funciones custom (MCP aprendidas, ask_user, speak, list_apps) la API lo rechaza
-                    // con 400, así que aquí NO se marca como safety aunque traigan safety_decision.
-                    val custom = name in mcpNames || name in setOf("ask_user", "speak", "list_apps")
-                    calls += Call(id, name, args["safety_decision"] != null && !custom)
+                    // La API EXIGE acuse siempre que una llamada traiga safety_decision, sea nativa de
+                    // computer_use o una función custom (MCP aprendida como whatsapp_chat). El acuse va
+                    // EMBEBIDO en el JSON del resultado (ver next()), no como campo de primer nivel del
+                    // function_result — tal cual la documentación oficial (action_result["safety_acknowledgement"]=true).
+                    calls += Call(id, name, args["safety_decision"] != null)
                     if (name !in setOf("ask_user", "speak")) intents += args.str("intent")
 
                     fun px(key: String, size: Int) =
