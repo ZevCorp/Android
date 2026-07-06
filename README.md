@@ -71,6 +71,17 @@ Mientras el modo está activo, el asistente puede **intervenir por voz por inici
 - `core`: `PassiveLearning` (acumula señales por app y consolida al salir); puertos `LearningBrain`, `LearningSurface`; `LearnedTool` = nombre + documentación + catálogo de elementos + paquete de la app.
 - `app`: `GeminiLearning` (consolidación estricta), `HighlightOverlay` (contornos de lo aprendido), el servicio captura clics-señal y detecta el cambio de app en primer plano.
 
+## Tu cuenta: dos capas de conocimiento, dos dueños
+
+El asistente mejora con el uso por dos vías **separadas a propósito**, y el inicio de sesión (tarjeta **"Tu cuenta"** de la app, email + contraseña) es la frontera entre ambas:
+
+- **El mapa de UI de las apps es TRANSVERSAL** (`graph_learned_tools`): si un usuario le enseña la calculadora o WhatsApp, ese entendimiento del árbol de UI les sirve a **todos** los usuarios. Cualquiera lo lee (con o sin cuenta); **aportar** aprendizajes nuevos requiere sesión.
+- **La knowledge-base personal es SOLO TUYA** (`graph_memory`, la memoria durable): cosas como *"mi mamá está guardada como 'Ale' en WhatsApp"* o *"soy desarrollador: ayúdame con las tareas de desarrollo entrantes"* pertenecen a tu **cuenta**. En el servidor lo garantiza RLS por `user_id`: nadie más puede leerlas, ni siquiera con la key pública de la app.
+
+Sin sesión el asistente funciona igual, pero tus recuerdos viven **solo en ese teléfono** (archivo anónimo local). Al iniciar sesión, esas notas anónimas se **adoptan a tu cuenta** (se suben y te siguen entre teléfonos y reinstalaciones); al cerrar sesión, el motor deja de inyectarlas y tu memoria queda a salvo en la nube. Localmente cada cuenta tiene su propio archivo (`memory-<userId>.json`), así que varios usuarios en un mismo teléfono no se mezclan.
+
+El registro crea la cuenta al instante (sin confirmación por correo) vía la Edge Function `graph-signup`.
+
 ## Las dos vías, un solo cerebro
 
 `GeminiBrain` declara al modelo, en el mismo turno, la herramienta nativa `computer_use` **y** las herramientas MCP como funciones. Cuando el modelo llama una función MCP → `Mcp.call()`; cuando usa computer-use → primitivas de `Phone`. El bucle vive en `ExecutionEngine` (core).

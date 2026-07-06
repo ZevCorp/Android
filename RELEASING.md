@@ -62,6 +62,21 @@ service role puede escribir).
 servidor y hace upsert de la fila con la service role. Endpoint:
 `https://zyvfamlhlmztliexvmej.supabase.co/functions/v1/publish-release`
 
+### Cuentas y capas de conocimiento (Supabase Auth)
+
+- **Registro**: Edge Function **`graph-signup`** (`verify_jwt = false`) — crea la cuenta **ya
+  confirmada** con la service role (el proyecto exige confirmación por email para la otra app que
+  vive aquí, pero Graph no la necesita) y la marca con `user_metadata {app:"graph"}`. El trigger
+  `private.handle_new_user` **omite** a estos usuarios (no les crea perfil clínico ni organización).
+- **Login**: grant de contraseña normal de GoTrue (`/auth/v1/token?grant_type=password`), con
+  refresh automático en el cliente (`SupabaseAuth.kt`).
+- **Tabla `graph_memory`** (knowledge-base PERSONAL): columnas `id`, `user_id` (default
+  `auth.uid()`), `app`, `note`, `updated_at`; unique `(user_id, note)`. **RLS: solo el dueño** lee y
+  escribe sus filas. Las filas antiguas de antes de las cuentas quedaron con `user_id null`
+  (invisibles por la API).
+- **Tabla `graph_learned_tools`** (mapa de UI, TRANSVERSAL): RLS con **lectura pública** (anon y
+  autenticados) y **escritura solo autenticada** — todos se benefician, aportar pide cuenta.
+
 ### Token de administrador (SECRETO)
 
 ```

@@ -37,6 +37,7 @@ class MainActivity : Activity(), UserChannel {
 
     private lateinit var logView: TextView
     private lateinit var mcpPanel: LinearLayout
+    private lateinit var accountBody: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
@@ -108,6 +109,22 @@ class MainActivity : Activity(), UserChannel {
         updButton = button("Buscar actualización") { checkNow() }
         upd.addView(updButton)
         root.addView(upd)
+        root.gap(dp(14))
+
+        // Tu cuenta: separa las dos capas de conocimiento. Lo que Graph aprende de la UI de las
+        // apps (calculadora, WhatsApp…) es de TODOS los usuarios; tu knowledge-base personal
+        // (recuerdos, preferencias, "mi mamá está guardada como…") pertenece SOLO a tu cuenta.
+        val account = card()
+        val accHead = row()
+        accHead.addView(iconChip(Icon.ASSISTANT, sizeDp = 34, tint = Palette.accent))
+        accHead.addView(title("Tu cuenta").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        account.addView(accHead)
+        account.gap(dp(4))
+        accountBody = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        account.addView(accountBody)
+        paintAccount()
+        root.addView(account)
         root.gap(dp(14))
 
         // Config: API key + accesibilidad
@@ -488,6 +505,84 @@ class MainActivity : Activity(), UserChannel {
             .setView(scroll)
             .setPositiveButton("Cerrar", null)
             .show()
+    }
+
+    /* ---------- Tu cuenta: login/registro (el conocimiento personal es solo tuyo) ---------- */
+
+    /** Pinta el contenido de la tarjeta de cuenta según haya sesión o no. */
+    private fun paintAccount() {
+        val auth = app.auth
+        accountBody.removeAllViews()
+
+        if (auth.loggedIn) {
+            accountBody.addView(caption("Sesión iniciada: ${auth.email}"))
+            accountBody.gap(dp(4))
+            accountBody.addView(caption("Tus recuerdos y preferencias se guardan en tu cuenta (solo tú los ves) " +
+                "y te siguen si cambias de teléfono. Lo que aprendo de la UI de las apps se comparte " +
+                "de forma anónima con todos los usuarios."))
+            accountBody.gap(dp(10))
+            accountBody.addView(button("Cerrar sesión") {
+                scope.launch {
+                    withContext(Dispatchers.IO) { app.auth.signOut() }
+                    log("Sesión cerrada")
+                    paintAccount()
+                }
+            })
+            return
+        }
+
+        accountBody.addView(caption("Con cuenta, tu conocimiento personal (recuerdos como \"mi mamá está " +
+            "guardada como 'Ale'\" o \"soy desarrollador\") pertenece solo a ti y sobrevive a reinstalaciones. " +
+            "Sin cuenta, esos recuerdos se quedan solo en este teléfono. El mapa de UI de las apps siempre " +
+            "es compartido: lo que cualquiera me enseña nos sirve a todos."))
+        accountBody.gap(dp(10))
+        val emailF = EditText(this).apply {
+            hint = "Correo"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            setText(app.prefs.getString("authLastEmail", ""))
+            setTextColor(Palette.text); setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        accountBody.addView(emailF)
+        accountBody.gap(dp(8))
+        val passF = EditText(this).apply {
+            hint = "Contraseña (mínimo 8 caracteres)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setTextColor(Palette.text); setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        accountBody.addView(passF)
+        accountBody.gap(dp(8))
+        val status = caption("")
+        fun submit(newAccount: Boolean) {
+            val email = emailF.text.toString().trim()
+            val pass = passF.text.toString()
+            if (email.isBlank() || pass.isBlank()) { status.text = "Escribe correo y contraseña"; return }
+            status.text = if (newAccount) "Creando tu cuenta…" else "Entrando…"
+            scope.launch {
+                val err = withContext(Dispatchers.IO) {
+                    var e: String? = if (newAccount) app.auth.signUp(email, pass) else null
+                    if (e == null) e = app.auth.signIn(email, pass)
+                    e
+                }
+                if (err != null) { status.text = err; return@launch }
+                app.prefs.edit().putString("authLastEmail", email).apply()
+                log("Sesión iniciada: ${app.auth.email}")
+                app.sessionChanged() // adopta las notas anónimas y sincroniza la memoria de la cuenta
+                paintAccount()
+            }
+        }
+        val actions = row()
+        actions.addView(button("Crear cuenta") { submit(newAccount = true) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(View(this), LinearLayout.LayoutParams(dp(8), 1))
+        actions.addView(button("Iniciar sesión", primary = true) { submit(newAccount = false) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        accountBody.addView(actions)
+        accountBody.gap(dp(6))
+        accountBody.addView(status)
     }
 
     private fun log(message: String) = LogBus.log("app", message)

@@ -16,6 +16,7 @@ import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.MemoryStore
+import com.zevcorp.graph.platform.SupabaseAuth
 import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.platform.UsageU
 import com.zevcorp.graph.ui.Palette
@@ -87,9 +88,17 @@ class GraphApp : Application() {
             askAloud = { q -> bubble?.askAloud(q) ?: "" }, apiKey = apiKey, model = model)
     }
 
-    /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube). */
+    /**
+     * La cuenta del usuario: separa el conocimiento PERSONAL (memoria durable, solo suyo) del mapa
+     * de UI de las apps (compartido entre todos). Sin sesión, la memoria vive solo en el teléfono.
+     */
+    val auth by lazy { SupabaseAuth(prefs) }
+
+    /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube POR CUENTA). */
     val memories by lazy {
-        MemoryStore(filesDir) { note -> scope.launch(Dispatchers.IO) { CloudSync.pushMemory(note) } }
+        MemoryStore(filesDir, owner = { auth.userId }) { note ->
+            scope.launch(Dispatchers.IO) { CloudSync.pushMemory(note) }
+        }
     }
     private val memoryDistiller by lazy { MemoryDistiller(apiKey, model) }
 
@@ -309,6 +318,22 @@ class GraphApp : Application() {
             .build())
     }
 
+    /**
+     * La sesión cambió (login/logout desde la app). Al ENTRAR: los recuerdos anónimos de este
+     * teléfono se adoptan a la cuenta, se baja la memoria de la cuenta y se suben los aprendizajes
+     * de UI locales que la nube no tenga (ya hay token para aportar). Al SALIR no hay nada que
+     * sincronizar: la memoria de la cuenta queda en la nube y el archivo local de esa cuenta deja
+     * de usarse (el prompt vuelve a las notas anónimas del teléfono).
+     */
+    fun sessionChanged() {
+        if (!auth.loggedIn) return
+        scope.launch(Dispatchers.IO) {
+            memories.adoptAnonymous()
+            memories.syncFromCloud(CloudSync.pullMemory())
+            learnedTools.syncFromCloud()
+        }
+    }
+
     override fun onCreate() {
         super.onCreate()
         instance = this
@@ -317,6 +342,9 @@ class GraphApp : Application() {
         // Tema guardado (claro por defecto): cara y app en blanco/negro, sin azul.
         Palette.mode = runCatching { ThemeMode.valueOf(prefs.getString("theme", ThemeMode.LIGHT.name)!!) }
             .getOrDefault(ThemeMode.LIGHT)
+        // Las llamadas a la nube viajan con la sesión del usuario (si hay): la memoria personal
+        // la exige (RLS por cuenta) y los aprendizajes de UI la usan para poder aportar.
+        CloudSync.userToken = { auth.accessToken() }
         // Trae los aprendizajes y la memoria de la nube (y sube lo local que falte allá).
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()

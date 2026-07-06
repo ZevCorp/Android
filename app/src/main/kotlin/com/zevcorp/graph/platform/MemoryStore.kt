@@ -11,13 +11,23 @@ data class MemoryNote(val app: String = "", val note: String = "")
 
 /**
  * Memoria durable del asistente: reglas y preferencias destiladas de CUALQUIER input del usuario
- * ("cada vez que te pida el parlante → wifi + Spotify + transmitir"). Es la knowledge-base personal:
- * se inyecta completa al cerebro de ejecución para que las aplique sin que se las repitan.
- * Local (files/memory.json) + copia en la nube (graph_memory).
+ * ("cada vez que te pida el parlante → wifi + Spotify + transmitir"). Es la knowledge-base PERSONAL:
+ * pertenece a la CUENTA del usuario (a diferencia del mapa de UI de las apps, que es compartido).
+ * Se inyecta completa al cerebro de ejecución para que las aplique sin que se las repitan.
+ *
+ * Local: un archivo por cuenta (files/memory-<userId>.json); sin sesión se usa files/memory.json
+ * (notas anónimas, solo de este teléfono) y al iniciar sesión esas notas se ADOPTAN a la cuenta.
+ * Nube: graph_memory, protegida por RLS — solo viaja/baja con la sesión del usuario.
  */
-class MemoryStore(root: File, private val pushToCloud: (MemoryNote) -> Unit = {}) {
+class MemoryStore(
+    private val root: File,
+    private val owner: () -> String = { "" },
+    private val pushToCloud: (MemoryNote) -> Unit = {},
+) {
 
-    private val file = File(root, "memory.json")
+    /** El archivo de la cuenta activa (o el anónimo si no hay sesión). */
+    private val file: File
+        get() = owner().let { if (it.isBlank()) File(root, "memory.json") else File(root, "memory-$it.json") }
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true; prettyPrint = true }
     private val serializer = ListSerializer(MemoryNote.serializer())
 
@@ -65,11 +75,27 @@ class MemoryStore(root: File, private val pushToCloud: (MemoryNote) -> Unit = {}
     fun notesForApp(app: String): List<MemoryNote> =
         all().filter { it.app.isNotBlank() && it.app.equals(app, ignoreCase = true) }
 
-    /** Arranque: baja la nube y sube lo local que falte allá. Llamar desde IO. */
+    /** Arranque/login: baja la nube y sube lo local que falte allá. Llamar desde IO. */
     fun syncFromCloud(remote: List<MemoryNote>) {
         remote.forEach { addLocal(it) }
         val remoteNotes = remote.map { it.note.lowercase() }.toSet()
         all().filter { it.note.lowercase() !in remoteNotes }.forEach { pushToCloud(it) }
         if (remote.isNotEmpty()) LogBus.log("cloud", "☁ ${remote.size} recuerdos sincronizados")
+    }
+
+    /**
+     * Al iniciar sesión: lo que el asistente aprendió de ti ANTES de que tuvieras cuenta (notas
+     * anónimas de este teléfono) pasa a ser tuyo — se mueve al archivo de la cuenta y se sube.
+     * Llamar desde IO, con la sesión ya activa.
+     */
+    @Synchronized
+    fun adoptAnonymous() {
+        if (owner().isBlank()) return
+        val anonymous = File(root, "memory.json")
+        val notes = runCatching { json.decodeFromString(serializer, anonymous.readText()) }.getOrElse { emptyList() }
+        if (notes.isEmpty()) return
+        val adopted = notes.count { add(it) }
+        anonymous.delete()
+        LogBus.log("memory", "🧠 $adopted recuerdos de este teléfono ahora son de tu cuenta")
     }
 }
