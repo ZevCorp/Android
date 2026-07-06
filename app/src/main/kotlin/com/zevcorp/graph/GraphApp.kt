@@ -40,6 +40,14 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
 
+/**
+ * Una propuesta ("¿quieres que lo haga yo?") o pregunta que el asistente dijo por VOZ y quedó
+ * esperando respuesta. Vive como contexto pendiente del hilo unificado: el usuario contesta por
+ * CUALQUIER vía de input y run() le inyecta este contexto para que "sí, hazlo" signifique
+ * exactamente lo propuesto.
+ */
+data class PendingVoice(val kind: String, val app: String, val question: String, val task: String, val at: Long)
+
 /** Composition root: une el núcleo (motor mixto + MCP) con los adaptadores Android. */
 class GraphApp : Application() {
 
@@ -74,8 +82,25 @@ class GraphApp : Application() {
         PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus,
             inquirer = LearningInquiry(apiKey, model, memories, scope,
                 busy = { executing || bubble?.voiceBusy == true || activeLearning.busy },
-                askByVoice = { q -> bubble?.askAloud(q) ?: "" },
-                runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }))
+                speak = { bubble?.speak(it) },
+                currentApp = { (ui as? GraphAccessibilityService)?.currentApp ?: "" },
+                pending = ::notePendingVoice))
+    }
+
+    /* ---------- Propuestas/preguntas por voz: contexto pendiente del hilo unificado ---------- */
+
+    @Volatile private var pendingVoice: PendingVoice? = null
+
+    /** El asistente acaba de proponer o preguntar algo por voz: queda esperando la respuesta. */
+    fun notePendingVoice(kind: String, app: String, question: String, task: String) {
+        pendingVoice = PendingVoice(kind, app, question, task, System.currentTimeMillis())
+    }
+
+    /** Toma (y limpia) lo pendiente si sigue fresco: la respuesta natural llega en minutos, no horas. */
+    private fun consumePendingVoice(): PendingVoice? {
+        val p = pendingVoice ?: return null
+        pendingVoice = null
+        return p.takeIf { System.currentTimeMillis() - it.at < 3 * 60_000L }
     }
 
     /**
@@ -85,7 +110,10 @@ class GraphApp : Application() {
      */
     val activeLearning by lazy {
         ActiveLearning(this, GeminiVideo(apiKey, model), memories, voice,
-            askAloud = { q -> bubble?.askAloud(q) ?: "" }, apiKey = apiKey, model = model)
+            // Pregunta de seguimiento: se dice por voz y se responde en el popup de la burbuja
+            // (texto o su micrófono) — el micrófono sticky flotante ya no existe.
+            askAloud = { q -> bubble?.let { b -> b.speak(q); b.ask(q) } ?: "" },
+            apiKey = apiKey, model = model)
     }
 
     /**
@@ -191,13 +219,36 @@ class GraphApp : Application() {
                 }
             }
         }
+        // Hilo unificado: si el asistente acaba de proponer/preguntar algo por VOZ, este prompt
+        // puede ser la respuesta (venga del panel, las esquinas o donde sea). Se inyecta como
+        // contexto para que "sí, hazlo" signifique EXACTAMENTE lo propuesto.
+        val pending = consumePendingVoice()
+        if (pending != null) LogBus.log("run", "🔗 contexto pendiente (${pending.kind}): \"${pending.question.take(80)}\"")
+        if (pending?.kind == "ask") scope.launch(Dispatchers.IO) {
+            memoryDistiller.captureAnswer(pending.app, pending.question, prompt)?.let { note ->
+                if (memories.add(note)) LogBus.log("memory", "🧠 aprendido de tu respuesta [${note.app}]: ${note.note}")
+            }
+        }
+        val pendingContext = pending?.let {
+            if (it.kind == "offer")
+                "CONTEXTO INMEDIATO: hace un momento le PROPUSISTE por voz al usuario: «${it.question}» " +
+                    "(la tarea que harías, en la app ${it.app}: «${it.task}»). Si su mensaje ACEPTA la " +
+                    "propuesta («sí», «hazlo», «dale»…), tu objetivo es EXACTAMENTE esa tarea, con todos " +
+                    "sus detalles. Si pide otra cosa, obedece lo nuevo e ignora la propuesta."
+            else
+                "CONTEXTO INMEDIATO: hace un momento le PREGUNTASTE por voz al usuario: «${it.question}» " +
+                    "(app ${it.app}). Si su mensaje es la RESPUESTA a esa pregunta, no ejecutes nada: " +
+                    "agradécele brevemente con speak y termina (su respuesta ya quedó guardada en tu " +
+                    "memoria). Si es una orden nueva, ejecútala."
+        }
         synchronized(goalPrompts) { goalPrompts.clear(); goalPrompts.add(prompt.trim()) }
         return running {
             var summary = ""
             var round = 0
             // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
             while (true) {
-                val (goal, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
+                val (goalBase, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
+                val goal = if (pendingContext != null) "$goalBase\n\n$pendingContext" else goalBase
                 bubble?.showExecutionMic(true)
                 val (engine, brain) = newSession(surface, service, user, resume = true)
                 val holder = arrayOf("")

@@ -563,9 +563,20 @@ class MainActivity : Activity(), UserChannel {
             status.text = if (newAccount) "Creando tu cuenta…" else "Entrando…"
             scope.launch {
                 val err = withContext(Dispatchers.IO) {
-                    var e: String? = if (newAccount) app.auth.signUp(email, pass) else null
-                    if (e == null) e = app.auth.signIn(email, pass)
-                    e
+                    if (!newAccount) app.auth.signIn(email, pass)
+                    else when (val signUpErr = app.auth.signUp(email, pass)) {
+                        null -> app.auth.signIn(email, pass)
+                        else -> {
+                            // El correo puede ya tener cuenta en este proyecto (p.ej. de Miracle,
+                            // que comparte el backend): intenta entrar con esas credenciales en
+                            // vez de estrellarse contra "ya existe".
+                            if (!signUpErr.contains("Ya existe", ignoreCase = true)) signUpErr
+                            else app.auth.signIn(email, pass)?.let {
+                                "Ese correo ya tiene una cuenta (quizá de Miracle) y la contraseña " +
+                                    "no coincide. Entra con su contraseña o usa otro correo."
+                            }
+                        }
+                    }
                 }
                 if (err != null) { status.text = err; return@launch }
                 app.prefs.edit().putString("authLastEmail", email).apply()

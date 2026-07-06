@@ -67,9 +67,11 @@ class PassiveLearning(
             elements += visible
             clicksSinceInquiry++
             log.log("learn", "señal clic \"$label\" en $app · ${clicks.size} señales")
-            // ¿Toca preguntar? Solo en modo usuario, con señal fresca y sin acosar (≥3 clics y ≥20 s).
-            if (userMode && inquirer != null && clicksSinceInquiry >= 3 &&
-                (lastInquiry?.elapsedNow()?.inWholeSeconds ?: Long.MAX_VALUE) >= 20
+            // ¿Toca intervenir? Solo en modo usuario, con señal fresca y sin acosar (≥2 clics y
+            // ≥10 s): reaccionar rápido importa — una propuesta sobre algo que el usuario ya dejó
+            // atrás no sirve de nada (además hay guardia de vigencia antes de hablar).
+            if (userMode && inquirer != null && clicksSinceInquiry >= 2 &&
+                (lastInquiry?.elapsedNow()?.inWholeSeconds ?: Long.MAX_VALUE) >= 10
             ) {
                 lastInquiry = TimeSource.Monotonic.markNow()
                 clicksSinceInquiry = 0

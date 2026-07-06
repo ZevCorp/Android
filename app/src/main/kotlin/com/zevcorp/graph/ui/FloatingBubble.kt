@@ -308,7 +308,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         panel?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
         stopButton?.let { runCatching { wm.removeView(it) } }
-        answerMic?.let { runCatching { wm.removeView(it) } }
         execMic?.let { runCatching { wm.removeView(it) } }
     }
 
@@ -344,7 +343,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     }
 
     private fun moveSpeechToBubble() {
-        moveAnswerMicToBubble() // el micrófono de respuesta también sigue a la carita
         val view = speech ?: return
         val p = speechParams ?: return
         view.measure(View.MeasureSpec.UNSPECIFIED, View.MeasureSpec.UNSPECIFIED)
@@ -620,29 +618,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             lateinit var window: View
             fun finish(answer: String) {
                 runCatching { wm.removeView(window) }
-                hideAnswerMic()
                 bubble.visibility = View.VISIBLE
                 if (cont.isActive) cont.resume(answer)
-            }
-            // Micrófono sticky bajo la carita: la vía rápida para responder. Y si estamos en plena
-            // EJECUCIÓN, responder por aquí enciende la escucha continua por el resto de la tarea.
-            var listeningNow: Transcriber? = null
-            showAnswerMic {
-                listeningNow?.let { it.stop(); return@showAnswerMic }
-                val t = defaultTranscriber(c)
-                listeningNow = t
-                MicService.start(c)
-                scope.launch {
-                    val heard = withContext(Dispatchers.IO) { runCatching { t.listen() }.getOrElse { "" } }
-                    MicService.stop(c)
-                    listeningNow = null
-                    if (heard.isBlank()) { toast("No te escuché, intenta de nuevo"); return@launch }
-                    val wasExecuting = app.executing
-                    finish(heard)
-                    // ÚNICO caso donde se enciende el modo de voz en tiempo real fuera de las
-                    // esquinas: respondiste por voz una duda del asistente mientras ejecutaba.
-                    if (wasExecuting) startExecLive()
-                }
             }
             val header = c.row()
             header.addView(FaceView(c).apply { thinking = true }, LinearLayout.LayoutParams(c.dp(36), c.dp(36)))
@@ -663,7 +640,15 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             body.addView(c.button("Responder", primary = true) { finish(input.text.toString()) })
             body.gap(c.dp(6))
             body.addView(c.button("Responder con voz") {
-                recognize { heard -> if (heard != null) finish(heard) else toast("No te escuché, intenta de nuevo") }
+                val wasExecuting = app.executing
+                recognize { heard ->
+                    if (heard != null) {
+                        finish(heard)
+                        // ÚNICO caso donde se enciende la escucha en tiempo real fuera de las
+                        // esquinas: respondiste por voz una duda del asistente mientras ejecutaba.
+                        if (wasExecuting) startExecLive()
+                    } else toast("No te escuché, intenta de nuevo")
+                }
             })
 
             window = ScrollView(c).apply { addView(body); elevation = 20f }
@@ -672,10 +657,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 softInputMode = WindowManager.LayoutParams.SOFT_INPUT_ADJUST_PAN
             }
             wm.addView(window, params)
-            cont.invokeOnCancellation {
-                runCatching { wm.removeView(window) }
-                scope.launch { hideAnswerMic() }
-            }
+            cont.invokeOnCancellation { runCatching { wm.removeView(window) } }
         }
     }
 
@@ -742,80 +724,6 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     private fun toast(message: String) =
         Toast.makeText(service, message, Toast.LENGTH_LONG).show()
-
-    /* ---------- Responder por voz: micrófono sticky pegado bajo la carita ---------- */
-
-    private var answerMic: View? = null
-    private var answerMicParams: WindowManager.LayoutParams? = null
-
-    /**
-     * Pregunta en voz alta y espera la respuesta del usuario mostrando un botón de micrófono
-     * pegado JUSTO debajo de la carita (sticky): tocarlo termina la respuesta. Devuelve lo que oyó.
-     * Lo usa la interrupción del aprendizaje pasivo para que responder sea inmediato.
-     */
-    suspend fun askAloud(question: String): String = withContext(Dispatchers.Main) {
-        speak(question)
-        val transcriber = defaultTranscriber(service)
-        MicService.start(service)
-        showAnswerMic { transcriber.stop() }
-        val answer = withContext(Dispatchers.IO) { runCatching { transcriber.listen() }.getOrElse { "" } }
-        hideAnswerMic()
-        MicService.stop(service)
-        answer
-    }
-
-    private fun showAnswerMic(onTap: () -> Unit) {
-        if (answerMic != null) return
-        val c = service
-        val d = c.dp(52)
-        val mic = IconView(c, Icon.MIC, tint = Palette.bg).apply {
-            val pad = c.dp(13)
-            setPadding(pad, pad, pad, pad)
-            background = rounded(Palette.accent, (d / 2).toFloat())
-            elevation = 26f
-            setOnClickListener { onTap() }
-        }
-        val p = overlayParams(d, d, focusable = false).apply { gravity = Gravity.TOP or Gravity.START }
-        answerMic = mic
-        answerMicParams = p
-        runCatching { wm.addView(mic, p) }
-        moveAnswerMicToBubble()
-        pulseAnswerMic()
-    }
-
-    /** Late suavemente bajo la carita (o encima si no cabe abajo) y la sigue si se mueve. */
-    private fun moveAnswerMicToBubble() {
-        val mic = answerMic ?: return
-        val p = answerMicParams ?: return
-        val m = service.resources.displayMetrics
-        val size = mic.layoutParams?.width ?: service.dp(52)
-        p.x = (bubbleParams.x + (bubbleParams.width - size) / 2).coerceIn(service.dp(4), m.widthPixels - size - service.dp(4))
-        val below = bubbleParams.y + bubbleParams.height + service.dp(8)
-        p.y = if (below + size < m.heightPixels - service.dp(8)) below
-        else bubbleParams.y - size - service.dp(8) // no cabe abajo: ponlo encima
-        runCatching { wm.updateViewLayout(mic, p) }
-    }
-
-    private fun pulseAnswerMic() {
-        val mic = answerMic ?: return
-        ValueAnimator.ofFloat(1f, 1.12f, 1f).apply {
-            duration = 1100
-            repeatCount = ValueAnimator.INFINITE
-            interpolator = android.view.animation.AccelerateDecelerateInterpolator()
-            addUpdateListener { a ->
-                val f = a.animatedValue as Float
-                if (answerMic == null) { cancel(); return@addUpdateListener }
-                mic.scaleX = f; mic.scaleY = f
-            }
-            start()
-        }
-    }
-
-    private fun hideAnswerMic() {
-        answerMic?.let { runCatching { wm.removeView(it) } }
-        answerMic = null
-        answerMicParams = null
-    }
 
     /* ---------- Mensaje-sobre-mensaje: micrófono casi invisible durante la ejecución ---------- */
 
