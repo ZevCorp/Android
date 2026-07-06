@@ -9,6 +9,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Auto-actualización: instalar el APK descargado (el sistema pide confirmación). -->
+    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
 
     <application
         android:name=".GraphApp"
@@ -89,5 +91,10 @@
                 <action android:name="com.zevcorp.graph.STOP" />
             </intent-filter>
         </receiver>
+
+        <!-- Estado de la instalación de actualizaciones (PackageInstaller). -->
+        <receiver
+            android:name=".platform.InstallReceiver"
+            android:exported="false" />
     </application>
 </manifest>

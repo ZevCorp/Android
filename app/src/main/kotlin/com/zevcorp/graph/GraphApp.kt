@@ -16,6 +16,7 @@ import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.MemoryStore
+import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.ui.Palette
 import com.zevcorp.graph.ui.ThemeMode
 import com.zevcorp.graph.voice.IntentDistiller
@@ -283,6 +284,14 @@ class GraphApp : Application() {
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()
             memories.syncFromCloud(CloudSync.pullMemory())
+        }
+        // Sondeo de actualizaciones: al arrancar y cada ~30 min. El proceso sigue vivo por el servicio
+        // de accesibilidad, así que el aviso de "hay actualización" llega casi como un push.
+        scope.launch(Dispatchers.IO) {
+            while (true) {
+                runCatching { Updater.checkAndNotify(this@GraphApp) }
+                kotlinx.coroutines.delay(30 * 60_000L)
+            }
         }
     }
 

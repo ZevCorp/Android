@@ -13,12 +13,15 @@ import android.view.View
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.ProgressBar
 import android.widget.ScrollView
 import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.LogBus
+import com.zevcorp.graph.platform.Release
+import com.zevcorp.graph.platform.Updater
 import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
 import kotlin.coroutines.resume
@@ -36,6 +39,12 @@ class MainActivity : Activity(), UserChannel {
     private var voiceCallback: ((String) -> Unit)? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
+
+    /* Actualizaciones */
+    private var updStatus: TextView? = null
+    private var updButton: Button? = null
+    private var updProgress: ProgressBar? = null
+    private var latest: Release? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -58,6 +67,28 @@ class MainActivity : Activity(), UserChannel {
         header.addView(titles)
         root.addView(header)
         root.gap(dp(16))
+
+        // Actualizaciones: versión instalada, buscar/instalar la nueva. Mantén oprimido el título
+        // para el panel de administrador (publicar una versión y notificar a todos).
+        val upd = card()
+        val updHead = row()
+        updHead.addView(iconChip(Icon.BOLT, sizeDp = 34, tint = Palette.accent))
+        val updTitle = title("Actualizaciones").apply { setPadding(dp(8), 0, 0, 0) }
+        updTitle.setOnLongClickListener { showAdminDialog(); true }
+        updHead.addView(updTitle, LinearLayout.LayoutParams(0, -2, 1f))
+        upd.addView(updHead)
+        upd.gap(dp(4))
+        updStatus = caption("Versión actual: ${appVersionName()} · buscando…")
+        upd.addView(updStatus)
+        upd.gap(dp(10))
+        updProgress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100; visibility = View.GONE
+        }
+        upd.addView(updProgress)
+        updButton = button("Buscar actualización") { checkNow() }
+        upd.addView(updButton)
+        root.addView(upd)
+        root.gap(dp(14))
 
         // Config: API key + accesibilidad
         val setup = card()
@@ -258,6 +289,121 @@ class MainActivity : Activity(), UserChannel {
             }
         }
         refreshMcpPanel()
+        checkNow()
+    }
+
+    override fun onNewIntent(intent: Intent?) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+        checkNow() // llegó desde la notificación de actualización
+    }
+
+    /* ---------- Auto-actualización ---------- */
+
+    private fun appVersionName(): String =
+        runCatching { packageManager.getPackageInfo(packageName, 0).versionName }.getOrNull() ?: "?"
+
+    private fun checkNow() {
+        updStatus?.text = "Buscando actualización…"
+        scope.launch {
+            latest = Updater.fetchLatest()
+            refreshUpdateUi()
+        }
+    }
+
+    private fun refreshUpdateUi() {
+        val btn = updButton ?: return
+        val r = latest
+        if (r != null && Updater.isNewer(this, r)) {
+            updStatus?.text = "Nueva versión disponible: ${r.versionName}" +
+                if (r.notes.isNotBlank()) "\n${r.notes}" else ""
+            btn.text = "Actualizar ahora (${r.versionName})"
+            btn.setOnClickListener { startUpdate() }
+        } else {
+            updStatus?.text = "Versión actual: ${appVersionName()} · estás al día ✅"
+            btn.text = "Buscar actualización"
+            btn.setOnClickListener { checkNow() }
+        }
+    }
+
+    private fun startUpdate() {
+        val r = latest ?: return
+        val btn = updButton ?: return
+        Updater.clearNotification(this)
+        btn.isEnabled = false
+        updProgress?.apply { progress = 0; visibility = View.VISIBLE }
+        updStatus?.text = "Descargando ${r.versionName}…"
+        scope.launch {
+            runCatching {
+                Updater.downloadAndInstall(this@MainActivity, r) { p -> runOnUiThread { updProgress?.progress = p } }
+            }.onSuccess {
+                updStatus?.text = "Descargado. Confirma la instalación en el diálogo del sistema."
+            }.onFailure {
+                updStatus?.text = "No se pudo actualizar: ${it.message}"
+                btn.isEnabled = true
+                updProgress?.visibility = View.GONE
+            }
+        }
+    }
+
+    /* ---------- Admin: publicar una versión y notificar a todos ---------- */
+
+    private fun showAdminDialog() {
+        val ctx = this
+        val nextCode = Updater.currentVersionCode(ctx) + 1
+        val bucket = "https://zyvfamlhlmztliexvmej.supabase.co/storage/v1/object/public/apks/"
+        fun field(hint: String, value: String, numeric: Boolean = false) = EditText(ctx).apply {
+            this.hint = hint; setText(value)
+            setHintTextColor(Palette.textDim); setTextColor(Palette.text)
+            if (numeric) inputType = InputType.TYPE_CLASS_NUMBER
+            background = rounded(Palette.bg, dp(10).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val tokenF = field("Token de administrador", app.prefs.getString("adminToken", "") ?: "")
+        val codeF = field("versionCode (número)", nextCode.toString(), numeric = true)
+        val nameF = field("versionName", "0.$nextCode")
+        val urlF = field("URL del APK", "${bucket}graph-$nextCode.apk")
+        val notesF = field("Notas (qué cambió)", "")
+        val body = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(8))
+            addView(caption("Sube el APK al bucket 'apks' de Supabase y pega su URL pública. Al publicar, todos los usuarios verán el aviso de actualización."))
+            gap(dp(10)); addView(tokenF)
+            gap(dp(8)); addView(codeF)
+            gap(dp(8)); addView(nameF)
+            gap(dp(8)); addView(urlF)
+            gap(dp(8)); addView(notesF)
+        }
+        val dialog = AlertDialog.Builder(ctx)
+            .setTitle("Admin · publicar versión")
+            .setView(ScrollView(ctx).apply { addView(body) })
+            .setPositiveButton("Publicar y notificar", null)
+            .setNegativeButton("Cancelar", null)
+            .create()
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val token = tokenF.text.toString().trim()
+                val code = codeF.text.toString().trim().toIntOrNull()
+                val url = urlF.text.toString().trim()
+                if (token.isBlank() || code == null || url.isBlank()) {
+                    Toast.makeText(ctx, "Completa token, versionCode y URL", Toast.LENGTH_SHORT).show()
+                    return@setOnClickListener
+                }
+                Toast.makeText(ctx, "Publicando…", Toast.LENGTH_SHORT).show()
+                scope.launch {
+                    val err = Updater.publish(token, code, nameF.text.toString().trim(), url, notesF.text.toString().trim())
+                    if (err == null) {
+                        app.prefs.edit().putString("adminToken", token).apply()
+                        Toast.makeText(ctx, "✅ Publicado y notificado (v$code)", Toast.LENGTH_LONG).show()
+                        dialog.dismiss()
+                        checkNow()
+                    } else {
+                        Toast.makeText(ctx, "Error: $err", Toast.LENGTH_LONG).show()
+                    }
+                }
+            }
+        }
+        dialog.show()
     }
 
     override fun onResume() {

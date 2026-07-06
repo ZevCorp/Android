@@ -18,9 +18,24 @@ android {
         applicationId = "com.zevcorp.graph"
         minSdk = 30
         targetSdk = 35
-        versionCode = 20
-        versionName = "0.20"
+        versionCode = 21
+        versionName = "0.21"
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
+    }
+    // Clave de firma ESTABLE y compartida por todos los builds. Android solo permite ACTUALIZAR una
+    // app si la nueva versión está firmada con la misma clave que la instalada; sin esto el updater
+    // in-app no podría reemplazar la versión previa. El keystore vive en el repo (privado).
+    signingConfigs {
+        create("shared") {
+            storeFile = file("graph-release.jks")
+            storePassword = "graphupdate"
+            keyAlias = "graph"
+            keyPassword = "graphupdate"
+        }
+    }
+    buildTypes {
+        getByName("debug") { signingConfig = signingConfigs.getByName("shared") }
+        getByName("release") { signingConfig = signingConfigs.getByName("shared") }
     }
     buildFeatures { buildConfig = true }
     compileOptions {
