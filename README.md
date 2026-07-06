@@ -50,6 +50,8 @@ Hay **dos modos** de enseñanza, separados a propósito:
 
 Actívala/desactívala desde el botón **"Aprendizaje pasivo"** de la **app principal** (antes estaba en la burbuja). No hay barra, ni botón de detener, ni popups, ni iluminación: usas el teléfono **con normalidad** y el asistente solo observa — captura el **árbol de UI completo** y tus **clics como señales de valor**. Cuando **sales de una app** (o apagas el modo), estructura lo observado como herramienta MCP con criterio estricto: **solo guarda lo que entendió con certeza muy alta y tiene valor real según tus clics**; si la app ya tenía mapa, lo **refina** en vez de duplicarlo.
 
+Mientras observa, el asistente también puede **intervenir por voz por iniciativa propia** (proponer ayuda, preguntar una duda valiosa, o callar — el default). Esa decisión está **conectada a tu knowledge-base personal**: si le diste una instrucción como *"cada vez que estemos en WhatsApp y un usuario me pida una mejora, propón hacerla tú"*, al ver ese escenario en vivo te lo **propone por voz** y, si aceptas, **lo ejecuta**. Es un mindset propositivo (detectar en tiempo real algo que te ahorraría tiempo), distinto del "amigo prevenido" de después de cada ejecución (proteger la acción recién hecha).
+
 **Mantén oprimido el 🎓** de la burbuja para ver lo que ya sabe: se iluminan los contornos de todos los elementos ya trackeados en MCPs de la app visible, y el overlay se actualiza mientras navegas a otras apps. Vuelve a mantenerlo oprimido para ocultarlo. (Esto no cambió.)
 
 ### Enseñanza ACTIVA (el 🎓 de la burbuja, al tocarlo — compartir pantalla)
@@ -92,7 +94,7 @@ Mientras el asistente ejecuta aparece un **micrófono casi invisible** abajo. Si
 
 ## El amigo prevenido (anticipación)
 
-Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, `set_volume alarm 100`); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible.
+Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. (Mindset **protector** de la acción recién ejecutada — p.ej. alarma puesta → subir el volumen. El mindset **propositivo** en tiempo real vive en el aprendizaje pasivo, arriba.) Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, `set_volume alarm 100`); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible.
 
 ## La burbuja flotante
 
