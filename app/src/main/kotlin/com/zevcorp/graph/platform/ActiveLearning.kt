@@ -92,15 +92,22 @@ class ActiveLearning(
                         LogBus.log("teach", "🧩 aprendido${if (note.app.isNotBlank()) " [${note.app}]" else ""}: ${note.note}")
                     }
                 }
+                // EXPLICA en voz alta lo que entendió del video (no un genérico "aprendí 1 cosa"):
+                // usa el resumen del modelo o, si no vino, arma uno con las notas guardadas.
+                val explanation = result.summary.ifBlank {
+                    when {
+                        result.notes.isNotEmpty() -> "Esto entendí: " + result.notes.joinToString(". ") { it.note }
+                        else -> "No logré sacar nada seguro esta vez; muéstramelo con más calma cuando quieras."
+                    }
+                }
+                voice.speak(explanation)
                 // Preguntas de seguimiento por voz (el micrófono ya está libre tras la grabación).
                 for (q in result.questions.take(3)) {
                     val answer = runCatching { askAloud(q) }.getOrElse { "" }
                     if (answer.isBlank()) continue
                     distill(q, answer)?.let { if (memories.add(it)) saved++ }
                 }
-                voice.speak(
-                    if (saved > 0) "Listo, aprendí ${saved} cosa${if (saved == 1) "" else "s"} nueva${if (saved == 1) "" else "s"} 🙌"
-                    else "No saqué nada seguro esta vez, muéstrame con más calma cuando quieras.")
+                if (saved > 0) LogBus.log("teach", "✅ ${saved} aprendizaje(s) nuevos guardados")
             } finally {
                 processing = false
             }

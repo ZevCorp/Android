@@ -102,6 +102,15 @@ Al activar el servicio de accesibilidad aparece la carita de Graph como overlay 
 
 El modelo por defecto es `gemini-3.5-flash` (cambiable en prefs con la clave `model`).
 
+## Actualizaciones automáticas (sin Play Store)
+
+La app se actualiza sola: consulta en Supabase la última versión, avisa con una notificación y la
+instala con un toque (`PackageInstaller`). El admin publica una versión y notifica a todos desde un
+panel oculto (mantén oprimido el título **"Actualizaciones"**). Todo el detalle — clave de firma,
+token de administrador, backend de Supabase y el paso a paso para lanzar una versión — está en
+[RELEASING.md](RELEASING.md). Para que las actualizaciones funcionen, **todos los builds se firman con
+la misma clave** (`app/graph-release.jks`), fijada en `app/build.gradle.kts`.
+
 ## Arquitectura (clean, multiplataforma desde el diseño)
 
 - **`core/`** — Kotlin Multiplatform puro (sin API de Android): el protocolo MCP (`Mcp`, `McpTool`), los puertos (`Phone`, `Gestures`, `Brain`, `Voice`, `UserChannel`) y el motor `ExecutionEngine`.

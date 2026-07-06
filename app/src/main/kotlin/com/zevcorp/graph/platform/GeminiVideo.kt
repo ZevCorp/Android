@@ -21,7 +21,7 @@ class GeminiVideo(
     private val apiKey: () -> String,
     private val model: () -> String,
 ) {
-    class Result(val notes: List<MemoryNote>, val questions: List<String>)
+    class Result(val notes: List<MemoryNote>, val questions: List<String>, val summary: String)
 
     private class Uploaded(val name: String, val uri: String)
 
@@ -31,15 +31,15 @@ class GeminiVideo(
     suspend fun structure(video: File): Result = withContext(Dispatchers.IO) {
         val up = runCatching { upload(video) }.getOrElse {
             LogBus.log("teach", "subida del video falló: ${it.message}")
-            return@withContext Result(emptyList(), emptyList())
+            return@withContext Result(emptyList(), emptyList(), "")
         }
         runCatching { waitActive(up.name) }.onFailure {
             LogBus.log("teach", "el video no quedó listo: ${it.message}")
-            return@withContext Result(emptyList(), emptyList())
+            return@withContext Result(emptyList(), emptyList(), "")
         }
         val o = runCatching { generate(up.uri) }.getOrElse {
             LogBus.log("teach", "estructuración falló: ${it.message}")
-            return@withContext Result(emptyList(), emptyList())
+            return@withContext Result(emptyList(), emptyList(), "")
         }
         val notes = o["items"]?.jsonArray?.mapNotNull { el ->
             val obj = el.jsonObject
@@ -50,7 +50,8 @@ class GeminiVideo(
         val questions = o["questions"]?.jsonArray
             ?.mapNotNull { it.jsonPrimitive.contentOrNull?.trim()?.takeIf { q -> q.isNotBlank() } }
             .orEmpty()
-        Result(notes, questions)
+        val summary = o["summary"]?.jsonPrimitive?.contentOrNull?.trim().orEmpty()
+        Result(notes, questions, summary)
     }
 
     /* ---------- Files API: subida resumable del mp4 ---------- */
@@ -145,10 +146,15 @@ class GeminiVideo(
             - Si algo importante quedó ambiguo y necesitas confirmarlo, agrégalo en "questions" (una
               pregunta corta y natural que le harás por voz al usuario). Máximo 3. Si no hace falta
               preguntar nada, deja la lista vacía.
-            - Si el video no contiene nada confiable que guardar, devuelve {"items": [], "questions": []}.
+            - Si el video no contiene nada confiable que guardar, devuelve items y questions vacíos.
+
+            Además, escribe un "summary": un resumen CORTO (1-3 frases), en primera persona y en tono
+            cálido, de lo que ENTENDISTE del video, para decírselo al usuario en voz alta (p.ej.
+            "Entendí que a tu mamá la tienes en WhatsApp como 'Ale' y que le escribes por las mañanas").
+            Es lo que le explicarás de lo aprendido; si no aprendiste nada, dilo con naturalidad.
 
             Responde SOLO JSON:
-            {"items": [{"app": "WhatsApp", "note": "..."}], "questions": ["..."]}
+            {"summary": "...", "items": [{"app": "WhatsApp", "note": "..."}], "questions": ["..."]}
         """.trimIndent()
 
         val req = buildJsonObject {

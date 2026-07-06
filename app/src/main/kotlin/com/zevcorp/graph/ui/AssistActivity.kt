@@ -20,9 +20,8 @@ import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GeminiJson
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
-import com.zevcorp.graph.platform.MicService
+import com.zevcorp.graph.voice.SystemTranscriber
 import com.zevcorp.graph.voice.Transcriber
-import com.zevcorp.graph.voice.defaultTranscriber
 import java.util.Locale
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -152,14 +151,14 @@ class AssistActivity : Activity() {
         listening = true
         face.thinking = true
         setStatus("Escuchando…")
-        val t = defaultTranscriber(this)
+        // Mismo motor que el micrófono que SÍ funciona en la burbuja: SpeechRecognizer del sistema
+        // (sin foreground service, que en una Activity de asistente puede bloquear la captura).
+        val t = SystemTranscriber(this)
         transcriber = t
         t.onPartial = { partial -> runOnUiThread { showPartial(partial) } }
         t.onLevel = { lvl -> runOnUiThread { micChip.scaleX = 1f + lvl * 0.14f; micChip.scaleY = 1f + lvl * 0.14f } }
-        MicService.start(this)
         scope.launch {
-            val transcript = runCatching { withContext(Dispatchers.Default) { t.listen() } }.getOrElse { "" }
-            MicService.stop(this@AssistActivity)
+            val transcript = runCatching { t.listen() }.getOrElse { "" }
             listening = false
             transcriber = null
             face.thinking = false
@@ -322,7 +321,6 @@ class AssistActivity : Activity() {
 
     override fun onDestroy() {
         transcriber?.stop()
-        MicService.stop(this)
         tts?.shutdown()
         scope.cancel()
         super.onDestroy()
