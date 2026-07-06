@@ -121,12 +121,31 @@ class GraphApp : Application() {
     /** Prompts que componen el objetivo vivo: crecen si llega un audio nuevo durante la ejecución. */
     private val goalPrompts = mutableListOf<String>()
 
-    private fun newEngine(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, maxTurns: Int = 40): ExecutionEngine {
+    /**
+     * HILO DE CONVERSACIÓN PERSISTENTE (previous_interaction_id). TODAS las activaciones —micrófono
+     * flotante, texto, esquinas y botón de encendido— comparten el MISMO contexto para dar
+     * continuidad ("¿qué acabas de hacer?", responder a lo anterior…). Las ejecuciones también viven
+     * aquí. Se rota a una ventana nueva solo al acercarse al límite (la memoria durable sobrevive).
+     */
+    @Volatile var conversationId = ""
+        private set
+    @Volatile private var conversationTokens = 0
+    private val maxContextTokens = 400_000
+
+    /**
+     * Crea un motor y su cerebro. Con `resume`, el cerebro CONTINÚA el hilo compartido (no reenvía el
+     * system prompt: el servidor ya lo tiene) para que haya continuidad entre activaciones; si no,
+     * arranca un hilo fresco. Devuelve ambos para poder guardar el id/tokens del hilo al terminar.
+     */
+    private fun newSession(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, GeminiBrain> {
         val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
-        return ExecutionEngine(
-            brain = { newBrain(mcp) }, phone = surface, mcp = mcp, user = user,
+        val brain = newBrain(mcp)
+        if (resume) brain.resume(conversationId)
+        val engine = ExecutionEngine(
+            brain = { brain }, phone = surface, mcp = mcp, user = user,
             voice = voice, log = LogBus, mode = modeSignal, stepDelay = stepDelay, maxTurns = maxTurns,
         )
+        return engine to brain
     }
 
     private fun buildGoal(prompts: List<String>): String =
@@ -144,6 +163,12 @@ class GraphApp : Application() {
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
+        // Rotación de ventana de contexto: al superar el umbral se abre un hilo nuevo (la memoria
+        // durable sobrevive). Solo aplica al empezar; no interrumpe nada en curso.
+        if (conversationTokens >= maxContextTokens) {
+            LogBus.log("run", "🧠 ventana de contexto nueva (el hilo llegó a $conversationTokens tokens)")
+            conversationId = ""; conversationTokens = 0
+        }
         // En paralelo (nunca bloquea la ejecución): si el input enseña algo durable, se recuerda.
         scope.launch(Dispatchers.IO) {
             memoryDistiller.capture(prompt)?.let { note ->
@@ -161,7 +186,7 @@ class GraphApp : Application() {
             while (true) {
                 val (goal, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
                 bubble?.showExecutionMic(true)
-                val engine = newEngine(surface, service, user)
+                val (engine, brain) = newSession(surface, service, user, resume = true)
                 val holder = arrayOf("")
                 val announce = round == 0 // en reencaminados no narra el objetivo largo
                 val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
@@ -172,6 +197,9 @@ class GraphApp : Application() {
                 engineCanceller = { child.cancel(CancellationException("reencaminar")) }
                 child.join()
                 engineCanceller = null
+                // Persiste el hilo compartido para que la próxima activación continúe la conversación.
+                conversationId = brain.interactionId
+                conversationTokens = brain.totalTokens
                 val grew = synchronized(goalPrompts) { goalPrompts.size > builtCount }
                 if (!grew) { summary = holder[0]; break }
                 round++
@@ -195,7 +223,7 @@ class GraphApp : Application() {
             LogBus.log("run", "🤝 acción anticipada: ${foresight.task}")
             val goal = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de " +
                 "certeza total y le conviene): ${foresight.task}. Hazla de forma directa y para."
-            runCatching { newEngine(surface, service, user, maxTurns = 12).run(goal, announce = false) }
+            runCatching { newSession(surface, service, user, resume = false, maxTurns = 12).first.run(goal, announce = false) }
                 .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }
         }
     }

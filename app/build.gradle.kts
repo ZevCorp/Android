@@ -18,8 +18,8 @@ android {
         applicationId = "com.zevcorp.graph"
         minSdk = 30
         targetSdk = 35
-        versionCode = 25
-        versionName = "0.25"
+        versionCode = 26
+        versionName = "0.26"
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
     }
     // Clave de firma ESTABLE y compartida por todos los builds. Android solo permite ACTUALIZAR una

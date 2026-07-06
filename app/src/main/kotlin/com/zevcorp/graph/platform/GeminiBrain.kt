@@ -56,14 +56,28 @@ class GeminiBrain(
     private class Call(val id: String, val name: String, val safety: Boolean)
 
     private var previousId = ""
+    private var startId = ""              // punto de reanudación del hilo de conversación compartido
+    private var continuationMessage = ""  // mensaje del usuario a enviar como turno de continuación
     private var pending = listOf<Call>()
     private val internalResults = HashMap<String, JsonObject>() // resueltos localmente (list_apps)
     private var informText = ""
     private var goal = ""
 
+    /** Id de la última interacción (el hilo de conversación server-side para continuar después). */
+    val interactionId get() = previousId
+    /** Tamaño del contexto del hilo (tokens de la última interacción); gobierna la rotación de ventana. */
+    var totalTokens = 0
+        private set
+
+    /** Reanuda el hilo de conversación existente (previous_interaction_id) antes de begin(). */
+    fun resume(id: String) { startId = id }
+
     override fun begin(goal: String) {
         this.goal = goal
-        previousId = ""
+        // Si hay hilo previo, se CONTINÚA (el servidor ya tiene system prompt + historial): el objetivo
+        // nuevo viaja como un turno de usuario más. Si no, arranca fresco con el goalPrompt completo.
+        previousId = startId
+        continuationMessage = if (startId.isNotBlank()) goal else ""
         pending = emptyList()
         internalResults.clear()
         informText = ""
@@ -120,8 +134,12 @@ class GeminiBrain(
             input += textItem(goalPrompt(state, stateBlock))
             state.screenshotPng?.let { input += image(it) }
         } else if (pending.isEmpty()) {
-            input += textItem(informText.ifBlank { "Continúa." } + "\n$stateBlock")
+            // Primer turno de un objetivo que continúa el hilo: se envía el mensaje del usuario nuevo
+            // (continuationMessage); si no, una respuesta a una duda (informText) o "Continúa.".
+            val msg = continuationMessage.ifBlank { informText.ifBlank { "Continúa." } }
+            input += textItem(msg + "\n$stateBlock")
             state.screenshotPng?.let { input += image(it) }
+            continuationMessage = ""
             informText = ""
         } else {
             pending.forEachIndexed { i, call ->
@@ -180,6 +198,14 @@ class GeminiBrain(
         val ms = android.os.SystemClock.elapsedRealtime() - t0
         LogBus.log("gemini", "interacción → HTTP ${res.code} · ${ms}ms · envié ${kb}KB de pantalla · recibí ${res.body.length}B")
         if (res.code >= 300) {
+            // Auto-recuperación: si el hilo previo ya no existe/expiró (aún no hicimos nada este turno),
+            // se reinicia la ventana y se reintenta FRESCO una vez. Evita quedar atascado tras un
+            // reinicio del servidor o un lapso largo. Solo posible en el primer turno de un hilo reanudado.
+            if (startId.isNotBlank() && previousId == startId) {
+                LogBus.log("gemini", "hilo previo inválido (${res.code}); abro ventana nueva y reintento")
+                previousId = ""; startId = ""; continuationMessage = ""
+                return@withContext next(state, actionResults)
+            }
             LogBus.log("gemini", "ERROR ${res.code}: ${res.body.take(300)}")
             error("Gemini HTTP ${res.code}: ${res.body.take(200)}")
         }
@@ -194,6 +220,8 @@ class GeminiBrain(
 
     private fun parseTurn(body: JsonObject, state: ScreenState): BrainTurn {
         previousId = body.str("id").ifBlank { previousId }
+        // Tamaño del contexto del hilo (incluye el historial cacheado): gobierna la rotación de ventana.
+        (body["usage"] as? JsonObject)?.get("total_tokens").primOrNull()?.intOrNull?.let { totalTokens = it }
         val items = (body["steps"] ?: body["outputs"] ?: body["output"])?.jsonArray.orEmpty()
 
         val actions = mutableListOf<AgentAction>()

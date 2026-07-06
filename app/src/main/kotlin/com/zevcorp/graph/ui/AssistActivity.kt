@@ -17,7 +17,6 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import com.zevcorp.graph.GraphApp
-import com.zevcorp.graph.platform.GeminiJson
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.voice.SystemTranscriber
@@ -226,33 +225,23 @@ class AssistActivity : Activity() {
         }
     }
 
-    /** No es una acción: responde conversacionalmente ahí mismo y sigue abierto para continuar. */
+    /**
+     * No es una acción: responde conversando, pero CONTINUANDO el hilo compartido (app.run) — la misma
+     * ventana de contexto que la burbuja y las demás activaciones, para que haya continuidad. La voz la
+     * pone la carita (app.run ya narra), por eso aquí no se repite el TTS.
+     */
     private fun converse(text: String) {
         setStatus("")
         val thinking = addThinking()
         scope.launch {
-            val reply = withContext(Dispatchers.IO) { chat(text) }
-                .ifBlank { "Puedo abrir apps, poner música, mandar mensajes y ayudarte con lo que necesites en el teléfono." }
+            val bubble = (app.ui as? GraphAccessibilityService)?.bubble
+            val reply = withContext(Dispatchers.IO) {
+                runCatching { app.run(text, bubble) }.getOrElse { "" }
+            }.ifBlank { "Puedo abrir apps, poner música, mandar mensajes y ayudarte con lo que necesites en el teléfono." }
             convo.removeView(thinking)
             addBubble(reply, mine = false)
-            speak(reply)
             setStatus("Toca el micrófono o escribe para seguir")
         }
-    }
-
-    private fun chat(text: String): String {
-        val prompt = """
-            Eres Graph, el asistente del teléfono del usuario. Personalidad cálida, cercana y BREVE.
-            Responde en 1-3 frases, natural y en el idioma del usuario, sin tecnicismos ni listas de
-            funciones. Si te preguntan qué puedes hacer, dilo en lenguaje cotidiano y corto.
-            ${app.memories.promptBlock().let { if (it.isBlank()) "" else "Lo que sabes del usuario:\n$it" }}
-            Usuario: "$text"
-        """.trimIndent()
-        return GeminiJson.askText(
-            app.prefs.getString("apiKey", GraphApp.DEFAULT_API_KEY)!!,
-            app.prefs.getString("model", "gemini-3.5-flash")!!,
-            prompt, tag = "assist",
-        )
     }
 
     /* ---------- Burbujas ---------- */
