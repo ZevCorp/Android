@@ -135,17 +135,23 @@ class GeminiBrain(
                     call.name == "ask_user" -> result += jsonItem(jo("answer" to js(informText.ifBlank { "(sin respuesta)" })))
                     internalResults.containsKey(call.id) -> result += jsonItem(internalResults.getValue(call.id))
                     else -> {
-                        result += jsonItem(jo("screen" to js(state.screen), "ui" to js(state.uiContext),
-                            "result" to js(actionResults.getOrElse(i) { "ok" })))
+                        // safety_acknowledgement va DENTRO del resultado (no como campo de primer nivel
+                        // del function_result: eso da HTTP 400) y SOLO para acciones nativas de
+                        // computer_use (call.safety ya está restringido a esas; nunca a funciones MCP).
+                        val resObj = linkedMapOf(
+                            "screen" to js(state.screen), "ui" to js(state.uiContext),
+                            "result" to js(actionResults.getOrElse(i) { "ok" }))
+                        if (call.safety) resObj["safety_acknowledgement"] = JsonPrimitive(true)
+                        result += jsonItem(JsonObject(resObj))
                         // imagen solo si el modelo la pidió (tras un tap/type de computer-use)
                         if (i == pending.lastIndex) state.screenshotPng?.let { result += image(it) }
                     }
                 }
-                val fields = mutableListOf(
+                // El function_result NO lleva campos fuera de este esquema (type/name/call_id/result):
+                // cualquier extra (p.ej. safety_acknowledgement) es rechazado con 400 por la API.
+                input += JsonObject(mapOf(
                     "type" to js("function_result"), "name" to js(call.name),
-                    "call_id" to js(call.id), "result" to JsonArray(result))
-                if (call.safety) fields += "safety_acknowledgement" to JsonPrimitive(true)
-                input += JsonObject(fields.toMap())
+                    "call_id" to js(call.id), "result" to JsonArray(result)))
             }
             informText = ""
         }
@@ -205,14 +211,19 @@ class GeminiBrain(
                     val name = item.str("name")
                     val id = item.str("call_id").ifBlank { item.str("id") }.ifBlank { "call_${calls.size}" }
                     val args = (item["arguments"] as? JsonObject) ?: (item["args"] as? JsonObject) ?: JsonObject(emptyMap())
-                    calls += Call(id, name, args["safety_decision"] != null)
+                    // safety_acknowledgement SOLO aplica a acciones nativas de computer_use. Para
+                    // funciones custom (MCP aprendidas, ask_user, speak, list_apps) la API lo rechaza
+                    // con 400, así que aquí NO se marca como safety aunque traigan safety_decision.
+                    val custom = name in mcpNames || name in setOf("ask_user", "speak", "list_apps")
+                    calls += Call(id, name, args["safety_decision"] != null && !custom)
                     if (name !in setOf("ask_user", "speak")) intents += args.str("intent")
 
                     fun px(key: String, size: Int) =
                         args[key].primOrNull()?.intOrNull?.let { it * size / 1000 } ?: -1
                     when {
                         name in mcpNames -> actions += AgentAction.Mcp(
-                            name, args.filterKeys { it != "intent" }.mapValues { it.value.primOrNull()?.contentOrNull ?: "" })
+                            name, args.filterKeys { it != "intent" && it != "safety_decision" }
+                                .mapValues { it.value.primOrNull()?.contentOrNull ?: "" })
                         name == "click" -> actions += AgentAction.Tap(px("x", state.width), px("y", state.height))
                         name == "type" -> {
                             actions += AgentAction.Type(px("x", state.width), px("y", state.height), args.str("text"))
