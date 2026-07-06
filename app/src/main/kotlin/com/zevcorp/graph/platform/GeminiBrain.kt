@@ -28,7 +28,10 @@ private fun http(url: String, headers: Map<String, String>, body: ByteArray): Ht
 
 private fun js(s: String) = JsonPrimitive(s)
 private fun jo(vararg pairs: Pair<String, JsonElement>) = JsonObject(pairs.toMap())
-private fun JsonObject.str(key: String) = this[key]?.jsonPrimitive?.contentOrNull ?: ""
+// Acceso TOLERANTE: si el campo no existe o no es un valor simple (viene como objeto/array), devuelve
+// "" en vez de reventar. El modelo a veces envuelve un argumento en un objeto y eso abortaba el turno.
+private fun JsonObject.str(key: String) = (this[key] as? JsonPrimitive)?.contentOrNull ?: ""
+private fun JsonElement?.primOrNull() = this as? JsonPrimitive
 
 /**
  * Gemini 3.5 Flash con computer-use nativo (Interactions API) MÁS las herramientas MCP declaradas.
@@ -173,7 +176,13 @@ class GeminiBrain(
             LogBus.log("gemini", "ERROR ${res.code}: ${res.body.take(300)}")
             error("Gemini HTTP ${res.code}: ${res.body.take(200)}")
         }
-        parseTurn(Json.parseToJsonElement(res.body).jsonObject, state)
+        // Diagnóstico: cuerpo crudo de la respuesta (truncado). Útil para ver qué decidió el modelo.
+        LogBus.log("gemini", "raw ← ${res.body.take(1500)}")
+        runCatching { parseTurn(Json.parseToJsonElement(res.body).jsonObject, state) }
+            .getOrElse { e ->
+                LogBus.log("gemini", "PARSE FALLÓ: ${e.message} · body=${res.body.take(1200)}")
+                throw e
+            }
     }
 
     private fun parseTurn(body: JsonObject, state: ScreenState): BrainTurn {
@@ -195,19 +204,19 @@ class GeminiBrain(
                 "function_call" -> {
                     val name = item.str("name")
                     val id = item.str("call_id").ifBlank { item.str("id") }.ifBlank { "call_${calls.size}" }
-                    val args = item["arguments"]?.jsonObject ?: item["args"]?.jsonObject ?: JsonObject(emptyMap())
+                    val args = (item["arguments"] as? JsonObject) ?: (item["args"] as? JsonObject) ?: JsonObject(emptyMap())
                     calls += Call(id, name, args["safety_decision"] != null)
                     if (name !in setOf("ask_user", "speak")) intents += args.str("intent")
 
                     fun px(key: String, size: Int) =
-                        args[key]?.jsonPrimitive?.intOrNull?.let { it * size / 1000 } ?: -1
+                        args[key].primOrNull()?.intOrNull?.let { it * size / 1000 } ?: -1
                     when {
                         name in mcpNames -> actions += AgentAction.Mcp(
-                            name, args.filterKeys { it != "intent" }.mapValues { it.value.jsonPrimitive.contentOrNull ?: "" })
+                            name, args.filterKeys { it != "intent" }.mapValues { it.value.primOrNull()?.contentOrNull ?: "" })
                         name == "click" -> actions += AgentAction.Tap(px("x", state.width), px("y", state.height))
                         name == "type" -> {
                             actions += AgentAction.Type(px("x", state.width), px("y", state.height), args.str("text"))
-                            if (args["press_enter"]?.jsonPrimitive?.booleanOrNull == true) actions += AgentAction.Key("enter")
+                            if (args["press_enter"].primOrNull()?.booleanOrNull == true) actions += AgentAction.Key("enter")
                         }
                         name == "open_app" -> actions += AgentAction.OpenApp(args.str("app_name").ifBlank { args.str("name") })
                         name == "navigate" -> actions += AgentAction.OpenApp(args.str("url"))
@@ -216,12 +225,12 @@ class GeminiBrain(
                             px("end_x", state.width), px("end_y", state.height), 400)
                         name == "long_press" -> {
                             val x = px("x", state.width); val y = px("y", state.height)
-                            actions += AgentAction.Swipe(x, y, x, y, (args["seconds"]?.jsonPrimitive?.intOrNull ?: 1) * 1000L)
+                            actions += AgentAction.Swipe(x, y, x, y, (args["seconds"].primOrNull()?.intOrNull ?: 1) * 1000L)
                         }
                         name == "scroll" -> actions += AgentAction.Scroll(args.str("direction") != "up")
                         name == "press_key" -> actions += AgentAction.Key(args.str("key"))
                         name == "go_back" -> actions += AgentAction.Key("back")
-                        name == "wait" -> actions += AgentAction.Wait((args["seconds"]?.jsonPrimitive?.intOrNull ?: 2) * 1000L)
+                        name == "wait" -> actions += AgentAction.Wait((args["seconds"].primOrNull()?.intOrNull ?: 2) * 1000L)
                         name == "take_screenshot" -> {} // el screenshot va en cada function_result
                         name == "list_apps" -> internalResults[id] = jo("apps" to js(listApps()))
                         name == "ask_user" -> question = args.str("question")
