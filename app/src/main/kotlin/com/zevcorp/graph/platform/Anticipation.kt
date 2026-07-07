@@ -37,13 +37,16 @@ class Anticipation(
             PIENSA CORTO (campo "reasoning", UNA frase): ¿hay algo que hacer JUSTO AHORA para que lo
             pedido no se tropiece? Ejemplos: tras poner una ALARMA, asegurar que el volumen de la
             alarma esté arriba (set_volume alarm 100); antes de transmitir a un parlante, que el wifi
-            esté encendido.
+            esté encendido; tras poner música o reproducir un video, bajar el volumen de media si crees
+            que puede molestar (o subirlo si va a costar oírlo) con adjust_volume/set_volume.
 
             REGLAS ESTRICTAS:
             - "task": SOLO si es una acción de CERTEZA TOTAL, segura y reversible, que claramente
               protege o habilita lo que se pidió. Debe poder hacerse con las herramientas disponibles.
               Ante la MÍNIMA duda, deja "task" vacío. JAMÁS envíes mensajes/correos, llames, compres,
-              publiques, borres, ni nada que afecte a terceros o sea irreversible.
+              publiques, borres, ni nada que afecte a terceros o sea irreversible. Ajustar el volumen
+              (subir/bajar/mutar/desmutar con adjust_volume o set_volume) SÍ cuenta como segura y
+              reversible: si la recomendación es de volumen, ejecútala como "task" en vez de solo "say".
             - "say": si hay un riesgo o dato útil que un amigo mencionaría pero que NO debes ejecutar
               por tu cuenta, ponlo aquí como aviso corto y natural. Si no hay nada, déjalo vacío.
             - Si no hay nada que anticipar, devuelve task y say vacíos. NO inventes tareas por inventar.
