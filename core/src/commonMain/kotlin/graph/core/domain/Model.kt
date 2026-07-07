@@ -58,6 +58,9 @@ class Mcp(
     /** Pausa entre los steps (taps) de una herramienta aprendida enviados juntos; ajustable en la app. */
     stepDelay: () -> Long = { 350 },
     private val log: GraphLog = GraphLog { _, _ -> },
+    /** Workflows aprendidos en la enseñanza: la ejecución MCP plasmada encima de los workflows. */
+    workflows: List<Workflow> = emptyList(),
+    workflowExecutor: WorkflowExecutor? = null,
 ) {
 
     /** Detalle del último fallo de una herramienta aprendida (qué pasos no se pudieron tocar). */
@@ -147,7 +150,27 @@ class Mcp(
         }
     }
 
-    val tools: List<McpTool> = gestureTools + systemTools + learnedTools
+    // Workflows como herramientas MCP: una tarea completa que el asistente YA sabe hacer paso a paso.
+    // Al llamarla, el runner recorre los steps haciendo switch entre subconsciente (clic por árbol de
+    // UI) y consciente (computer-use acotado al step), según cómo quedó estructurado cada uno.
+    private val workflowTools = if (workflowExecutor == null) emptyList() else workflows.map { wf ->
+        val sub = wf.steps.count { it.subconscious }
+        val apps = wf.steps.map { it.app }.filter { it.isNotBlank() }.distinct()
+        val appNote = if (apps.isNotEmpty()) "[app: ${apps.joinToString(", ")}] " else ""
+        McpTool(
+            "workflow_${sanitize(wf.name)}",
+            "$appNote${wf.description} Steps: ${wf.steps.joinToString(" → ") { it.action }} " +
+                "($sub de ${wf.steps.size} subconscientes).",
+            listOf(McpParam("context", "Datos variables de ESTA ejecución (nombres, textos, cantidades); \"\" si no aplica")),
+            via = WORKFLOW,
+        ) { args ->
+            val outcome = workflowExecutor.run(wf, args["context"]?.trim() ?: "")
+            lastDetail = outcome.detail
+            outcome.ok
+        }
+    }
+
+    val tools: List<McpTool> = gestureTools + systemTools + learnedTools + workflowTools
 
     fun tool(name: String) = tools.firstOrNull { it.name == name }
 
@@ -159,7 +182,7 @@ class Mcp(
     suspend fun call(name: String, args: Map<String, String>): String {
         val t = tool(name) ?: return "herramienta MCP desconocida: $name"
         lastDetail = null
-        return if (t.run(args)) "ok"
+        return if (t.run(args)) "ok" + (lastDetail?.let { " — $it" } ?: "")
         else "la herramienta no se pudo ejecutar" + (lastDetail?.let { " — $it" } ?: "")
     }
 
@@ -180,5 +203,8 @@ class Mcp(
         }
     }
 
-    private companion object { const val GESTURE = "gesto de accesibilidad" }
+    private companion object {
+        const val GESTURE = "gesto de accesibilidad"
+        const val WORKFLOW = "workflow (subconsciente ↔ consciente)"
+    }
 }

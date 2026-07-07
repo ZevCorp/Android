@@ -474,7 +474,7 @@ class MainActivity : Activity(), UserChannel {
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return
         }
         val passive = app.passive
-        if (!passive.active) { passive.start(); after() }
+        if (!passive.active) { scope.launch { passive.start(); after() } }
         else scope.launch {
             runCatching { withContext(Dispatchers.Default) { passive.stop() } }
                 .onFailure { log("Aprendizaje pasivo: ${it.message}") }

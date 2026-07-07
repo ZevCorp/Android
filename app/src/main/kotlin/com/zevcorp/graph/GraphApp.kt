@@ -21,16 +21,22 @@ import com.zevcorp.graph.ui.Palette
 import com.zevcorp.graph.ui.ThemeMode
 import com.zevcorp.graph.voice.IntentDistiller
 import com.zevcorp.graph.platform.GeminiLearning
+import com.zevcorp.graph.platform.GeminiWorkflow
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LearnedToolRepo
 import com.zevcorp.graph.platform.LogBus
+import com.zevcorp.graph.platform.WorkflowRepo
 import graph.core.application.ExecutionEngine
 import graph.core.application.PassiveLearning
+import graph.core.application.WorkflowRecorder
+import graph.core.application.WorkflowRunner
 import graph.core.domain.ExecutionMode
 import graph.core.domain.Mcp
 import graph.core.domain.Phone
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
+import graph.core.domain.Workflow
+import graph.core.domain.WorkflowStep
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -62,6 +68,35 @@ class GraphApp : Application() {
         LearnedToolRepo(filesDir) { tool -> scope.launch(Dispatchers.IO) { CloudSync.push(tool) } }
     }
 
+    /** Workflows aprendidos (el puente consciente ↔ subconsciente): disco local + copia en la nube. */
+    val workflows by lazy {
+        WorkflowRepo(filesDir) { wf -> scope.launch(Dispatchers.IO) { CloudSync.pushWorkflow(wf) } }
+    }
+    private val workflowBrain by lazy { GeminiWorkflow(apiKey, model) }
+
+    /**
+     * GRABADORA DE WORKFLOWS: ambos modos de enseñanza (pasiva y activa) van guardando el paso a paso
+     * de la tarea (la unidad es el clic en el árbol de UI). Al cerrarse la enseñanza —salir de la app
+     * en la pasiva, terminar la grabación en la activa— la traza pasa al LLM de post-procesamiento,
+     * que limpia, organiza, anota y asigna la vía (MCP subconsciente o consciente) de cada step.
+     */
+    val recorder by lazy {
+        WorkflowRecorder(LogBus) { source, steps ->
+            scope.launch(Dispatchers.IO) {
+                val wf = runCatching { workflowBrain.structure(source, steps, workflows.list()) }
+                    .getOrElse { LogBus.log("workflow", "post-procesamiento falló: ${it.message}"); null }
+                if (wf == null) {
+                    LogBus.log("workflow", "la traza no dio un workflow que valga la pena guardar")
+                    return@launch
+                }
+                workflows.save(wf)
+                val sub = wf.steps.count { it.subconscious }
+                LogBus.log("workflow", "🧭 workflow \"${wf.name}\": ${wf.steps.size} steps ($sub subconscientes, ${wf.steps.size - sub} conscientes)")
+                voice.narrate("🧭 Aprendí el flujo \"${wf.name}\" (${wf.steps.size} pasos).")
+            }
+        }
+    }
+
     /**
      * Enseñanza PASIVA: se activa/desactiva desde la APP PRINCIPAL (antes en la burbuja). Observa los
      * clics del usuario usando el teléfono con normalidad y consolida el MCP de cada app cuando el
@@ -73,7 +108,8 @@ class GraphApp : Application() {
             inquirer = LearningInquiry(apiKey, model, memories, scope,
                 busy = { executing || bubble?.voiceBusy == true || activeLearning.busy },
                 askByVoice = { q -> bubble?.askAloud(q) ?: "" },
-                runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }))
+                runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }),
+            recorder = recorder)
     }
 
     /**
@@ -138,7 +174,15 @@ class GraphApp : Application() {
      * arranca un hilo fresco. Devuelve ambos para poder guardar el id/tokens del hilo al terminar.
      */
     private fun newSession(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, GeminiBrain> {
-        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
+        // El runner de workflows: los steps subconscientes salen por MCP (clic por árbol de UI) y los
+        // conscientes por un motor acotado a ese step; el switch de vía se señala igual que siempre.
+        val runner = WorkflowRunner(
+            player = service,
+            conscious = { wf, step, context -> consciousStep(surface, service, wf, step, context) },
+            mode = modeSignal, stepDelay = stepDelay, log = LogBus,
+        )
+        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus,
+            workflows = workflows.list(), workflowExecutor = runner)
         val brain = newBrain(mcp)
         if (resume) brain.resume(conversationId)
         val engine = ExecutionEngine(
@@ -146,6 +190,31 @@ class GraphApp : Application() {
             voice = voice, log = LogBus, mode = modeSignal, stepDelay = stepDelay, maxTurns = maxTurns,
         )
         return engine to brain
+    }
+
+    /**
+     * Un step CONSCIENTE de un workflow: un motor acotado cuyo único objetivo es ese paso. La pantalla
+     * ya viene posicionada por los steps anteriores; el motor mira, hace el paso y devuelve el control
+     * al runner (que sigue con el siguiente step, subconsciente o consciente).
+     */
+    private suspend fun consciousStep(surface: Phone, service: GraphAccessibilityService, workflow: Workflow, step: WorkflowStep, context: String): Boolean {
+        // Sin workflows en este Mcp: un step no puede relanzar workflows (evita la recursión).
+        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
+        val brain = newBrain(mcp)
+        val engine = ExecutionEngine(
+            brain = { brain }, phone = surface, mcp = mcp, user = null,
+            voice = voice, log = LogBus, mode = modeSignal, stepDelay = stepDelay, maxTurns = 8,
+        )
+        val goal = buildString {
+            append("Estás EN MEDIO del workflow \"${workflow.name}\" (${workflow.description}). ")
+            append("La pantalla ya está donde la dejaron los pasos anteriores: NO reinicies la tarea ni vayas al home. ")
+            append("Ejecuta SOLO este paso y termina: ${step.action}.")
+            if (step.note.isNotBlank()) append(" Contexto del paso: ${step.note}.")
+            if (context.isNotBlank()) append(" Datos de esta ejecución: $context.")
+        }
+        return try { engine.run(goal, announce = false); true }
+        catch (ce: CancellationException) { throw ce }
+        catch (t: Throwable) { LogBus.log("workflow", "step consciente falló: ${t.message}"); false }
     }
 
     private fun buildGoal(prompts: List<String>): String =
@@ -311,6 +380,7 @@ class GraphApp : Application() {
         // Trae los aprendizajes y la memoria de la nube (y sube lo local que falte allá).
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()
+            workflows.syncFromCloud()
             memories.syncFromCloud(CloudSync.pullMemory())
         }
         // Sondeo de actualizaciones: al arrancar y cada ~30 min. El proceso sigue vivo por el servicio

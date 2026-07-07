@@ -1,6 +1,7 @@
 package com.zevcorp.graph.platform
 
 import graph.core.domain.LearnedTool
+import graph.core.domain.Workflow
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.serialization.builtins.ListSerializer
@@ -16,11 +17,13 @@ object CloudSync {
 
     private const val BASE = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_learned_tools"
     private const val MEMORY = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_memory"
+    private const val WORKFLOWS = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_workflows"
     private const val KEY = "sb_publishable_qroW231Ts7UYAEgr_f5cnQ_3SrW2ZrI" // publishable (cliente)
 
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private val listSerializer = ListSerializer(LearnedTool.serializer())
     private val memorySerializer = ListSerializer(MemoryNote.serializer())
+    private val workflowSerializer = ListSerializer(Workflow.serializer())
 
     /** Sube (upsert por nombre) una herramienta. Llamar desde IO; nunca lanza. */
     fun push(tool: LearnedTool) {
@@ -50,6 +53,21 @@ object CloudSync {
     fun pullMemory(): List<MemoryNote> = runCatching {
         json.decodeFromString(memorySerializer, http("GET", "$MEMORY?select=app,note"))
     }.getOrElse { LogBus.log("cloud", "☁ no pude bajar la memoria: ${it.message}"); emptyList() }
+
+    /** Sube (upsert por nombre) un workflow aprendido. Llamar desde IO; nunca lanza. */
+    fun pushWorkflow(workflow: Workflow) {
+        runCatching {
+            http("POST", "$WORKFLOWS?on_conflict=name",
+                json.encodeToString(workflowSerializer, listOf(workflow)),
+                "Prefer" to "resolution=merge-duplicates")
+            LogBus.log("cloud", "☁ workflow subido: ${workflow.name}")
+        }.onFailure { LogBus.log("cloud", "☁ no pude subir el workflow ${workflow.name}: ${it.message}") }
+    }
+
+    /** Baja todos los workflows de la nube. Llamar desde IO; nunca lanza (vacío si falla). */
+    fun pullWorkflows(): List<Workflow> = runCatching {
+        json.decodeFromString(workflowSerializer, http("GET", "$WORKFLOWS?select=name,description,steps,source"))
+    }.getOrElse { LogBus.log("cloud", "☁ no pude bajar los workflows: ${it.message}"); emptyList() }
 
     private fun http(method: String, url: String, body: String? = null, vararg headers: Pair<String, String>): String {
         val c = URL(url).openConnection() as HttpURLConnection

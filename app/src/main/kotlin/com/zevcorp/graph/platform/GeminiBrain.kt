@@ -307,6 +307,22 @@ class GeminiBrain(
         }
     }
 
+    /** Regla de workflows: tareas que YA sabe hacer paso a paso; se llaman enteras, no se re-improvisan. */
+    private val workflowRule: String
+        get() {
+            val wfs = tools.filter { it.via.startsWith("workflow") }
+            if (wfs.isEmpty()) return ""
+            return """
+        WORKFLOWS APRENDIDOS (tareas COMPLETAS que ya sabes hacer paso a paso porque las viste en la
+        enseñanza): ${wfs.joinToString(", ") { it.name }}.
+        Si el objetivo del usuario coincide con un workflow, llámalo DIRECTO desde la primera respuesta
+        y pásale en "context" los datos variables de esta ejecución (nombres, textos, cantidades). El
+        motor ejecuta sus steps solo, alternando entre subconsciente (clic por árbol de UI) y
+        consciente (mirar la pantalla): NO repitas sus pasos tú mismo ni lo mezcles con computer-use.
+        Solo si el workflow reporta steps fallidos, completa TÚ lo que faltó.
+            """.trimIndent()
+        }
+
     /** Regla para apps con mapa aprendido: cadena completa desde el primer turno, sin "abrir y mirar". */
     private val learnedRule: String
         get() {
@@ -343,6 +359,7 @@ class GeminiBrain(
         Si el plan son varias herramientas MCP encadenadas y predecibles (p.ej. ir al home y luego abrir
         el cajón), LLÁMALAS TODAS EN UNA SOLA RESPUESTA (varias function_call juntas) para ahorrar turnos.
         $learnedRule
+        $workflowRule
 
         En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").
         Usa speak SOLO para avisos importantes. No hables por hablar.

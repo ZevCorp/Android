@@ -24,6 +24,8 @@ class PassiveLearning(
     private val log: GraphLog = NO_LOG,
     /** Si está, en el modo iniciado por el usuario el asistente puede interrumpir y preguntar. */
     private val inquirer: LearningInquirer? = null,
+    /** Si está, la enseñanza también graba el paso a paso como WORKFLOW (se cierra al salir de la app). */
+    private val recorder: WorkflowRecorder? = null,
 ) {
     @Volatile var active = false
         private set
@@ -40,8 +42,9 @@ class PassiveLearning(
     private var clicksSinceInquiry = 0
 
     /** Enciende la observación. `quiet` = sin anuncios (modo automático durante una ejecución). */
-    fun start(quiet: Boolean = false) {
+    suspend fun start(quiet: Boolean = false) {
         active = true
+        recorder?.start(WorkflowSource.PASSIVE)
         userMode = !quiet
         lastInquiry = null
         clicksSinceInquiry = 0
@@ -52,6 +55,7 @@ class PassiveLearning(
     /** Apaga el modo consolidando lo que quedara pendiente de la app actual. */
     suspend fun stop(quiet: Boolean = false) {
         active = false
+        recorder?.stop()
         mutex.withLock { consolidate() }
         log.log("learn", "■ enseñanza pasiva desactivada")
         if (!quiet) voice.narrate("🎓 Dejo de observar.")
@@ -60,6 +64,9 @@ class PassiveLearning(
     /** Un clic del usuario dentro de una app, con el árbol de UI visible en ese momento. */
     suspend fun signal(app: String, screen: String, label: String, visible: List<String>) {
         if (!active) return
+        // El mismo clic también es un step del workflow en grabación (traza aparte, cierra por app).
+        recorder?.appChanged(app)
+        recorder?.record(app, screen, label)
         val ask: Triple<String, List<String>, List<String>>? = mutex.withLock {
             if (app != this.app) { consolidate(); this.app = app; clicksSinceInquiry = 0 }
             this.screen = screen
@@ -83,6 +90,7 @@ class PassiveLearning(
     /** El usuario pasó a otra app (o al home): consolida lo observado en la anterior. */
     suspend fun appChanged(newApp: String) {
         if (!active) return
+        recorder?.appChanged(newApp) // salir de la app cierra también la traza del workflow
         mutex.withLock {
             if (newApp != app) { consolidate(); app = newApp }
         }

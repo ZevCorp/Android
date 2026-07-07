@@ -65,6 +65,8 @@ class ActiveLearning(
     fun onStarted() {
         active = true
         LogBus.log("teach", "▶ aprendizaje activo en curso")
+        // La enseñanza activa también graba el paso a paso como WORKFLOW (traza única, cruza apps).
+        app.scope.launch { app.recorder.start(graph.core.domain.WorkflowSource.ACTIVE) }
         voice.speak("🎬 Enséñame lo que quieras; vuelve a tocar el 🎓 cuando termines.")
     }
 
@@ -81,6 +83,9 @@ class ActiveLearning(
         processing = true
         app.scope.launch(Dispatchers.IO) {
             try {
+                // Terminó la enseñanza: cierra la traza del workflow (dispara su post-procesamiento
+                // en paralelo al análisis del video).
+                app.recorder.stop()
                 if (file == null) { voice.speak("No pude grabar la pantalla, ¿lo intentamos de nuevo?"); return@launch }
                 voice.narrate("🧠 Estoy estudiando lo que me enseñaste…")
                 val result = video.structure(file)

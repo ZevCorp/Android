@@ -69,12 +69,18 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 if (visualizing) refreshLearnedOverlay()
             }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                if (!app.passive.active || !isRealApp(pkg) || pkg == launcherPkg) return
-                val label = event.source?.let { labelOf(it) } ?: return
-                if (label.isBlank()) return
+                val observing = app.passive.active || app.recorder.active
+                if (!observing || !isRealApp(pkg) || pkg == launcherPkg) return
+                val label = event.source?.let { labelOf(it) } ?: ""
                 val screenNow = currentScreen()
-                val visible = elementsNow()
-                app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+                if (app.passive.active && label.isNotBlank()) {
+                    val visible = elementsNow()
+                    app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+                } else if (app.recorder.active) {
+                    // Enseñanza activa, o clic que el árbol de UI no logró etiquetar: igual es un
+                    // step del workflow (sin etiqueta quedará como paso consciente).
+                    app.scope.launch { app.recorder.record(pkg, screenNow, label) }
+                }
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.TYPE_VIEW_SCROLLED ->
                 if (visualizing) refreshLearnedOverlay()

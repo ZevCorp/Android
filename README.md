@@ -7,7 +7,7 @@ Un asistente con carita flotante que controla tu teléfono Android. Le pides alg
 
 No hay modos separados: es **un solo motor de ejecución mixto**. El modelo decide, turno a turno, si usar un gesto MCP o computer-use.
 
-> **Base mínima que crece.** El corazón es el motor mixto. Encima ya viven: enseñanza **pasiva** (observación silenciosa) y enseñanza **activa** (compartir pantalla → conocimiento textual por app, fase 1 sin árbol de UI). Aún no hay workflows ni terminal — se integrarán después. Está el botón de **detener**.
+> **Base mínima que crece.** El corazón es el motor mixto. Encima ya viven: enseñanza **pasiva** (observación silenciosa), enseñanza **activa** (compartir pantalla → conocimiento textual por app + paso a paso por accesibilidad) y **workflows** (el puente consciente ↔ subconsciente, ver abajo). Aún no hay terminal — se integrará después. Está el botón de **detener**.
 
 ## Herramientas MCP
 
@@ -70,6 +70,15 @@ Mientras el modo está activo, el asistente puede **intervenir por voz por inici
 
 - `core`: `PassiveLearning` (acumula señales por app y consolida al salir); puertos `LearningBrain`, `LearningSurface`; `LearnedTool` = nombre + documentación + catálogo de elementos + paquete de la app.
 - `app`: `GeminiLearning` (consolidación estricta), `HighlightOverlay` (contornos de lo aprendido), el servicio captura clics-señal y detecta el cambio de app en primer plano.
+
+## Workflows: el puente consciente ↔ subconsciente
+
+El asistente está inspirado en el ser humano: ejecutando **una misma tarea** puede hacer switch rápidamente entre lo **consciente** (mirar y decidir: Gemini computer-use) y lo **subconsciente** (lo que ya conoce: MCP). El **workflow** es el punto de enlace entre esos dos mundos: un flujo de **steps** que se concatenan para completar una tarea — primero a, después b, después c — donde **la unidad del step es el clic** sobre un elemento del árbol de UI.
+
+- **Se crean en la enseñanza.** Ambos modos son el punto de creación: mientras le enseñas (pasiva: usando el teléfono con normalidad; activa: compartiendo pantalla), el asistente ve explícitamente el paso a paso y **va guardando el workflow step by step**. La enseñanza termina al **salir de la app** (pasiva) o al **terminar la grabación** (activa).
+- **Post-procesamiento LLM.** Al terminar, la traza cruda pasa a un LLM que **estructura el workflow de forma efectiva**: limpia los pasos basura e innecesarios, organiza los necesarios y agrega una **nota de contexto opcional** a los pasos que decida (no es obligatoria). Además **asigna los MCPs que ya están listos**: los steps cuyo elemento quedó bien detectado en el árbol de UI quedan **subconscientes**; los que no se lograron detectar quedan para ejecutarse de forma **consciente**.
+- **La ejecución MCP está plasmada encima de los workflows.** Cada workflow se declara como herramienta MCP (`workflow_*`) y el modelo lo invoca entero (con un `context` de datos variables). El `WorkflowRunner` recorre los steps **haciendo switch entre consciente y subconsciente según avanza el workflow**: los subconscientes se ejecutan como clics por árbol de UI (sin pantalla) y los conscientes con un motor Gemini acotado a ese único paso. Si un clic subconsciente falla, ese step **cae en caliente a la vía consciente**.
+- Persisten en `files/workflows/` + nube (`graph_workflows`), igual que los aprendizajes.
 
 ## Las dos vías, un solo cerebro
 
