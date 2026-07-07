@@ -22,6 +22,7 @@ import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.Release
 import com.zevcorp.graph.platform.Updater
+import com.zevcorp.graph.platform.UsageU
 import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
 import kotlin.coroutines.resume
@@ -39,6 +40,10 @@ class MainActivity : Activity(), UserChannel {
     private var voiceCallback: ((String) -> Unit)? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
+    /** Modo de la app: usuario (solo la gráfica) o desarrollador (todo). Por defecto, usuario. */
+    private var userMode = true
+    /** Acceso a estadísticas de uso con el que se dibujó la gráfica (para recrear al concederlo). */
+    private var builtWithAccess = false
 
     /* Actualizaciones */
     private var updStatus: TextView? = null
@@ -49,6 +54,7 @@ class MainActivity : Activity(), UserChannel {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         builtWithMode = Palette.mode
+        userMode = app.prefs.getString(KEY_UI_MODE, MODE_USER) != MODE_DEV
         window.statusBarColor = Palette.bg
         window.navigationBarColor = Palette.bg
 
@@ -58,15 +64,29 @@ class MainActivity : Activity(), UserChannel {
             setPadding(dp(18), dp(24), dp(18), dp(24))
         }
 
-        // Header
+        // Header: carita + nombre + botón de modo (arriba a la derecha)
         val header = row()
         header.addView(FaceView(this), LinearLayout.LayoutParams(dp(56), dp(56)))
         val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0) }
-        titles.addView(title("Graph", 22f))
+        titles.addView(title("Ü", 22f))
         titles.addView(caption("Pídeme algo · lo hago con gestos MCP y computer-use"))
-        header.addView(titles)
+        header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(modeToggle())
         root.addView(header)
         root.gap(dp(16))
+
+        // Modo usuario: una sola gráfica central. El resto (modo desarrollador) sigue abajo intacto.
+        if (userMode) {
+            buildUserMode(root)
+            setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
+            applyBarIcons()
+            requestPermissions(arrayOf(
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                android.Manifest.permission.CALL_PHONE,
+            ), 3)
+            return
+        }
 
         // Actualizaciones: versión instalada, buscar/instalar la nueva. Mantén oprimido el título
         // para el panel de administrador (publicar una versión y notificar a todos).
@@ -128,12 +148,12 @@ class MainActivity : Activity(), UserChannel {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         setup.addView(setupRow)
         setup.gap(dp(8))
-        setup.addView(button("Hacer de Graph tu asistente (botón de encendido)") {
+        setup.addView(button("Hacer de Ü tu asistente (botón de encendido)") {
             startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
         })
         setup.gap(dp(6))
         setup.addView(caption("Al activar accesibilidad aparece la burbuja flotante. En Apps predeterminadas → " +
-            "App de asistente digital elige Graph: lo invocas manteniendo el botón de encendido."))
+            "App de asistente digital elige Ü: lo invocas manteniendo el botón de encendido."))
         root.addView(setup)
         root.gap(dp(14))
 
@@ -179,7 +199,7 @@ class MainActivity : Activity(), UserChannel {
             LinearLayout.LayoutParams(0, -2, 1f))
         learn.addView(learnHead)
         learn.gap(dp(4))
-        learn.addView(caption("Graph observa cómo usas tus apps (sin interrumpir) y estructura su mapa " +
+        learn.addView(caption("Ü observa cómo usas tus apps (sin interrumpir) y estructura su mapa " +
             "MCP al salir de cada una. Para ver lo aprendido, mantén oprimido el 🎓 de la burbuja. " +
             "El 🎓 de la burbuja, al tocarlo, es el aprendizaje activo (compartir pantalla)."))
         learn.gap(dp(10))
@@ -411,6 +431,11 @@ class MainActivity : Activity(), UserChannel {
         // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
         // colores nuevos (blanco/negro coherente con la carita).
         if (builtWithMode != Palette.mode) { recreate(); return }
+        if (userMode) {
+            // Al volver de conceder el acceso a uso, redibuja la gráfica con el tiempo real.
+            if (builtWithAccess != UsageU.hasUsageAccess(this)) recreate()
+            return
+        }
         if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
     }
 
@@ -467,10 +492,50 @@ class MainActivity : Activity(), UserChannel {
 
     private fun log(message: String) = LogBus.log("app", message)
 
+    /* ---------- Modo usuario ⇄ desarrollador ---------- */
+
+    /** Botón sutil (solo icono) arriba a la derecha que alterna entre modo usuario y desarrollador. */
+    private fun modeToggle(): View {
+        val icon = if (userMode) Icon.CODE else Icon.EYE // destino: usuario→código(dev) · dev→ojo(usuario)
+        return iconChip(icon, sizeDp = 38, tint = Palette.textDim) {
+            val next = if (userMode) MODE_DEV else MODE_USER
+            app.prefs.edit().putString(KEY_UI_MODE, next).apply()
+            Toast.makeText(this, if (next == MODE_DEV) "Modo desarrollador" else "Modo usuario", Toast.LENGTH_SHORT).show()
+            recreate()
+        }
+    }
+
+    /** La única pantalla del modo usuario: la gráfica "versus" y una narrativa elegante. */
+    private fun buildUserMode(root: LinearLayout) {
+        builtWithAccess = UsageU.hasUsageAccess(this)
+        val chart = card()
+        chart.addView(
+            UsageVersusView(this, UsageU.uActiveMs(this), UsageU.userScreenMs(this)),
+            LinearLayout.LayoutParams(-1, dp(360)))
+        root.addView(chart)
+        root.gap(dp(20))
+        root.addView(TextView(this).apply {
+            text = "Mientras más tiempo Ü usa tu dispositivo, menos tiempo estás tú frente a la pantalla — y más puedes disfrutar tu vida."
+            textSize = 15f
+            setTextColor(Palette.text)
+            gravity = Gravity.CENTER
+            setLineSpacing(dp(6).toFloat(), 1f)
+            setPadding(dp(10), 0, dp(10), 0)
+        })
+        if (!builtWithAccess) {
+            root.gap(dp(18))
+            root.addView(button("Permitir medir tu tiempo de pantalla") {
+                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            })
+            root.gap(dp(6))
+            root.addView(caption("Concede acceso a estadísticas de uso para ver tu tiempo real en la pantalla."))
+        }
+    }
+
     /** Activa/desactiva el aprendizaje pasivo (movido aquí desde la burbuja). */
     private fun togglePassive(after: () -> Unit) {
         if (app.ui == null) {
-            log("Activa el servicio de accesibilidad de Graph")
+            log("Activa el servicio de accesibilidad de Ü")
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return
         }
         val passive = app.passive
@@ -485,7 +550,7 @@ class MainActivity : Activity(), UserChannel {
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {
         if (app.ui == null) {
-            log("Activa el servicio de accesibilidad de Graph")
+            log("Activa el servicio de accesibilidad de Ü")
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return
         }
         log("Pídeme: $prompt")
@@ -529,5 +594,11 @@ class MainActivity : Activity(), UserChannel {
                 }
                 .show()
         }
+    }
+
+    private companion object {
+        const val KEY_UI_MODE = "ui_mode"
+        const val MODE_USER = "user"
+        const val MODE_DEV = "dev"
     }
 }

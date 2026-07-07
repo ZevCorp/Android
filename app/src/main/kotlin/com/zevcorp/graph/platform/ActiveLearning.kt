@@ -46,7 +46,7 @@ class ActiveLearning(
     }
 
     private fun start() {
-        if (app.ui == null) { voice.narrate("Activa la accesibilidad de Graph primero"); return }
+        if (app.ui == null) { voice.narrate("Activa la accesibilidad de Ü primero"); return }
         active = true
         LogBus.log("teach", "🎬 aprendizaje activo: pidiendo compartir pantalla")
         runCatching {

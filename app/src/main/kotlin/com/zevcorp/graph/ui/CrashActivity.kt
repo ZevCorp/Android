@@ -18,7 +18,7 @@ class CrashActivity : Activity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val trace = intent.getStringExtra(EXTRA_TRACE) ?: "(sin traza)"
-        val body = "Graph se cerró por un error.\nCopia esto y envíamelo 🙏\n\n$trace"
+        val body = "Ü se cerró por un error.\nCopia esto y envíamelo 🙏\n\n$trace"
         val tv = TextView(this).apply {
             text = body
             setTextColor(0xFFFFFFFF.toInt())

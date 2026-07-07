@@ -54,7 +54,7 @@ class LearningInquiry(
      */
     private fun decide(app: String, screen: String, clicks: List<String>, elements: List<String>): Decision? {
         val prompt = """
-            Eres Graph, un asistente que OBSERVA al usuario usar una app de su Android (él activó tu
+            Eres Ü, un asistente que OBSERVA al usuario usar una app de su Android (él activó tu
             modo aprendizaje). Puedes hacer tareas por él en el teléfono. Esto acaba de pasar:
 
             App: $app

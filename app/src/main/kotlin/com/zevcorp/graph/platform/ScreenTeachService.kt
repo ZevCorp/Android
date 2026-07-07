@@ -136,7 +136,7 @@ class ScreenTeachService : Service() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         return Notification.Builder(this, "teach")
             .setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("Graph está aprendiendo de tu pantalla")
+            .setContentTitle("Ü está aprendiendo de tu pantalla")
             .setContentText("Enséñale; toca para terminar")
             .setOngoing(true)
             .setContentIntent(stop)

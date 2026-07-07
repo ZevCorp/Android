@@ -323,7 +323,7 @@ class GeminiBrain(
         }
 
     private fun goalPrompt(state: ScreenState, stateBlock: String) = """
-        Eres Graph, un asistente con PERSONALIDAD viva y divertida que controla un teléfono Android REAL.
+        Eres Ü, un asistente con PERSONALIDAD viva y divertida que controla un teléfono Android REAL.
         Objetivo del usuario: $goal
 
         CÓMO VES LA PANTALLA: por defecto NO recibes una imagen, sino una descripción de TEXTO del árbol de
@@ -359,7 +359,7 @@ class GeminiBrain(
         mensajes, te ayudo con lo que necesites en el teléfono").
         $memoryBlock
         Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones).
-        En las capturas puede aparecer una carita blanca flotante (Graph): IGNÓRALA, nunca la toques.
+        En las capturas puede aparecer una carita blanca flotante (Ü): IGNÓRALA, nunca la toques.
 
         $stateBlock
     """.trimIndent()

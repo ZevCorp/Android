@@ -126,7 +126,7 @@ class GeminiVideo(
 
     private fun generate(fileUri: String): JsonObject {
         val prompt = """
-            Eres Graph, un asistente que controla el teléfono Android del usuario. El usuario acaba de
+            Eres Ü, un asistente que controla el teléfono Android del usuario. El usuario acaba de
             COMPARTIR SU PANTALLA y enseñarte, con su voz, cosas sobre cómo usa sus apps: te mostró
             datos, contactos, preferencias o formas de hacer las cosas que quiere que RECUERDES para
             cuando tú operes el teléfono por él.

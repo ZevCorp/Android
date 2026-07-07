@@ -26,7 +26,7 @@ class Anticipation(
 ) {
     suspend fun consider(request: String, done: String, tools: String): Foresight? = withContext(Dispatchers.IO) {
         val prompt = """
-            Eres Graph. Acabas de completar lo que el usuario pidió. Piensa como ese AMIGO PREVENIDO
+            Eres Ü. Acabas de completar lo que el usuario pidió. Piensa como ese AMIGO PREVENIDO
             que se anticipa a los problemas antes de que pasen (vamos al carro → nota que vas corto de
             gasolina y busca una estación en el camino).
 

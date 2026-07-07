@@ -56,6 +56,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var outsideCloseAt = 0L
     private var dragAnimator: ValueAnimator? = null
 
+    // Gestos sobre la carita: 1 toque = menú (con leve retraso) · 2 = micrófono · 3 = tema.
+    private var tapCount = 0
+    private var tapJob: Job? = null
+
     private var speech: TextView? = null
     private var speechParams: WindowManager.LayoutParams? = null
     private var speechHide: Job? = null
@@ -107,10 +111,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 execLive -> stopExecLive()
                 // Durante la escucha por esquina: el toque termina la grabación y procesa.
                 voiceDock.listening -> voiceDock.stopNow()
-                // Re-tocar la carita cierra/abre el panel. Si el panel se acaba de cerrar porque este
-                // mismo toque cayó "fuera", no lo reabrimos.
-                panel == null -> if (android.os.SystemClock.uptimeMillis() - outsideCloseAt > 350) openPanel()
-                else -> closePanel()
+                // Estado normal: gestos por número de toques (1 menú · 2 micrófono · 3 tema).
+                else -> onBubbleTap()
             }
         }
         bubble.pivotX = size / 2f
@@ -458,7 +460,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         headFace.setOnClickListener { cycleTheme() }
         header.addView(headFace, LinearLayout.LayoutParams(c.dp(40), c.dp(40)))
         val titles = LinearLayout(c).apply { orientation = LinearLayout.VERTICAL; setPadding(c.dp(10), 0, 0, 0) }
-        titles.addView(c.title("Graph", 16f))
+        titles.addView(c.title("Ü", 16f))
         titles.addView(c.caption(if (app.ui != null) "Toca mi cara: tema ${Palette.label()}" else "Activa accesibilidad"))
         header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
         body.addView(header)
@@ -537,16 +539,47 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scope.launch { closePanel(); openPanel() }
     }
 
+    /**
+     * Gestos por número de toques, resueltos tras una ventana breve. El pequeño retraso hace que la
+     * apertura del menú "se sienta" como transición y evita abrirlo en el primer toque de un doble o
+     * triple toque.
+     *  · 1 toque  → abre/cierra el menú
+     *  · 2 toques → activa el micrófono (ejecuta lo pedido por voz)
+     *  · 3 toques → cambia el tema (claro · oscuro · transparente)
+     */
+    private fun onBubbleTap() {
+        tapCount++
+        tapJob?.cancel()
+        tapJob = scope.launch {
+            delay(GESTURE_WINDOW_MS)
+            val n = tapCount
+            tapCount = 0
+            when (n) {
+                1 -> if (panel == null) {
+                    if (android.os.SystemClock.uptimeMillis() - outsideCloseAt > 350) openPanel()
+                } else closePanel()
+                2 -> activateMic()
+                else -> cycleTheme()
+            }
+        }
+    }
+
+    /** Doble toque: escucha por voz y ejecuta lo pedido, sin abrir el menú. */
+    private fun activateMic() {
+        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Ü"); return }
+        recognize { heard -> if (heard != null) runPrompt(heard) else toast("No te escuché") }
+    }
+
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {
-        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
+        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Ü"); return }
         voiceDock.cancel() // desarma una cuenta regresiva pendiente (no toca la escucha permanente)
         scope.launch { runPromptAwait(prompt) }
     }
 
     /** Igual que runPrompt pero SUSPENDE hasta terminar: lo usa el bucle de escucha permanente. */
     suspend fun runPromptAwait(prompt: String) = withContext(Dispatchers.Main) {
-        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return@withContext }
+        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Ü"); return@withContext }
         narrate("¡Vamos! $prompt")
         runCatching { withContext(Dispatchers.Default) { app.run(prompt, this@FloatingBubble) } }
             .onSuccess { toast(it) }
@@ -657,7 +690,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     }
 
     private fun toggleActiveLearning() {
-        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Graph"); return }
+        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Ü"); return }
         closePanel()
         app.activeLearning.toggle()
     }
@@ -873,5 +906,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         MicService.stop(service)
         LogBus.log("voice", "■ escucha en vivo apagada")
         if (announce) narrate("Ok, dejo de escucharte")
+    }
+
+    private companion object {
+        const val GESTURE_WINDOW_MS = 260L
     }
 }

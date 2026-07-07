@@ -82,7 +82,7 @@ class AssistActivity : Activity() {
         val header = row()
         face = FaceView(this)
         header.addView(face, LinearLayout.LayoutParams(dp(40), dp(40)))
-        header.addView(title("Graph", 18f).apply { setPadding(dp(12), 0, 0, 0) },
+        header.addView(title("Ü", 18f).apply { setPadding(dp(12), 0, 0, 0) },
             LinearLayout.LayoutParams(0, -2, 1f))
         header.addView(iconChip(Icon.CLOSE, sizeDp = 38) { dismiss() })
         sheet.addView(header)

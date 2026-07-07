@@ -17,6 +17,7 @@ import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.MemoryStore
 import com.zevcorp.graph.platform.Updater
+import com.zevcorp.graph.platform.UsageU
 import com.zevcorp.graph.ui.Palette
 import com.zevcorp.graph.ui.ThemeMode
 import com.zevcorp.graph.voice.IntentDistiller
@@ -161,7 +162,7 @@ class GraphApp : Application() {
      * Al terminar, una cadena de pensamiento breve decide si anticipar una acción segura.
      */
     suspend fun run(prompt: String, user: UserChannel?): String {
-        val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
+        val surface = ui ?: return "Activa el servicio de accesibilidad de Ü"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
         // Rotación de ventana de contexto: al superar el umbral se abre un hilo nuevo (la memoria
         // durable sobrevive). Solo aplica al empezar; no interrumpe nada en curso.
@@ -269,6 +270,7 @@ class GraphApp : Application() {
         // (en background, para no retrasar la respuesta). Si el 🎓 ya estaba activo, no se toca.
         val autoLearn = !passive.active
         if (autoLearn) passive.start(quiet = true)
+        val startedAt = System.currentTimeMillis()
         try {
             return block()
         } finally {
@@ -280,6 +282,10 @@ class GraphApp : Application() {
             bubble?.stopExecLive(announce = false) // la escucha en vivo muere con su ejecución
             notifyRunning(false)
             if (autoLearn && passive.active) scope.launch(Dispatchers.IO) { passive.stop(quiet = true) }
+            // Tiempo que Ü usó el dispositivo por ti → alimenta la gráfica del modo usuario.
+            val elapsed = System.currentTimeMillis() - startedAt
+            prefs.edit().putLong(UsageU.KEY_U_ACTIVE_MS,
+                prefs.getLong(UsageU.KEY_U_ACTIVE_MS, 0L) + elapsed).apply()
         }
     }
 
@@ -291,7 +297,7 @@ class GraphApp : Application() {
             this, 0, Intent("com.zevcorp.graph.STOP").setPackage(packageName), PendingIntent.FLAG_IMMUTABLE)
         nm.notify(2, Notification.Builder(this, "run")
             .setSmallIcon(android.R.drawable.ic_media_pause)
-            .setContentTitle("Graph está ejecutando")
+            .setContentTitle("Ü está ejecutando")
             .setContentText("Toca para detener")
             .setOngoing(true)
             .setColor(0xFFE5534B.toInt())

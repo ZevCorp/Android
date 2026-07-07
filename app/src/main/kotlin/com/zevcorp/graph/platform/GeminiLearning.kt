@@ -66,7 +66,7 @@ class GeminiLearning(
         """.trimIndent() else "No existía mapa previo de esta app: si guardas, elige un nombre snake_case descriptivo."
 
         val prompt = """
-            Eres Graph. Tu modo de ENSEÑANZA PASIVA observó el uso de una app en el teléfono Android
+            Eres Ü. Tu modo de ENSEÑANZA PASIVA observó el uso de una app en el teléfono Android
             y esa app acaba de cerrarse. Los clics pueden venir del usuario usándola con normalidad
             O de ti mismo ejecutando una tarea que el usuario pidió: ambas son señales igual de
             válidas de qué importa. Tu trabajo: estructurar lo observado como herramienta MCP — o
