@@ -28,6 +28,11 @@ class PassiveLearning(
     private val recorder: WorkflowRecorder? = null,
     /** Nombre visible de una app a partir de su paquete (para hablarle al usuario en su idioma). */
     private val appName: (String) -> String = { it },
+    /**
+     * Se invoca cada vez que un MCP nace o se refina (aprendizaje continuo): la plataforma lo usa
+     * para RECONECTAR los workflows ya existentes de esa app con el catálogo nuevo (fire-and-forget).
+     */
+    private val onLearned: ((LearnedTool) -> Unit)? = null,
 ) {
     @Volatile var active = false
         private set
@@ -57,8 +62,10 @@ class PassiveLearning(
     /** Apaga el modo consolidando lo que quedara pendiente de la app actual. */
     suspend fun stop(quiet: Boolean = false) {
         active = false
-        recorder?.stop()
+        // Primero consolida el MCP y después cierra la traza del workflow: así el post-procesamiento
+        // del workflow ya ve el catálogo fresco (misma pasada, sin carrera).
         mutex.withLock { consolidate() }
+        recorder?.stop()
         log.log("learn", "■ enseñanza pasiva desactivada")
         if (!quiet) voice.narrate("🎓 Dejo de observar.")
     }
@@ -66,9 +73,6 @@ class PassiveLearning(
     /** Un clic del usuario dentro de una app, con el árbol de UI visible en ese momento. */
     suspend fun signal(app: String, screen: String, label: String, visible: List<String>) {
         if (!active) return
-        // El mismo clic también es un step del workflow en grabación (traza aparte, cierra por app).
-        recorder?.appChanged(app)
-        recorder?.record(app, screen, label)
         val ask: Triple<String, List<String>, List<String>>? = mutex.withLock {
             if (app != this.app) { consolidate(); this.app = app; clicksSinceInquiry = 0 }
             this.screen = screen
@@ -85,6 +89,11 @@ class PassiveLearning(
                 Triple(app, clicks.toList().takeLast(12), elements.toList())
             } else null
         }
+        // El mismo clic también es un step del workflow en grabación (traza aparte, cierra por app).
+        // Va DESPUÉS del lock: si el clic llegó con cambio de app, el MCP de la app anterior ya quedó
+        // consolidado y el post-procesamiento del workflow verá el catálogo fresco.
+        recorder?.appChanged(app)
+        recorder?.record(app, screen, label)
         // Fuera del lock: la pregunta corre async en la implementación (no bloquea nada).
         ask?.let { (a, c, e) -> inquirer?.maybeAsk(a, screen, c, e) }
     }
@@ -92,10 +101,12 @@ class PassiveLearning(
     /** El usuario pasó a otra app (o al home): consolida lo observado en la anterior. */
     suspend fun appChanged(newApp: String) {
         if (!active) return
-        recorder?.appChanged(newApp) // salir de la app cierra también la traza del workflow
         mutex.withLock {
             if (newApp != app) { consolidate(); app = newApp }
         }
+        // Después de consolidar: salir de la app cierra también la traza del workflow, que se
+        // estructura ya viendo el MCP recién consolidado (aprendizaje continuo, misma pasada).
+        recorder?.appChanged(newApp)
     }
 
     /** Estructura lo acumulado como herramienta MCP (solo si hay certeza y valor) y limpia. */
@@ -120,5 +131,8 @@ class PassiveLearning(
         log.log("learn", "■ ${if (previous != null) "refinado" else "aprendido"}: ${final.name} · ${final.elements.size} elementos")
         // Al usuario se le habla en su idioma, no en técnico: nada de nombres de herramientas ni conteos.
         voice.narrate("🧩 Ahora el uso de ${appName(app)} es mejor y más rápido.")
+        // Aprendizaje continuo: el MCP nuevo/refinado puede cubrir pasos conscientes de workflows
+        // que ya existían — la plataforma los reconecta en background.
+        onLearned?.invoke(final)
     }
 }

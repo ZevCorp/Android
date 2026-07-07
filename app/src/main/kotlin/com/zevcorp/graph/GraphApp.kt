@@ -83,7 +83,9 @@ class GraphApp : Application() {
     val recorder by lazy {
         WorkflowRecorder(LogBus) { source, steps ->
             scope.launch(Dispatchers.IO) {
-                val wf = runCatching { workflowBrain.structure(source, steps, workflows.list()) }
+                // El catálogo MCP se lee AQUÍ (fresco): los MCPs de pasadas anteriores —o el que se
+                // acaba de consolidar en esta misma pasada— también asignan steps subconscientes.
+                val wf = runCatching { workflowBrain.structure(source, steps, workflows.list(), learnedTools.list()) }
                     .getOrElse { LogBus.log("workflow", "post-procesamiento falló: ${it.message}"); null }
                 if (wf == null) {
                     LogBus.log("workflow", "la traza no dio un workflow que valga la pena guardar")
@@ -110,7 +112,31 @@ class GraphApp : Application() {
                 askByVoice = { q -> bubble?.askAloud(q) ?: "" },
                 runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }),
             recorder = recorder,
-            appName = ::appLabel)
+            appName = ::appLabel,
+            onLearned = { tool -> scope.launch(Dispatchers.IO) { reconcileWorkflows(tool.app) } })
+    }
+
+    /**
+     * Aprendizaje continuo, camino inverso: acaba de nacer o refinarse el MCP de una app y pueden
+     * existir workflows previos con pasos conscientes que ese mapa ya cubre. Se reconectan aquí,
+     * en background, workflow por workflow (solo los de esa app que aún tengan pasos conscientes).
+     */
+    private suspend fun reconcileWorkflows(app: String) {
+        if (app.isBlank()) return
+        val affected = workflows.list().filter { wf ->
+            wf.steps.any { it.app == app } && wf.steps.any { !it.subconscious }
+        }
+        if (affected.isEmpty()) return
+        val catalog = learnedTools.list()
+        for (wf in affected) {
+            val better = runCatching { workflowBrain.reconcile(wf, catalog) }
+                .getOrElse { LogBus.log("workflow", "reconexión de \"${wf.name}\" falló: ${it.message}"); null }
+                ?: continue
+            workflows.save(better)
+            val sub = better.steps.count { it.subconscious }
+            LogBus.log("workflow", "🔗 \"${better.name}\" reconectado al MCP de $app: " +
+                "$sub/${better.steps.size} steps ya subconscientes")
+        }
     }
 
     /** Nombre visible de una app desde su paquete ("com.whatsapp" → "WhatsApp"); cae al paquete corto. */

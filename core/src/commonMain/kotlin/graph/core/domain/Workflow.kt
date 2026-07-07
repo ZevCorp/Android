@@ -54,14 +54,28 @@ class RawStep(
 )
 
 /**
- * El POST-PROCESADOR de workflows: al terminar la enseñanza, recibe la traza cruda de clics y la
- * estructura como workflow efectivo: limpia los pasos basura e innecesarios, organiza los necesarios,
- * agrega notas de contexto opcionales donde decida que aportan, y asigna la vía de cada step: MCP
- * (subconsciente) a los que ya están listos por árbol de UI, consciente a los que no. Devuelve null
- * si la traza no completa ninguna tarea que valga la pena guardar.
+ * El POST-PROCESADOR de workflows. El asistente está en aprendizaje continuo: workflows y MCPs nacen
+ * y se refinan constantemente, en cualquier orden, y este cerebro es quien los mantiene CONECTADOS.
+ *
+ * - `structure`: al terminar la enseñanza, recibe la traza cruda de clics y la estructura como
+ *   workflow efectivo: limpia los pasos basura e innecesarios, organiza los necesarios, agrega notas
+ *   de contexto opcionales donde decida que aportan, y asigna la vía de cada step: MCP (subconsciente)
+ *   a los que ya están listos por árbol de UI — incluidos los cubiertos por MCPs de pasadas
+ *   ANTERIORES (`learned`) —, consciente a los que no. Devuelve null si la traza no completa ninguna
+ *   tarea que valga la pena guardar.
+ * - `reconcile`: el camino inverso. Cuando un MCP nace o se refina DESPUÉS de que un workflow ya
+ *   existía, reconecta ese workflow con el catálogo actual: los steps conscientes que el nuevo mapa
+ *   ya cubre suben a subconscientes. Devuelve null si no hay ninguna mejora.
  */
 interface WorkflowBrain {
-    suspend fun structure(source: WorkflowSource, steps: List<RawStep>, existing: List<Workflow>): Workflow?
+    suspend fun structure(
+        source: WorkflowSource,
+        steps: List<RawStep>,
+        existing: List<Workflow>,
+        learned: List<LearnedTool>,
+    ): Workflow?
+
+    suspend fun reconcile(workflow: Workflow, learned: List<LearnedTool>): Workflow?
 }
 
 /** Persistencia de los workflows aprendidos. */

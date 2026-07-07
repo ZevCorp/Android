@@ -64,6 +64,16 @@ el clic** sobre un elemento del árbol de UI.
   una **nota de contexto opcional** a los steps que decida (no es obligatoria), y asigna la vía de
   cada uno: los steps cuyo elemento quedó bien detectado en el árbol de UI se marcan **subconscientes**
   (MCP listo); los que no se lograron detectar quedan para ejecutarse de forma **consciente**.
+- **Aprendizaje continuo (reconexión bidireccional)** — workflows y MCPs nacen y se refinan
+  constantemente, en cualquier orden, y el sistema los mantiene conectados siempre:
+  - *Workflow nace y ya existían MCPs*: `structure` recibe el catálogo de MCPs previos; los clics que
+    encajan con elementos ya mapeados nacen subconscientes aunque esta pasada no los detectara.
+  - *MCP nace/mejora y ya existían workflows*: al consolidar un mapa, `PassiveLearning.onLearned`
+    dispara `reconcile` (post-procesamiento especializado), que sube a subconscientes los pasos
+    conscientes de los workflows de esa app que el catálogo nuevo ya cubre — sin tocar orden,
+    cantidad ni acciones.
+  - *Ambos en la misma pasada*: al salir de una app la secuencia es consolidar el MCP → reconectar
+    workflows previos → estructurar el workflow (que ya ve el catálogo fresco). Sin carreras.
 - **Ejecución** — la ejecución MCP está plasmada encima de los workflows: cada workflow se declara
   como herramienta MCP (`workflow_*`) y el modelo la invoca entera. `WorkflowRunner` (core) recorre
   los steps haciendo **switch** entre vías según avanza: los subconscientes tocan por árbol de UI

@@ -77,6 +77,12 @@ El asistente está inspirado en el ser humano: ejecutando **una misma tarea** pu
 
 - **Se crean en la enseñanza.** Ambos modos son el punto de creación: mientras le enseñas (pasiva: usando el teléfono con normalidad; activa: compartiendo pantalla), el asistente ve explícitamente el paso a paso y **va guardando el workflow step by step**. La enseñanza termina al **salir de la app** (pasiva) o al **terminar la grabación** (activa).
 - **Post-procesamiento LLM.** Al terminar, la traza cruda pasa a un LLM que **estructura el workflow de forma efectiva**: limpia los pasos basura e innecesarios, organiza los necesarios y agrega una **nota de contexto opcional** a los pasos que decida (no es obligatoria). Además **asigna los MCPs que ya están listos**: los steps cuyo elemento quedó bien detectado en el árbol de UI quedan **subconscientes**; los que no se lograron detectar quedan para ejecutarse de forma **consciente**.
+- **Aprendizaje continuo: workflows y MCPs se reconectan solos, nazca primero el que nazca.** Si un
+  workflow nace y ya existían MCPs de esa app, el post-procesamiento usa ese catálogo para marcar
+  subconscientes los pasos que ya estaban cubiertos. Y si un MCP nace o se refina después, un
+  post-procesamiento especializado de **reconexión** revisa los workflows existentes de esa app y
+  sube a subconscientes los pasos conscientes que el mapa nuevo ya cubre. Cuando ambos nacen en la
+  misma pasada de enseñanza, primero consolida el MCP y después se estructura el workflow.
 - **La ejecución MCP está plasmada encima de los workflows.** Cada workflow se declara como herramienta MCP (`workflow_*`) y el modelo lo invoca entero (con un `context` de datos variables). El `WorkflowRunner` recorre los steps **haciendo switch entre consciente y subconsciente según avanza el workflow**: los subconscientes se ejecutan como clics por árbol de UI (sin pantalla) y los conscientes con un motor Gemini acotado a ese único paso. Si un clic subconsciente falla, ese step **cae en caliente a la vía consciente**.
 - Persisten en `files/workflows/` + nube (`graph_workflows`), igual que los aprendizajes.
 
