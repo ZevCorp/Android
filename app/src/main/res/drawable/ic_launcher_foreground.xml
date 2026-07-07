@@ -1,29 +1,34 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!-- La carita de Ü EXACTA (FaceView, tema claro): squircle blanco con borde sutil + cejas, ojos de
-     línea y sonrisa en trazo oscuro, rotados -2° como en la app. -->
+     línea y sonrisa en trazo oscuro, rotados -2°. Todo dentro de un grupo escalado al 64% para que
+     quede en la zona segura del icono adaptativo (con margen; antes llenaba el tile y se veía con zoom). -->
 <vector xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:aapt="http://schemas.android.com/aapt"
     android:width="108dp" android:height="108dp"
     android:viewportWidth="108" android:viewportHeight="108">
 
-    <path
-        android:strokeColor="#1F000000" android:strokeWidth="1.08"
-        android:pathData="M107.28,54.00 L107.22,67.63 L107.05,73.25 L106.77,77.53 L106.36,81.11 L105.85,84.21 L105.21,86.96 L104.46,89.43 L103.58,91.67 L102.58,93.71 L101.46,95.57 L100.20,97.26 L98.80,98.80 L97.26,100.20 L95.57,101.46 L93.71,102.58 L91.67,103.58 L89.43,104.46 L86.96,105.21 L84.21,105.85 L81.11,106.36 L77.53,106.77 L73.25,107.05 L67.63,107.22 L54.00,107.28 L40.37,107.22 L34.75,107.05 L30.47,106.77 L26.89,106.36 L23.79,105.85 L21.04,105.21 L18.57,104.46 L16.33,103.58 L14.29,102.58 L12.43,101.46 L10.74,100.20 L9.20,98.80 L7.80,97.26 L6.54,95.57 L5.42,93.71 L4.42,91.67 L3.54,89.43 L2.79,86.96 L2.15,84.21 L1.64,81.11 L1.23,77.53 L0.95,73.25 L0.78,67.63 L0.72,54.00 L0.78,40.37 L0.95,34.75 L1.23,30.47 L1.64,26.89 L2.15,23.79 L2.79,21.04 L3.54,18.57 L4.42,16.33 L5.42,14.29 L6.54,12.43 L7.80,10.74 L9.20,9.20 L10.74,7.80 L12.43,6.54 L14.29,5.42 L16.33,4.42 L18.57,3.54 L21.04,2.79 L23.79,2.15 L26.89,1.64 L30.47,1.23 L34.75,0.95 L40.37,0.78 L54.00,0.72 L67.63,0.78 L73.25,0.95 L77.53,1.23 L81.11,1.64 L84.21,2.15 L86.96,2.79 L89.43,3.54 L91.67,4.42 L93.71,5.42 L95.57,6.54 L97.26,7.80 L98.80,9.20 L100.20,10.74 L101.46,12.43 L102.58,14.29 L103.58,16.33 L104.46,18.57 L105.21,21.04 L105.85,23.79 L106.36,26.89 L106.77,30.47 L107.05,34.75 L107.22,40.37 L107.28,54.00 Z">
-        <aapt:attr name="android:fillColor">
-            <gradient android:startX="0" android:startY="0" android:endX="108" android:endY="108" android:type="linear">
-                <item android:offset="0" android:color="#FFFFFFFF" />
-                <item android:offset="1" android:color="#FFEFEFEF" />
-            </gradient>
-        </aapt:attr>
-    </path>
+    <group android:name="fit" android:scaleX="0.64" android:scaleY="0.64"
+        android:pivotX="54" android:pivotY="54">
 
-    <group android:name="feat" android:rotation="-2" android:pivotX="54" android:pivotY="54">
-        <path android:strokeColor="#0B0E12" android:strokeWidth="2.88"
-            android:strokeLineCap="round" android:strokeLineJoin="round"
-            android:pathData="M25.20,28.08 Q32.40,24.84 39.60,28.08 M68.40,27.72 Q75.60,23.40 82.80,27.72" />
-        <path android:strokeColor="#0B0E12" android:strokeWidth="2.88" android:strokeLineCap="round"
-            android:pathData="M32.40,36.73 L32.40,51.11 M75.60,36.73 L75.60,51.11" />
-        <path android:strokeColor="#0B0E12" android:strokeWidth="2.88" android:strokeLineCap="round"
-            android:pathData="M40.54,69.19 C51.40,72.43 59.48,72.43 67.46,68.04" />
+        <path
+            android:strokeColor="#1F000000" android:strokeWidth="1.08"
+            android:pathData="M107.28,54.00 L107.22,67.63 L107.05,73.25 L106.77,77.53 L106.36,81.11 L105.85,84.21 L105.21,86.96 L104.46,89.43 L103.58,91.67 L102.58,93.71 L101.46,95.57 L100.20,97.26 L98.80,98.80 L97.26,100.20 L95.57,101.46 L93.71,102.58 L91.67,103.58 L89.43,104.46 L86.96,105.21 L84.21,105.85 L81.11,106.36 L77.53,106.77 L73.25,107.05 L67.63,107.22 L54.00,107.28 L40.37,107.22 L34.75,107.05 L30.47,106.77 L26.89,106.36 L23.79,105.85 L21.04,105.21 L18.57,104.46 L16.33,103.58 L14.29,102.58 L12.43,101.46 L10.74,100.20 L9.20,98.80 L7.80,97.26 L6.54,95.57 L5.42,93.71 L4.42,91.67 L3.54,89.43 L2.79,86.96 L2.15,84.21 L1.64,81.11 L1.23,77.53 L0.95,73.25 L0.78,67.63 L0.72,54.00 L0.78,40.37 L0.95,34.75 L1.23,30.47 L1.64,26.89 L2.15,23.79 L2.79,21.04 L3.54,18.57 L4.42,16.33 L5.42,14.29 L6.54,12.43 L7.80,10.74 L9.20,9.20 L10.74,7.80 L12.43,6.54 L14.29,5.42 L16.33,4.42 L18.57,3.54 L21.04,2.79 L23.79,2.15 L26.89,1.64 L30.47,1.23 L34.75,0.95 L40.37,0.78 L54.00,0.72 L67.63,0.78 L73.25,0.95 L77.53,1.23 L81.11,1.64 L84.21,2.15 L86.96,2.79 L89.43,3.54 L91.67,4.42 L93.71,5.42 L95.57,6.54 L97.26,7.80 L98.80,9.20 L100.20,10.74 L101.46,12.43 L102.58,14.29 L103.58,16.33 L104.46,18.57 L105.21,21.04 L105.85,23.79 L106.36,26.89 L106.77,30.47 L107.05,34.75 L107.22,40.37 L107.28,54.00 Z">
+            <aapt:attr name="android:fillColor">
+                <gradient android:startX="0" android:startY="0" android:endX="108" android:endY="108" android:type="linear">
+                    <item android:offset="0" android:color="#FFFFFFFF" />
+                    <item android:offset="1" android:color="#FFEFEFEF" />
+                </gradient>
+            </aapt:attr>
+        </path>
+
+        <group android:name="feat" android:rotation="-2" android:pivotX="54" android:pivotY="54">
+            <path android:strokeColor="#0B0E12" android:strokeWidth="2.88"
+                android:strokeLineCap="round" android:strokeLineJoin="round"
+                android:pathData="M25.20,28.08 Q32.40,24.84 39.60,28.08 M68.40,27.72 Q75.60,23.40 82.80,27.72" />
+            <path android:strokeColor="#0B0E12" android:strokeWidth="2.88" android:strokeLineCap="round"
+                android:pathData="M32.40,36.73 L32.40,51.11 M75.60,36.73 L75.60,51.11" />
+            <path android:strokeColor="#0B0E12" android:strokeWidth="2.88" android:strokeLineCap="round"
+                android:pathData="M40.54,69.19 C51.40,72.43 59.48,72.43 67.46,68.04" />
+        </group>
     </group>
 </vector>
