@@ -39,6 +39,8 @@ class MainActivity : Activity(), UserChannel {
     private lateinit var mcpPanel: LinearLayout
     private lateinit var accountBody: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
+    /** Reconocedor de voz en-app (sin Activity), como el de la burbuja flotante. */
+    private var recognizer: android.speech.SpeechRecognizer? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
     /** Vista actual: nube (principal), usuario (gráfica "versus") o desarrollador (todo). */
@@ -217,11 +219,7 @@ class MainActivity : Activity(), UserChannel {
         val bar = row()
         bar.addView(promptInput, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
-        bar.addView(iconChip(Icon.MIC, sizeDp = 44) {
-            voiceCallback = { t -> if (t.isNotBlank()) runPrompt(t) }
-            startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
-        })
+        bar.addView(iconChip(Icon.MIC, sizeDp = 44) { startVoice() })
         bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
         bar.addView(iconChip(Icon.SEND, sizeDp = 44, primary = true) { submitPrompt() })
         ask.addView(bar)
@@ -650,27 +648,62 @@ class MainActivity : Activity(), UserChannel {
     /** Botón tipo nube arriba a la derecha que cicla entre las tres vistas (muestra la siguiente). */
     private fun modeToggle(): View = cloudChip(iconFor(nextMode()), sizeDp = 40, subtle = true) { cycleMode() }
 
-    /** Envuelve un contenido con el cielo estático de fondo (vistas usuario/desarrollador). */
+    /** Envuelve un contenido con la foto de nubes (estática) de fondo (vistas usuario/desarrollador). */
     private fun withStaticSky(content: View): View {
         val frame = android.widget.FrameLayout(this)
-        frame.addView(SkyView(this, animate = false), android.widget.FrameLayout.LayoutParams(-1, -1))
+        val bg = android.widget.ImageView(this).apply {
+            setImageResource(com.zevcorp.graph.R.drawable.cloud_sky_full)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+        }
+        frame.addView(bg, android.widget.FrameLayout.LayoutParams(-1, -1))
         frame.addView(content, android.widget.FrameLayout.LayoutParams(-1, -1))
         return frame
     }
 
-    /** Dictado por voz: reconoce y ejecuta el prompt (compartido por la barra de nube y las cards). */
-    private fun startVoice() {
-        voiceCallback = { t -> if (t.isNotBlank()) runPrompt(t) }
-        startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
+    /**
+     * Dictado por voz SIN Activity: el mismo camino que el micrófono de la burbuja flotante
+     * (SpeechRecognizer directo, sin abrir el pop-up de voz de Google).
+     */
+    private fun recognize(onResult: (String?) -> Unit) {
+        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) { onResult(null); return }
+        recognizer?.destroy()
+        val rec = android.speech.SpeechRecognizer.createSpeechRecognizer(this)
+        recognizer = rec
+        rec.setRecognitionListener(object : android.speech.RecognitionListener {
+            override fun onResults(results: android.os.Bundle) {
+                onResult(results.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())
+                rec.destroy(); recognizer = null
+            }
+            override fun onError(error: Int) { onResult(null); rec.destroy(); recognizer = null }
+            override fun onReadyForSpeech(params: android.os.Bundle?) {
+                Toast.makeText(this@MainActivity, "Te escucho…", Toast.LENGTH_SHORT).show()
+            }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onPartialResults(partialResults: android.os.Bundle?) {}
+            override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+        })
+        rec.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
     }
 
-    /* ---------- Vista principal: la textura de nubes ---------- */
+    /** Escucha por voz y, si oye algo, ejecuta el prompt (mic de la barra de nube y de las cards). */
+    private fun startVoice() = recognize { heard ->
+        if (!heard.isNullOrBlank()) runPrompt(heard) else Toast.makeText(this, "No te escuché", Toast.LENGTH_SHORT).show()
+    }
 
-    /** Pantalla principal: cielo vivo (SkyView animado) + barra de nube central + toggle tipo nube. */
+    /* ---------- Vista principal: la foto de nubes ---------- */
+
+    /** Pantalla principal: la foto exacta de fondo + la barra (recortada de la propia foto) + toggle. */
     private fun buildCloudScreen(): View {
         val frame = android.widget.FrameLayout(this)
-        frame.addView(SkyView(this, animate = true), android.widget.FrameLayout.LayoutParams(-1, -1))
+        val bg = android.widget.ImageView(this).apply {
+            setImageResource(com.zevcorp.graph.R.drawable.cloud_sky_bg)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+        }
+        frame.addView(bg, android.widget.FrameLayout.LayoutParams(-1, -1))
 
         val overlay = android.widget.FrameLayout(this)
         frame.addView(overlay, android.widget.FrameLayout.LayoutParams(-1, -1))
@@ -681,32 +714,40 @@ class MainActivity : Activity(), UserChannel {
             insets
         }
 
-        // Toggle tipo nube, arriba a la derecha.
+        // Toggle (cicla las 3 vistas), arriba a la derecha, sutil.
         overlay.addView(modeToggle(), android.widget.FrameLayout.LayoutParams(-2, -2,
-            Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(16) })
+            Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(14) })
 
-        // Barra de nube central con la frase y los botones de mic/enviar.
+        // La barra de nube central (la nube real de la foto) con la frase y los botones mic/enviar.
         overlay.addView(buildCloudBar(), android.widget.FrameLayout.LayoutParams(-1, -2,
-            Gravity.CENTER).apply { leftMargin = dp(22); rightMargin = dp(22) })
+            Gravity.CENTER).apply { leftMargin = dp(18); rightMargin = dp(18) })
         return frame
     }
 
-    /** La barra de escritura con forma de nube: frase de bienvenida + mic (sutil) ⇄ enviar (al escribir). */
+    /**
+     * La barra de escritura: la nube real recortada de la foto (idéntica a la imagen, sin lupa) como
+     * fondo; encima, la frase de bienvenida y, a la derecha, el micrófono permanente y sutil (⇄ enviar
+     * cuando se escribe). Solo esta barra se dibuja/coloca con código; la textura es la de la foto.
+     */
     private fun buildCloudBar(): View {
-        val host = android.widget.FrameLayout(this)
-        host.setLayerType(View.LAYER_TYPE_SOFTWARE, null) // sombra difusa de la nube
-        host.background = CloudDrawable(bumpsTop = 6, bumpsBottom = 4)
-        host.setPadding(dp(28), dp(20), dp(20), dp(20))
+        val container = android.widget.FrameLayout(this)
+        val cloud = android.widget.ImageView(this).apply {
+            setImageResource(com.zevcorp.graph.R.drawable.cloud_bar)
+            adjustViewBounds = true
+            scaleType = android.widget.ImageView.ScaleType.FIT_XY
+        }
+        container.addView(cloud, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
 
-        val bar = row()
+        val bar = row().apply { setPadding(dp(34), dp(6), dp(16), dp(6)) }
         val input = EditText(this).apply {
             hint = "¿Qué puedo hacer hoy por ti?"
-            setHintTextColor(0xFF7089A0.toInt())
-            setTextColor(0xFF2C3E50.toInt())
+            setHintTextColor(0xFF6B7E8C.toInt())
+            setTextColor(0xFF33454F.toInt())
             textSize = 15f
             background = null
-            maxLines = 3
+            maxLines = 2
             setPadding(0, 0, 0, 0)
+            gravity = Gravity.CENTER_VERTICAL
         }
         fun submit() {
             val p = input.text.toString().trim()
@@ -716,13 +757,18 @@ class MainActivity : Activity(), UserChannel {
         }
         input.setOnEditorActionListener { _, _, _ -> submit(); true }
 
-        // Slot derecho: micrófono permanente y sutil; enviar solo aparece cuando hay texto.
-        val mic = cloudChip(Icon.MIC, sizeDp = 40, tint = 0xFF37566E.toInt(), subtle = true) { startVoice() }
-        val send = cloudChip(Icon.SEND, sizeDp = 40, tint = 0xFF1E82E6.toInt()) { submit() }
-        send.visibility = View.GONE
+        // Íconos sobrios sobre la nube (como la lupa original): mic permanente y sutil a la derecha;
+        // enviar solo aparece al escribir. Sin abrir ningún pop-up de voz.
+        val g = dp(40)
+        val mic = IconView(this, Icon.MIC, tint = 0xFF5E6E7A.toInt()).apply {
+            alpha = 0.55f; setOnClickListener { startVoice() }
+        }
+        val send = IconView(this, Icon.SEND, tint = 0xFF2E80D8.toInt()).apply {
+            visibility = View.GONE; setOnClickListener { submit() }
+        }
         val slot = android.widget.FrameLayout(this)
-        slot.addView(mic)
-        slot.addView(send)
+        slot.addView(mic, android.widget.FrameLayout.LayoutParams(g, g))
+        slot.addView(send, android.widget.FrameLayout.LayoutParams(g, g))
 
         input.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
@@ -735,10 +781,9 @@ class MainActivity : Activity(), UserChannel {
         })
 
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
-        bar.addView(View(this), LinearLayout.LayoutParams(dp(10), 1))
-        bar.addView(slot)
-        host.addView(bar)
-        return host
+        bar.addView(slot, LinearLayout.LayoutParams(g, g))
+        container.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -1))
+        return container
     }
 
     /** La única pantalla del modo usuario: la gráfica "versus" y una narrativa elegante. */
@@ -796,6 +841,11 @@ class MainActivity : Activity(), UserChannel {
                 .onSuccess { log(it) }
                 .onFailure { log(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        recognizer?.destroy(); recognizer = null
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
