@@ -66,12 +66,13 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var tts: TextToSpeech? = null
     private var ttsReady = false
 
-    /** Esquinas superiores = zona de encaje para la escucha PERMANENTE (pipeline Graph). */
+    /** Esquinas superiores = zona de encaje para el MODO REUNIÓN (escucha continua con cerebro). */
     private val voiceDock by lazy {
         VoiceDock(service,
             setThinking = { bubble.thinking = it },
             narrate = ::narrate,
-            runIntent = { prompt -> runPromptAwait(prompt) },
+            speak = ::speak,
+            runTask = { prompt -> runTaskAwait(prompt) },
             returnToCorner = { left -> scope.launch { snapTo(cornerX(left), service.dp(6)) } })
     }
 
@@ -584,6 +585,13 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         runCatching { withContext(Dispatchers.Default) { app.run(prompt, this@FloatingBubble) } }
             .onSuccess { toast(it) }
             .onFailure { toast(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
+    }
+
+    /** Ejecuta una tarea y DEVUELVE el resumen del motor: lo usa el modo reunión para su registro. */
+    suspend fun runTaskAwait(prompt: String): String = withContext(Dispatchers.Main) {
+        if (app.ui == null) { toast("Activa el servicio de accesibilidad de Ü"); return@withContext "sin accesibilidad" }
+        runCatching { withContext(Dispatchers.Default) { app.run(prompt, this@FloatingBubble) } }
+            .getOrElse { if (it is CancellationException) "detenida por el usuario ✋" else "error: ${it.message}" }
     }
 
     private fun closePanel() {

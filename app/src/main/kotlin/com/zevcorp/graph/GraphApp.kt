@@ -96,6 +96,9 @@ class GraphApp : Application() {
     /** El "primer LLM" del pipeline de voz (repo Graph): destila la intención del transcript. */
     val intentDistiller by lazy { IntentDistiller(apiKey, model) }
 
+    /** El cerebro del modo reunión (escucha por esquinas): nota · construye · interviene al cierre. */
+    val meetingBrain by lazy { com.zevcorp.graph.voice.MeetingBrain(apiKey, model) }
+
     /** Pausa entre steps MCP enviados juntos, ajustable con la barra de velocidad de la app. */
     val stepDelay = { prefs.getInt("stepDelayMs", 350).toLong() }
 
