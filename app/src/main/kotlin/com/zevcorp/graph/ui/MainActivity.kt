@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -741,8 +742,9 @@ class MainActivity : Activity(), UserChannel {
         val bar = row().apply { setPadding(dp(34), dp(6), dp(16), dp(6)) }
         val input = EditText(this).apply {
             hint = "¿Qué puedo hacer hoy por ti?"
-            setHintTextColor(0xFF6B7E8C.toInt())
-            setTextColor(0xFF33454F.toInt())
+            setHintTextColor(0xCCFFFFFF.toInt())
+            setTextColor(Color.WHITE)
+            setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x40203040)
             textSize = 15f
             background = null
             maxLines = 2
@@ -757,11 +759,11 @@ class MainActivity : Activity(), UserChannel {
         }
         input.setOnEditorActionListener { _, _, _ -> submit(); true }
 
-        // Íconos sobrios sobre la nube (como la lupa original): mic permanente y sutil a la derecha;
-        // enviar solo aparece al escribir. Sin abrir ningún pop-up de voz.
+        // Íconos sobre la nube: mic BLANCO permanente y sutil a la derecha (con sombra suave para
+        // no perderse sobre el blanco de la nube); enviar solo aparece al escribir. Sin pop-up de voz.
         val g = dp(40)
-        val mic = IconView(this, Icon.MIC, tint = 0xFF5E6E7A.toInt()).apply {
-            alpha = 0.55f; setOnClickListener { startVoice() }
+        val mic = IconView(this, Icon.MIC, tint = Color.WHITE, shadow = true).apply {
+            alpha = 0.85f; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { startVoice() }
         }
         val send = IconView(this, Icon.SEND, tint = 0xFF2E80D8.toInt()).apply {
             visibility = View.GONE; setOnClickListener { submit() }

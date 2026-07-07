@@ -16,7 +16,14 @@ enum class Icon { MIC, SEND, CLOSE, STOP, TEACH, EYE, BOLT, TOOLS, CODE, ASSISTA
  * Ícono vectorial dibujado en Canvas — nítido a cualquier tamaño y con la estética de línea
  * minimalista (SF Symbols / OpenAI) en vez de los emojis anteriores.
  */
-class IconView(context: Context, private val icon: Icon, var tint: Int = Palette.text) : View(context) {
+class IconView(
+    context: Context,
+    private val icon: Icon,
+    var tint: Int = Palette.text,
+    /** Sombra suave detrás del trazo: para que un ícono claro no se pierda sobre un fondo claro
+     * (p.ej. blanco sobre la nube). Requiere LAYER_TYPE_SOFTWARE en la vista anfitriona. */
+    private val shadow: Boolean = false,
+) : View(context) {
 
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -35,6 +42,10 @@ class IconView(context: Context, private val icon: Icon, var tint: Int = Palette
         stroke.color = tint
         fill.color = tint
         stroke.strokeWidth = s * 0.072f
+        if (shadow) {
+            stroke.setShadowLayer(s * 0.10f, 0f, s * 0.02f, 0x40203040)
+            fill.setShadowLayer(s * 0.10f, 0f, s * 0.02f, 0x40203040)
+        }
 
         when (icon) {
             Icon.MIC -> {

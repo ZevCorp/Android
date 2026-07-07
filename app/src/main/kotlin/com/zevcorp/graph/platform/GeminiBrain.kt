@@ -5,6 +5,7 @@ import graph.core.domain.*
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
@@ -12,19 +13,31 @@ private const val BASE = "https://generativelanguage.googleapis.com"
 
 private class HttpRes(val code: Int, val body: String)
 
-private fun http(url: String, headers: Map<String, String>, body: ByteArray): HttpRes {
-    val c = URL(url).openConnection() as HttpURLConnection
-    c.requestMethod = "POST"
-    c.connectTimeout = 30_000
-    c.readTimeout = 300_000
-    headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-    c.doOutput = true
-    c.outputStream.use { it.write(body) }
-    val code = c.responseCode
-    val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
-    c.disconnect()
-    return HttpRes(code, text)
-}
+/**
+ * POST bloqueante pero CANCELABLE de verdad: si el Job se cancela (botón Stop) mientras está
+ * bloqueada leyendo la respuesta, `invokeOnCancellation` llama a disconnect() desde otro hilo, lo
+ * que rompe esa lectura al instante (IOException) en vez de esperar hasta el readTimeout (antes
+ * 300s bloqueados sin poder abortar: Stop tardaba minutos en surtir efecto).
+ */
+private suspend fun http(url: String, headers: Map<String, String>, body: ByteArray): HttpRes =
+    suspendCancellableCoroutine { cont ->
+        val c = URL(url).openConnection() as HttpURLConnection
+        cont.invokeOnCancellation { runCatching { c.disconnect() } }
+        try {
+            c.requestMethod = "POST"
+            c.connectTimeout = 30_000
+            c.readTimeout = 300_000
+            headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+            c.doOutput = true
+            c.outputStream.use { it.write(body) }
+            val code = c.responseCode
+            val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
+            c.disconnect()
+            if (cont.isActive) cont.resumeWith(Result.success(HttpRes(code, text)))
+        } catch (e: Throwable) {
+            if (cont.isActive) cont.resumeWith(Result.failure(e))
+        }
+    }
 
 private fun js(s: String) = JsonPrimitive(s)
 private fun jo(vararg pairs: Pair<String, JsonElement>) = JsonObject(pairs.toMap())
