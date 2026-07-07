@@ -111,7 +111,7 @@ class MainActivity : Activity(), UserChannel {
         root.addView(upd)
         root.gap(dp(14))
 
-        // Tu cuenta: separa las dos capas de conocimiento. Lo que Graph aprende de la UI de las
+        // Tu cuenta: separa las dos capas de conocimiento. Lo que Ü aprende de la UI de las
         // apps (calculadora, WhatsApp…) es de TODOS los usuarios; tu knowledge-base personal
         // (recuerdos, preferencias, "mi mamá está guardada como…") pertenece SOLO a tu cuenta.
         val account = card()
@@ -207,7 +207,7 @@ class MainActivity : Activity(), UserChannel {
         root.addView(ask)
         root.gap(dp(14))
 
-        // Aprendizaje pasivo: se activa/desactiva AQUÍ (antes estaba en la burbuja). Graph observa
+        // Aprendizaje pasivo: se activa/desactiva AQUÍ (antes estaba en la burbuja). Ü observa
         // el uso normal del teléfono y estructura el mapa MCP de cada app al salir de ella.
         val learn = card()
         val learnHead = row()

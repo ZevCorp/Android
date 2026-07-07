@@ -117,12 +117,12 @@ class ActiveLearning(
     /** Convierte una pregunta de seguimiento y su respuesta en una nota durable por app. */
     private fun distill(question: String, answer: String): MemoryNote? {
         val prompt = """
-            Durante el aprendizaje activo, Graph le preguntó al usuario y este respondió por voz.
-            Destila una regla o preferencia DURABLE y auto-contenida que Graph deba recordar para operar
+            Durante el aprendizaje activo, Ü le preguntó al usuario y este respondió por voz.
+            Destila una regla o preferencia DURABLE y auto-contenida que Ü deba recordar para operar
             bien esa app después. UNA frase imperativa, con los nombres/datos concretos, sin relleno.
             Si la respuesta no aporta nada reutilizable, worth=false.
 
-            Pregunta de Graph: "$question"
+            Pregunta de Ü: "$question"
             Respuesta del usuario: "$answer"
             Responde SOLO JSON: {"worth": true/false, "app": "nombre de la app o ''", "note": "regla en una frase"}
         """.trimIndent()

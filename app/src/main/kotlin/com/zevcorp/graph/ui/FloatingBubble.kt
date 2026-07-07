@@ -38,7 +38,7 @@ import kotlin.coroutines.resume
 import kotlinx.coroutines.*
 
 /**
- * La burbuja flotante de Graph: la carita del asistente siempre encima de cualquier app, dibujada
+ * La burbuja flotante de Ü: la carita del asistente siempre encima de cualquier app, dibujada
  * como overlay del servicio de accesibilidad (TYPE_ACCESSIBILITY_OVERLAY, sin permisos extra).
  * Arrastrable; al tocarla abre el chat para pedirle algo (texto o voz). Durante la ejecución vuela
  * hacia donde actúa y muestra el botón de detener; si el asistente duda, pregunta aquí mismo.

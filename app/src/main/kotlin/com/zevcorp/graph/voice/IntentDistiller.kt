@@ -22,7 +22,7 @@ class IntentDistiller(
     /** Devuelve la intención destilada lista para el motor, o null si no había nada accionable. */
     suspend fun distill(transcript: String): String? = withContext(Dispatchers.IO) {
         val prompt = """
-            Eres el destilador de intención de Graph, un asistente que controla un teléfono Android.
+            Eres el destilador de intención de Ü, un asistente que controla un teléfono Android.
             Recibes la TRANSCRIPCIÓN CRUDA de lo que se habló cerca del micrófono. Puede contener
             conversación de fondo, saludos, muletillas, correcciones a medias, ruido y fragmentos
             duplicados del reconocedor de voz.

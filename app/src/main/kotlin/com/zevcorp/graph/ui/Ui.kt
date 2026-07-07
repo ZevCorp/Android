@@ -15,7 +15,7 @@ import android.widget.TextView
 enum class ThemeMode { LIGHT, DARK, TRANSPARENT }
 
 /**
- * Tokens de diseño de Graph. Tres modos que se alternan tocando la carita del cuadro de diálogo:
+ * Tokens de diseño de Ü. Tres modos que se alternan tocando la carita del cuadro de diálogo:
  * CLARO (cara blanca · fondo blanco), OSCURO (cara oscura · fondo negro) y TRANSPARENCIA (relleno de
  * la cara transparente, líneas negras). El acento es siempre el OPUESTO del fondo, de modo que el
  * contraste es siempre blanco↔negro. Nunca hay azul.
