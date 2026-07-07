@@ -133,18 +133,34 @@ class AndroidSystemApi(private val ctx: Context) : SystemApi {
         LogBus.log("api", "portapapeles ← \"${text.take(40)}\""); true
     }.getOrDefault(false)
 
+    private fun streamType(stream: String) = when (stream.trim().lowercase()) {
+        "ring", "ringtone" -> android.media.AudioManager.STREAM_RING
+        "alarm" -> android.media.AudioManager.STREAM_ALARM
+        "notification" -> android.media.AudioManager.STREAM_NOTIFICATION
+        "call", "voice" -> android.media.AudioManager.STREAM_VOICE_CALL
+        else -> android.media.AudioManager.STREAM_MUSIC // media/música por defecto
+    }
+
     override suspend fun setVolume(stream: String, percent: Int): Boolean = runCatching {
         val am = ctx.getSystemService(android.media.AudioManager::class.java)
-        val type = when (stream.trim().lowercase()) {
-            "ring", "ringtone" -> android.media.AudioManager.STREAM_RING
-            "alarm" -> android.media.AudioManager.STREAM_ALARM
-            "notification" -> android.media.AudioManager.STREAM_NOTIFICATION
-            "call", "voice" -> android.media.AudioManager.STREAM_VOICE_CALL
-            else -> android.media.AudioManager.STREAM_MUSIC // media/música por defecto
-        }
+        val type = streamType(stream)
         val max = am.getStreamMaxVolume(type)
         val index = (percent.coerceIn(0, 100) * max / 100).coerceIn(if (percent > 0) 1 else 0, max)
         am.setStreamVolume(type, index, 0)
         LogBus.log("api", "set_volume $stream → $index/$max"); true
     }.getOrElse { LogBus.log("api", "set_volume falló (¿acceso a No molestar?): ${it.message?.take(80)}"); false }
+
+    override suspend fun adjustVolume(stream: String, direction: String): Boolean = runCatching {
+        val am = ctx.getSystemService(android.media.AudioManager::class.java)
+        val type = streamType(stream)
+        val dir = when (direction.trim().lowercase()) {
+            "raise", "up", "increase" -> android.media.AudioManager.ADJUST_RAISE
+            "lower", "down", "decrease" -> android.media.AudioManager.ADJUST_LOWER
+            "mute" -> android.media.AudioManager.ADJUST_MUTE
+            "unmute" -> android.media.AudioManager.ADJUST_UNMUTE
+            else -> android.media.AudioManager.ADJUST_SAME
+        }
+        am.adjustStreamVolume(type, dir, android.media.AudioManager.FLAG_SHOW_UI)
+        LogBus.log("api", "adjust_volume $stream → $direction"); true
+    }.getOrElse { LogBus.log("api", "adjust_volume falló (¿acceso a No molestar?): ${it.message?.take(80)}"); false }
 }

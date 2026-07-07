@@ -118,6 +118,14 @@ class Mcp(
                 McpParam("stream", "Canal de audio", listOf("media", "ring", "alarm", "notification", "call")),
                 McpParam("percent", "Nivel 0-100 (usa 100 para asegurar que se oiga)"),
             )) { system.setVolume(it.str("stream").ifBlank { "media" }, it.int("percent", 100)) },
+        McpTool("adjust_volume", "Sube, baja, muda o restaura el volumen de un canal de audio con un solo " +
+            "golpe (como el botón físico), sin necesitar un porcentaje exacto. Úsala, por ejemplo, para " +
+            "bajar el volumen tras poner música/un video si crees que puede molestar, o subirlo si el " +
+            "usuario no lo va a escuchar bien.",
+            listOf(
+                McpParam("stream", "Canal de audio", listOf("media", "ring", "alarm", "notification", "call")),
+                McpParam("direction", "Acción", listOf("raise", "lower", "mute", "unmute")),
+            )) { system.adjustVolume(it.str("stream").ifBlank { "media" }, it.str("direction")) },
     )
 
     // Herramientas aprendidas: el mapa de una pantalla estructurado en la enseñanza. El modelo compone

@@ -76,6 +76,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             returnToCorner = { left -> scope.launch { snapTo(cornerX(left), service.dp(6)) } })
     }
 
+    /** Sin sombra en modo transparencia: si no, aunque no haya relleno, queda una figura visible detrás. */
+    private fun faceElevation() = if (Palette.faceTransparent) 0f else 30f
+
     private fun cornerX(left: Boolean): Int {
         val m = service.resources.displayMetrics
         return if (left) service.dp(4) else m.widthPixels - bubbleParams.width - service.dp(4)
@@ -98,7 +101,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             x = service.resources.displayMetrics.widthPixels - size - service.dp(8)
             y = service.resources.displayMetrics.heightPixels / 3
         }
-        bubble.elevation = 30f // sombra profunda que contrasta con el fondo (outline en FaceView)
+        bubble.elevation = faceElevation() // sombra profunda que contrasta con el fondo (outline en FaceView)
         attachDrag(size)
         bubble.setOnClickListener {
             when {
@@ -533,6 +536,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private fun cycleTheme() {
         Palette.mode = Palette.next()
         app.prefs.edit().putString("theme", Palette.mode.name).apply()
+        bubble.elevation = faceElevation() // sin sombra en transparencia; la restaura en claro/oscuro
         bubble.invalidate() // la carita grande cambia de tema al instante
         toast("Tema ${Palette.label()}")
         // Repinta el panel con los nuevos colores en el próximo frame (no lo removemos durante su

@@ -49,7 +49,7 @@ object Palette {
     /* ---------- La cara (FaceView) ---------- */
     val faceLine: Int get() = if (dark) WHITE else BLACK
     val faceFillTop: Int get() = if (dark) 0xFF1A1A1A.toInt() else WHITE
-    val faceFillBottom: Int get() = if (dark) BLACK else 0xFFEFEFEF.toInt()
+    val faceFillBottom: Int get() = if (dark) BLACK else WHITE
     val faceBorder: Int get() = if (dark) 0x33FFFFFF else 0x1F000000
     val faceTransparent: Boolean get() = mode == ThemeMode.TRANSPARENT
 
