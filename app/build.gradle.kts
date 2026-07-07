@@ -9,7 +9,11 @@ val props = rootProject.file("apikey.properties").takeIf { it.exists() }
     ?.readLines()?.mapNotNull { l -> l.split("=", limit = 2).takeIf { it.size == 2 }?.let { it[0].trim() to it[1].trim() } }
     ?.toMap() ?: emptyMap()
 fun cfg(name: String, env: String) = props[name] ?: System.getenv(env) ?: ""
+// Keys por defecto que quedan INCRUSTADAS en el APK (leídas de apikey.properties o de variables de
+// entorno; nunca viven en git). Se hornean para que la app funcione recién instalada y siguen siendo
+// modificables desde la UI (las prefs las sobrescriben).
 val defaultApiKey = cfg("apiKey", "GRAPH_API_KEY")
+val defaultDeepgramKey = cfg("deepgramKey", "GRAPH_DEEPGRAM_KEY")
 
 android {
     namespace = "com.zevcorp.graph"
@@ -18,9 +22,10 @@ android {
         applicationId = "com.zevcorp.graph"
         minSdk = 30
         targetSdk = 35
-        versionCode = 27
-        versionName = "0.27"
+        versionCode = 28
+        versionName = "0.28"
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
+        buildConfigField("String", "DEFAULT_DEEPGRAM_KEY", "\"$defaultDeepgramKey\"")
     }
     // Clave de firma ESTABLE y compartida por todos los builds. Android solo permite ACTUALIZAR una
     // app si la nueva versión está firmada con la misma clave que la instalada; sin esto el updater

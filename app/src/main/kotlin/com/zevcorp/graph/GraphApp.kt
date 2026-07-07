@@ -357,7 +357,8 @@ class GraphApp : Application() {
     companion object {
         lateinit var instance: GraphApp
 
-        /** API key por defecto (proyecto "Devable AI"), inyectada al compilar — nunca vive en git. */
+        /** Keys por defecto, incrustadas al compilar. Modificables desde la UI (prefs las sobrescriben). */
         const val DEFAULT_API_KEY = BuildConfig.DEFAULT_API_KEY
+        const val DEFAULT_DEEPGRAM_KEY = BuildConfig.DEFAULT_DEEPGRAM_KEY
     }
 }

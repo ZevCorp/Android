@@ -126,7 +126,7 @@ class MainActivity : Activity(), UserChannel {
         val deepgramInput = EditText(this).apply {
             hint = "Deepgram API key (opcional: dictado nova-3 en las esquinas)"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(app.prefs.getString("deepgramKey", ""))
+            setText(app.prefs.getString("deepgramKey", GraphApp.DEFAULT_DEEPGRAM_KEY))
             setTextColor(Palette.text)
             setHintTextColor(Palette.textDim)
             background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
