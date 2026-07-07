@@ -109,8 +109,15 @@ class GraphApp : Application() {
                 busy = { executing || bubble?.voiceBusy == true || activeLearning.busy },
                 askByVoice = { q -> bubble?.askAloud(q) ?: "" },
                 runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }),
-            recorder = recorder)
+            recorder = recorder,
+            appName = ::appLabel)
     }
+
+    /** Nombre visible de una app desde su paquete ("com.whatsapp" → "WhatsApp"); cae al paquete corto. */
+    private fun appLabel(pkg: String): String = runCatching {
+        packageManager.getApplicationLabel(packageManager.getApplicationInfo(pkg, 0)).toString()
+    }.getOrNull()?.takeIf { it.isNotBlank() }
+        ?: pkg.substringAfterLast('.').replaceFirstChar { it.uppercase() }
 
     /**
      * Enseñanza ACTIVA: se activa TOCANDO el 🎓 de la burbuja. Comparte pantalla (video + audio), y al

@@ -26,6 +26,8 @@ class PassiveLearning(
     private val inquirer: LearningInquirer? = null,
     /** Si está, la enseñanza también graba el paso a paso como WORKFLOW (se cierra al salir de la app). */
     private val recorder: WorkflowRecorder? = null,
+    /** Nombre visible de una app a partir de su paquete (para hablarle al usuario en su idioma). */
+    private val appName: (String) -> String = { it },
 ) {
     @Volatile var active = false
         private set
@@ -116,6 +118,7 @@ class PassiveLearning(
         val final = tool.copy(name = previous?.name ?: tool.name, app = app)
         repo.save(final)
         log.log("learn", "■ ${if (previous != null) "refinado" else "aprendido"}: ${final.name} · ${final.elements.size} elementos")
-        voice.narrate("🧩 ${if (previous != null) "Refiné" else "Aprendí"} \"${final.name}\" (${final.elements.size} elementos).")
+        // Al usuario se le habla en su idioma, no en técnico: nada de nombres de herramientas ni conteos.
+        voice.narrate("🧩 Ahora el uso de ${appName(app)} es mejor y más rápido.")
     }
 }
