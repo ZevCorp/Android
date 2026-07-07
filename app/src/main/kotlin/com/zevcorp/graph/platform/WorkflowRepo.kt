@@ -29,6 +29,13 @@ class WorkflowRepo(root: File, private val pushToCloud: (Workflow) -> Unit = {})
             ?.mapNotNull { runCatching { json.decodeFromString(Workflow.serializer(), it.readText()) }.getOrNull() }
             ?: emptyList()
 
+    /** Borra un workflow local, de la nube (si solo fuera local, el sync lo resucitaría) y del grafo. */
+    fun delete(name: String) {
+        File(dir, "${sanitize(name)}.json").delete()
+        CloudSync.deleteWorkflow(name)
+        KnowledgeGraph.deleteWorkflow(name)
+    }
+
     /** Sincronización de arranque (llamar desde IO): la nube gana; sube lo local que falte allá. */
     fun syncFromCloud() {
         val remote = CloudSync.pullWorkflows()

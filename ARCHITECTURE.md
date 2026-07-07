@@ -81,6 +81,15 @@ el clic** sobre un elemento del árbol de UI.
   un clic subconsciente falla, el step cae en caliente a la vía consciente, como un humano que "despierta"
   cuando algo no está donde lo esperaba.
 - **Persistencia** — `WorkflowRepo` (files/workflows/) + copia en la nube (`graph_workflows`).
+- **Grafo de conocimiento (Neo4j)** — `KnowledgeGraph` proyecta los aprendizajes del árbol de UI y
+  los workflows a Neo4j Aura (Cypher por HTTP, credenciales en la app): `(:Workflow)-[:HAS_STEP]->`
+  `(:Step)-[:NEXT]->(:Step)`, `(:Step)-[:TAPS]->(:Element)-[:IN_APP]->(:App)`,
+  `(:McpMap)-[:KNOWS]->(:Element)`. Offline-first: el disco local manda; el grafo es la proyección
+  navegable del conocimiento (push al guardar + sync completo al arrancar). Neo4j no corre embebido
+  en Android: por eso la proyección es remota, con el mismo patrón que CloudSync.
+- **Visibilidad** — card "Workflows" en la app principal (paso a paso con vía 🧩/👁 por step, borrar)
+  y una **statusbar negra** durante la ejecución que muestra la vía en vivo (👁 consciente /
+  🧩 subconsciente); tocarla detiene.
 
 ## Resiliencia ante la sobrecarga de Google
 

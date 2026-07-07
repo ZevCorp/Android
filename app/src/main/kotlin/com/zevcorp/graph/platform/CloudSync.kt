@@ -69,6 +69,14 @@ object CloudSync {
         json.decodeFromString(workflowSerializer, http("GET", "$WORKFLOWS?select=name,description,steps,source"))
     }.getOrElse { LogBus.log("cloud", "☁ no pude bajar los workflows: ${it.message}"); emptyList() }
 
+    /** Borra un workflow de la nube (al borrarlo el usuario en la app). Llamar desde IO; nunca lanza. */
+    fun deleteWorkflow(name: String) {
+        runCatching {
+            http("DELETE", "$WORKFLOWS?name=eq." + java.net.URLEncoder.encode(name, "UTF-8"))
+            LogBus.log("cloud", "☁ workflow borrado: $name")
+        }.onFailure { LogBus.log("cloud", "☁ no pude borrar el workflow $name: ${it.message}") }
+    }
+
     private fun http(method: String, url: String, body: String? = null, vararg headers: Pair<String, String>): String {
         val c = URL(url).openConnection() as HttpURLConnection
         c.requestMethod = method

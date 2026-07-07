@@ -393,36 +393,50 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     }
 
     private var stopButton: View? = null
+    private var execStatusText: TextView? = null
 
-    /** Botón rojo ⏹ arriba-centro mientras el asistente ejecuta: un toque detiene. Ventana propia y tocable. */
+    /**
+     * STATUSBAR de ejecución arriba-centro (fondo negro): muestra en vivo la VÍA por la que va el
+     * asistente — consciente (computer-use, mirando la pantalla) o subconsciente (MCP, por árbol de
+     * UI) — y un toque en cualquier parte detiene. Ventana propia y tocable.
+     */
     fun showStop(on: Boolean) {
         scope.launch {
             if (!on) {
                 stopButton?.let { runCatching { wm.removeView(it) } }
                 stopButton = null
+                execStatusText = null
                 return@launch
             }
             if (stopButton != null) return@launch
-            val button = service.row().apply {
+            val bar = service.row().apply {
                 gravity = Gravity.CENTER_VERTICAL
-                background = rounded(Palette.danger, service.dp(22).toFloat())
+                background = rounded(Color.BLACK, service.dp(22).toFloat())
                 setPadding(service.dp(14), service.dp(7), service.dp(16), service.dp(7))
                 elevation = 22f
                 addView(IconView(service, Icon.STOP, tint = Color.WHITE),
                     LinearLayout.LayoutParams(service.dp(16), service.dp(16)))
-                addView(TextView(service).apply {
-                    text = "detener"; textSize = 13f
+                execStatusText = TextView(service).apply {
+                    text = "ejecutando…"; textSize = 13f
                     typeface = Typeface.DEFAULT_BOLD; setTextColor(Color.WHITE)
                     setPadding(service.dp(8), 0, 0, 0)
-                })
+                }
+                addView(execStatusText)
                 setOnClickListener { app.stopExecution(); toast("Detenido") }
             }
             val params = overlayParams(-2, -2, focusable = false).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 y = service.dp(8)
             }
-            runCatching { wm.addView(button, params) }
-            stopButton = button
+            runCatching { wm.addView(bar, params) }
+            stopButton = bar
+        }
+    }
+
+    /** Actualiza la vía mostrada en la statusbar (cada acción del motor la reporta). */
+    fun execStatus(subconscious: Boolean) {
+        scope.launch {
+            execStatusText?.text = if (subconscious) "🧩 subconsciente" else "👁 consciente"
         }
     }
 

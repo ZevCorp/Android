@@ -85,6 +85,12 @@ El asistente está inspirado en el ser humano: ejecutando **una misma tarea** pu
   misma pasada de enseñanza, primero consolida el MCP y después se estructura el workflow.
 - **La ejecución MCP está plasmada encima de los workflows.** Cada workflow se declara como herramienta MCP (`workflow_*`) y el modelo lo invoca entero (con un `context` de datos variables). El `WorkflowRunner` recorre los steps **haciendo switch entre consciente y subconsciente según avanza el workflow**: los subconscientes se ejecutan como clics por árbol de UI (sin pantalla) y los conscientes con un motor Gemini acotado a ese único paso. Si un clic subconsciente falla, ese step **cae en caliente a la vía consciente**.
 - Persisten en `files/workflows/` + nube (`graph_workflows`), igual que los aprendizajes.
+- **Los ves nacer y mejorar**: card **Workflows** en la app principal (paso a paso 🧩/👁 por step) y
+  narración al aprenderlos. Durante la ejecución, la **statusbar negra** de arriba muestra la vía en
+  vivo (👁 consciente / 🧩 subconsciente) y tocarla detiene.
+- **Grafo de conocimiento (opcional)**: configura una instancia de Neo4j Aura en la app y todo el
+  conocimiento (mapas MCP, elementos, workflows y sus steps) se proyecta como grafo navegable.
+  Plan de pruebas conjunto en `TESTING.md`.
 
 ## Las dos vías, un solo cerebro
 

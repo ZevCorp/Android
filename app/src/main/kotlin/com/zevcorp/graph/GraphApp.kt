@@ -23,6 +23,7 @@ import com.zevcorp.graph.voice.IntentDistiller
 import com.zevcorp.graph.platform.GeminiLearning
 import com.zevcorp.graph.platform.GeminiWorkflow
 import com.zevcorp.graph.platform.GraphAccessibilityService
+import com.zevcorp.graph.platform.KnowledgeGraph
 import com.zevcorp.graph.platform.LearnedToolRepo
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.WorkflowRepo
@@ -63,14 +64,18 @@ class GraphApp : Application() {
         override fun speak(text: String) { bubble?.speak(text) }
     }
 
-    /** Herramientas aprendidas (se vuelven MCP ejecutables): disco local + copia en la nube. */
+    /** Herramientas aprendidas (se vuelven MCP ejecutables): disco local + nube + grafo Neo4j. */
     val learnedTools by lazy {
-        LearnedToolRepo(filesDir) { tool -> scope.launch(Dispatchers.IO) { CloudSync.push(tool) } }
+        LearnedToolRepo(filesDir) { tool ->
+            scope.launch(Dispatchers.IO) { CloudSync.push(tool); KnowledgeGraph.pushTool(tool) }
+        }
     }
 
-    /** Workflows aprendidos (el puente consciente ↔ subconsciente): disco local + copia en la nube. */
+    /** Workflows aprendidos (el puente consciente ↔ subconsciente): disco local + nube + grafo Neo4j. */
     val workflows by lazy {
-        WorkflowRepo(filesDir) { wf -> scope.launch(Dispatchers.IO) { CloudSync.pushWorkflow(wf) } }
+        WorkflowRepo(filesDir) { wf ->
+            scope.launch(Dispatchers.IO) { CloudSync.pushWorkflow(wf); KnowledgeGraph.pushWorkflow(wf) }
+        }
     }
     private val workflowBrain by lazy { GeminiWorkflow(apiKey, model) }
 
@@ -171,6 +176,8 @@ class GraphApp : Application() {
        2 = subconsciente (MCP). Si repite la misma vía, no parpadea. */
     @Volatile private var lastSubconscious: Boolean? = null
     private val modeSignal = ExecutionMode { subconscious ->
+        // La statusbar de ejecución (negra, arriba) muestra la vía en vivo en cada acción.
+        bubble?.execStatus(subconscious)
         if (lastSubconscious != subconscious) {
             lastSubconscious = subconscious
             bubble?.blink(if (subconscious) 2 else 1)
@@ -411,10 +418,20 @@ class GraphApp : Application() {
         Palette.mode = runCatching { ThemeMode.valueOf(prefs.getString("theme", ThemeMode.LIGHT.name)!!) }
             .getOrDefault(ThemeMode.LIGHT)
         // Trae los aprendizajes y la memoria de la nube (y sube lo local que falte allá).
+        // Grafo de conocimiento (Neo4j Aura): credenciales en caliente desde prefs.
+        KnowledgeGraph.credentials = {
+            Triple(
+                prefs.getString("neo4jUri", "") ?: "",
+                prefs.getString("neo4jUser", "") ?: "",
+                prefs.getString("neo4jPass", "") ?: "",
+            )
+        }
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()
             workflows.syncFromCloud()
             memories.syncFromCloud(CloudSync.pullMemory())
+            // Con el conocimiento ya mergeado, se proyecta completo al grafo (si está configurado).
+            KnowledgeGraph.syncAll(learnedTools.list(), workflows.list())
         }
         // Sondeo de actualizaciones: al arrancar y cada ~30 min. El proceso sigue vivo por el servicio
         // de accesibilidad, así que el aviso de "hay actualización" llega casi como un push.

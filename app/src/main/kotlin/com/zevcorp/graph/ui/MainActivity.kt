@@ -19,11 +19,13 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
+import com.zevcorp.graph.platform.KnowledgeGraph
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.Release
 import com.zevcorp.graph.platform.Updater
 import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
+import graph.core.domain.Workflow
 import kotlin.coroutines.resume
 import kotlinx.coroutines.*
 
@@ -36,6 +38,7 @@ class MainActivity : Activity(), UserChannel {
 
     private lateinit var logView: TextView
     private lateinit var mcpPanel: LinearLayout
+    private lateinit var workflowPanel: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
@@ -114,13 +117,36 @@ class MainActivity : Activity(), UserChannel {
         }
         setup.addView(deepgramInput)
         setup.gap(dp(8))
+        // Neo4j Aura (opcional): el grafo de conocimiento donde se proyectan aprendizajes y workflows.
+        fun neoField(hintText: String, prefKey: String, password: Boolean = false) = EditText(this).apply {
+            hint = hintText
+            if (password) inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(app.prefs.getString(prefKey, ""))
+            setTextColor(Palette.text)
+            setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val neoUriInput = neoField("Neo4j URI (opcional: grafo de conocimiento, p.ej. neo4j+s://xxxx.databases.neo4j.io)", "neo4jUri")
+        val neoUserInput = neoField("Neo4j usuario (normalmente neo4j)", "neo4jUser")
+        val neoPassInput = neoField("Neo4j contraseña", "neo4jPass", password = true)
+        setup.addView(neoUriInput); setup.gap(dp(8))
+        setup.addView(neoUserInput); setup.gap(dp(8))
+        setup.addView(neoPassInput); setup.gap(dp(8))
         val setupRow = row()
         setupRow.addView(button("Guardar keys") {
             app.prefs.edit()
                 .putString("apiKey", keyInput.text.toString().trim())
                 .putString("deepgramKey", deepgramInput.text.toString().trim())
+                .putString("neo4jUri", neoUriInput.text.toString().trim())
+                .putString("neo4jUser", neoUserInput.text.toString().trim())
+                .putString("neo4jPass", neoPassInput.text.toString().trim())
                 .apply()
             log("API keys guardadas")
+            // Si acaban de configurar el grafo, proyecta todo el conocimiento actual de una vez.
+            scope.launch(Dispatchers.IO) {
+                KnowledgeGraph.syncAll(app.learnedTools.list(), app.workflows.list())
+            }
         }, LinearLayout.LayoutParams(0, -2, 1f))
         setupRow.addView(View(this), LinearLayout.LayoutParams(dp(8), 1))
         setupRow.addView(button("Accesibilidad") {
@@ -270,6 +296,24 @@ class MainActivity : Activity(), UserChannel {
         mcpPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         mcp.addView(mcpPanel)
         root.addView(mcp)
+        root.gap(dp(14))
+
+        // Panel de WORKFLOWS: el paso a paso de tareas aprendido en la enseñanza (el puente
+        // consciente ↔ subconsciente). Aquí SE VE qué se creó, cuándo mejora y qué vía lleva cada step.
+        val wfCard = card()
+        val wfHead = row()
+        wfHead.addView(iconChip(Icon.BOLT, sizeDp = 34, tint = Palette.accent))
+        wfHead.addView(title("Workflows").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        wfHead.addView(button("Actualizar") { refreshWorkflowPanel() })
+        wfCard.addView(wfHead)
+        wfCard.gap(dp(4))
+        wfCard.addView(caption("Tareas paso a paso aprendidas en la enseñanza. 🧩 = step subconsciente " +
+            "(clic por árbol de UI) · 👁 = step consciente (Gemini mira la pantalla)."))
+        wfCard.gap(dp(10))
+        workflowPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        wfCard.addView(workflowPanel)
+        root.addView(wfCard)
 
         setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
         applyBarIcons() // tras setContentView: ya existe el decorView (antes daba NPE)
@@ -289,6 +333,7 @@ class MainActivity : Activity(), UserChannel {
             }
         }
         refreshMcpPanel()
+        refreshWorkflowPanel()
         checkNow()
     }
 
@@ -412,6 +457,7 @@ class MainActivity : Activity(), UserChannel {
         // colores nuevos (blanco/negro coherente con la carita).
         if (builtWithMode != Palette.mode) { recreate(); return }
         if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
+        if (::workflowPanel.isInitialized) refreshWorkflowPanel()
     }
 
     /** Íconos de la barra de estado/navegación: oscuros sobre fondo claro, claros sobre fondo oscuro. */
@@ -462,6 +508,59 @@ class MainActivity : Activity(), UserChannel {
         AlertDialog.Builder(this)
             .setView(scroll)
             .setPositiveButton("Cerrar", null)
+            .show()
+    }
+
+    /** Workflows aprendidos: nombre, cuántos steps por vía, y tocable para ver el paso a paso. */
+    private fun refreshWorkflowPanel() = scope.launch {
+        val wfs = withContext(Dispatchers.IO) { app.workflows.list() }
+        workflowPanel.removeAllViews()
+        if (wfs.isEmpty()) {
+            workflowPanel.addView(caption("Aún no hay workflows. Enséñame una tarea (enseñanza pasiva " +
+                "o activa) y al terminar la estructuro como workflow."))
+            return@launch
+        }
+        wfs.forEach { w ->
+            val sub = w.steps.count { it.subconscious }
+            workflowPanel.addView(button("${w.name} · ${w.steps.size} steps (🧩$sub 👁${w.steps.size - sub})") {
+                showWorkflowDetail(w)
+            })
+            workflowPanel.gap(dp(8))
+        }
+    }
+
+    private fun showWorkflowDetail(w: Workflow) {
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(12))
+        }
+        body.addView(title(w.name, 17f))
+        body.addView(caption("Fuente: enseñanza ${if (w.source == "active") "activa (grabación)" else "pasiva (observación)"}"))
+        body.gap(dp(8))
+        body.addView(TextView(this).apply { text = w.description; textSize = 13f; setTextColor(Palette.text) })
+        body.gap(dp(10))
+        body.addView(caption("Paso a paso (${w.steps.size} steps):"))
+        w.steps.forEachIndexed { i, s ->
+            val via = if (s.subconscious) "🧩" else "👁"
+            val target = if (s.subconscious && s.target.isNotBlank()) " → \"${s.target}\"" else ""
+            val note = if (s.note.isNotBlank()) "\n      📝 ${s.note}" else ""
+            body.addView(TextView(this).apply {
+                text = "${i + 1}. $via ${s.action}$target$note"
+                textSize = 13f
+                setTextColor(Palette.text)
+                setPadding(0, dp(4), 0, 0)
+                setTextIsSelectable(true)
+            })
+        }
+        val scroll = ScrollView(this).apply { addView(body) }
+        AlertDialog.Builder(this)
+            .setView(scroll)
+            .setPositiveButton("Cerrar", null)
+            .setNegativeButton("Borrar") { _, _ ->
+                scope.launch(Dispatchers.IO) { app.workflows.delete(w.name) }
+                log("Workflow \"${w.name}\" borrado")
+                refreshWorkflowPanel()
+            }
             .show()
     }
 
