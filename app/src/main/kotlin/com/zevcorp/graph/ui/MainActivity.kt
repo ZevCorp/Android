@@ -41,8 +41,8 @@ class MainActivity : Activity(), UserChannel {
     private var voiceCallback: ((String) -> Unit)? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
-    /** Modo de la app: usuario (solo la gráfica) o desarrollador (todo). Por defecto, usuario. */
-    private var userMode = true
+    /** Vista actual: nube (principal), usuario (gráfica "versus") o desarrollador (todo). */
+    private var mode = MODE_CLOUD
     /** Acceso a estadísticas de uso con el que se dibujó la gráfica (para recrear al concederlo). */
     private var builtWithAccess = false
 
@@ -55,13 +55,34 @@ class MainActivity : Activity(), UserChannel {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         builtWithMode = Palette.mode
-        userMode = app.prefs.getString(KEY_UI_MODE, MODE_USER) != MODE_DEV
+        mode = app.prefs.getString(KEY_UI_MODE, MODE_CLOUD) ?: MODE_CLOUD
+
+        // Vista principal: la textura de nubes viva (cielo animado + barra de nube). Pantalla propia,
+        // a pantalla completa detrás de las barras del sistema para que el cielo llegue a los bordes.
+        if (mode == MODE_CLOUD) {
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            window.setDecorFitsSystemWindows(false)
+            setContentView(buildCloudScreen())
+            // Íconos claros de la barra de estado sobre el azul del cielo.
+            window.decorView.windowInsetsController?.setSystemBarsAppearance(
+                0,
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+            requestPermissions(arrayOf(
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                android.Manifest.permission.CALL_PHONE,
+            ), 3)
+            return
+        }
+
         window.statusBarColor = Palette.bg
         window.navigationBarColor = Palette.bg
+        window.setDecorFitsSystemWindows(true)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Palette.bg)
             setPadding(dp(18), dp(24), dp(18), dp(24))
         }
 
@@ -77,9 +98,9 @@ class MainActivity : Activity(), UserChannel {
         root.gap(dp(16))
 
         // Modo usuario: una sola gráfica central. El resto (modo desarrollador) sigue abajo intacto.
-        if (userMode) {
+        if (mode == MODE_USER) {
             buildUserMode(root)
-            setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
+            setContentView(withStaticSky(ScrollView(this).apply { addView(root) }))
             applyBarIcons()
             requestPermissions(arrayOf(
                 android.Manifest.permission.RECORD_AUDIO,
@@ -308,7 +329,7 @@ class MainActivity : Activity(), UserChannel {
         mcp.addView(mcpPanel)
         root.addView(mcp)
 
-        setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
+        setContentView(withStaticSky(ScrollView(this).apply { addView(root) }))
         applyBarIcons() // tras setContentView: ya existe el decorView (antes daba NPE)
         requestPermissions(arrayOf(
             android.Manifest.permission.RECORD_AUDIO,
@@ -448,7 +469,7 @@ class MainActivity : Activity(), UserChannel {
         // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
         // colores nuevos (blanco/negro coherente con la carita).
         if (builtWithMode != Palette.mode) { recreate(); return }
-        if (userMode) {
+        if (mode == MODE_USER) {
             // Al volver de conceder el acceso a uso, redibuja la gráfica con el tiempo real.
             if (builtWithAccess != UsageU.hasUsageAccess(this)) recreate()
             return
@@ -598,17 +619,126 @@ class MainActivity : Activity(), UserChannel {
 
     private fun log(message: String) = LogBus.log("app", message)
 
-    /* ---------- Modo usuario ⇄ desarrollador ---------- */
+    /* ---------- Nube ⇄ usuario ("versus") ⇄ desarrollador ---------- */
 
-    /** Botón sutil (solo icono) arriba a la derecha que alterna entre modo usuario y desarrollador. */
-    private fun modeToggle(): View {
-        val icon = if (userMode) Icon.CODE else Icon.EYE // destino: usuario→código(dev) · dev→ojo(usuario)
-        return iconChip(icon, sizeDp = 38, tint = Palette.textDim) {
-            val next = if (userMode) MODE_DEV else MODE_USER
-            app.prefs.edit().putString(KEY_UI_MODE, next).apply()
-            Toast.makeText(this, if (next == MODE_DEV) "Modo desarrollador" else "Modo usuario", Toast.LENGTH_SHORT).show()
-            recreate()
+    /** Siguiente vista del ciclo nube → usuario → desarrollador → nube. */
+    private fun nextMode(): String = when (mode) {
+        MODE_CLOUD -> MODE_USER
+        MODE_USER -> MODE_DEV
+        else -> MODE_CLOUD
+    }
+
+    private fun iconFor(m: String): Icon = when (m) {
+        MODE_USER -> Icon.EYE   // la gráfica "versus"
+        MODE_DEV -> Icon.CODE   // el panel de desarrollador
+        else -> Icon.CLOUD      // la textura de nubes
+    }
+
+    private fun labelFor(m: String): String = when (m) {
+        MODE_USER -> "Versus"
+        MODE_DEV -> "Desarrollador"
+        else -> "Nube"
+    }
+
+    private fun cycleMode() {
+        val next = nextMode()
+        app.prefs.edit().putString(KEY_UI_MODE, next).apply()
+        Toast.makeText(this, labelFor(next), Toast.LENGTH_SHORT).show()
+        recreate()
+    }
+
+    /** Botón tipo nube arriba a la derecha que cicla entre las tres vistas (muestra la siguiente). */
+    private fun modeToggle(): View = cloudChip(iconFor(nextMode()), sizeDp = 40, subtle = true) { cycleMode() }
+
+    /** Envuelve un contenido con el cielo estático de fondo (vistas usuario/desarrollador). */
+    private fun withStaticSky(content: View): View {
+        val frame = android.widget.FrameLayout(this)
+        frame.addView(SkyView(this, animate = false), android.widget.FrameLayout.LayoutParams(-1, -1))
+        frame.addView(content, android.widget.FrameLayout.LayoutParams(-1, -1))
+        return frame
+    }
+
+    /** Dictado por voz: reconoce y ejecuta el prompt (compartido por la barra de nube y las cards). */
+    private fun startVoice() {
+        voiceCallback = { t -> if (t.isNotBlank()) runPrompt(t) }
+        startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
+    }
+
+    /* ---------- Vista principal: la textura de nubes ---------- */
+
+    /** Pantalla principal: cielo vivo (SkyView animado) + barra de nube central + toggle tipo nube. */
+    private fun buildCloudScreen(): View {
+        val frame = android.widget.FrameLayout(this)
+        frame.addView(SkyView(this, animate = true), android.widget.FrameLayout.LayoutParams(-1, -1))
+
+        val overlay = android.widget.FrameLayout(this)
+        frame.addView(overlay, android.widget.FrameLayout.LayoutParams(-1, -1))
+        // Respeta el notch/barra de estado: separa el contenido de los bordes del sistema.
+        overlay.setOnApplyWindowInsetsListener { v, insets ->
+            val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+            v.setPadding(0, bars.top, 0, bars.bottom)
+            insets
         }
+
+        // Toggle tipo nube, arriba a la derecha.
+        overlay.addView(modeToggle(), android.widget.FrameLayout.LayoutParams(-2, -2,
+            Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(16) })
+
+        // Barra de nube central con la frase y los botones de mic/enviar.
+        overlay.addView(buildCloudBar(), android.widget.FrameLayout.LayoutParams(-1, -2,
+            Gravity.CENTER).apply { leftMargin = dp(22); rightMargin = dp(22) })
+        return frame
+    }
+
+    /** La barra de escritura con forma de nube: frase de bienvenida + mic (sutil) ⇄ enviar (al escribir). */
+    private fun buildCloudBar(): View {
+        val host = android.widget.FrameLayout(this)
+        host.setLayerType(View.LAYER_TYPE_SOFTWARE, null) // sombra difusa de la nube
+        host.background = CloudDrawable(bumpsTop = 6, bumpsBottom = 4)
+        host.setPadding(dp(28), dp(20), dp(20), dp(20))
+
+        val bar = row()
+        val input = EditText(this).apply {
+            hint = "¿Qué puedo hacer hoy por ti?"
+            setHintTextColor(0xFF7089A0.toInt())
+            setTextColor(0xFF2C3E50.toInt())
+            textSize = 15f
+            background = null
+            maxLines = 3
+            setPadding(0, 0, 0, 0)
+        }
+        fun submit() {
+            val p = input.text.toString().trim()
+            if (p.isBlank()) return
+            input.setText("")
+            runPrompt(p)
+        }
+        input.setOnEditorActionListener { _, _, _ -> submit(); true }
+
+        // Slot derecho: micrófono permanente y sutil; enviar solo aparece cuando hay texto.
+        val mic = cloudChip(Icon.MIC, sizeDp = 40, tint = 0xFF37566E.toInt(), subtle = true) { startVoice() }
+        val send = cloudChip(Icon.SEND, sizeDp = 40, tint = 0xFF1E82E6.toInt()) { submit() }
+        send.visibility = View.GONE
+        val slot = android.widget.FrameLayout(this)
+        slot.addView(mic)
+        slot.addView(send)
+
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val typing = !s.isNullOrBlank()
+                send.visibility = if (typing) View.VISIBLE else View.GONE
+                mic.visibility = if (typing) View.GONE else View.VISIBLE
+            }
+        })
+
+        bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        bar.addView(View(this), LinearLayout.LayoutParams(dp(10), 1))
+        bar.addView(slot)
+        host.addView(bar)
+        return host
     }
 
     /** La única pantalla del modo usuario: la gráfica "versus" y una narrativa elegante. */
@@ -704,6 +834,7 @@ class MainActivity : Activity(), UserChannel {
 
     private companion object {
         const val KEY_UI_MODE = "ui_mode"
+        const val MODE_CLOUD = "cloud"
         const val MODE_USER = "user"
         const val MODE_DEV = "dev"
     }
