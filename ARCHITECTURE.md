@@ -82,6 +82,15 @@ el clic** sobre un elemento del árbol de UI.
   cuando algo no está donde lo esperaba.
 - **Persistencia** — `WorkflowRepo` (files/workflows/) + copia en la nube (`graph_workflows`).
 
+## Resiliencia ante la sobrecarga de Google
+
+La API de Gemini devuelve `429/5xx` cuando el modelo está *"experiencing high demand"* — errores que
+Google mismo marca como temporales (*"please try again later"*). `GeminiHttp.withRetry` envuelve todas
+las llamadas (motor `GeminiBrain`, destiladores `GeminiJson`, consolidación `GeminiLearning`, video
+`GeminiVideo`) y reintenta con backoff exponencial (0.8s → 8s). Sin esto, cada bache de demanda hacía
+"fallar todo" al primer intento; con reintento, la mayoría se recupera sola. Un `5xx` significa que el
+servidor no creó la interacción, así que reintentar el mismo POST no duplica acciones.
+
 ## `Phone` / `Gestures`: la superficie por plataforma
 
 `Phone` son las primitivas de computer-use (tap/type/openApp/scroll/swipe/pressKey + `state()` con screenshot). `Gestures` son los gestos semánticos que MCP expone (home, appDrawer, notifications, panHome, scrollMenu). En Android ambos los implementa `GraphAccessibilityService` vía `dispatchGesture` y `performGlobalAction`. Para otra plataforma (DOM, macOS AX, Windows UIA) se implementan estos dos puertos sin tocar `core/`.

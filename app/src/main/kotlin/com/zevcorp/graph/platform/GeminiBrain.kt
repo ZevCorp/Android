@@ -13,16 +13,21 @@ private const val BASE = "https://generativelanguage.googleapis.com"
 private class HttpRes(val code: Int, val body: String)
 
 private fun http(url: String, headers: Map<String, String>, body: ByteArray): HttpRes {
-    val c = URL(url).openConnection() as HttpURLConnection
-    c.requestMethod = "POST"
-    c.connectTimeout = 30_000
-    c.readTimeout = 300_000
-    headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-    c.doOutput = true
-    c.outputStream.use { it.write(body) }
-    val code = c.responseCode
-    val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
-    c.disconnect()
+    // Reintenta ante la sobrecarga de Google (429/5xx): esos errores son temporales y sin reintento
+    // hacían "fallar todo" al primer bache de demanda.
+    val (code, text) = GeminiHttp.withRetry("gemini") {
+        val c = URL(url).openConnection() as HttpURLConnection
+        c.requestMethod = "POST"
+        c.connectTimeout = 30_000
+        c.readTimeout = 300_000
+        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+        c.doOutput = true
+        c.outputStream.use { it.write(body) }
+        val status = c.responseCode
+        val respBody = (if (status < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
+        c.disconnect()
+        status to respBody
+    }
     return HttpRes(code, text)
 }
 

@@ -30,16 +30,20 @@ class GeminiLearning(
             }
             putJsonObject("generationConfig") { put("responseMimeType", "application/json") }
         }
-        val c = URL("$base/v1beta/models/${model()}:generateContent").openConnection() as HttpURLConnection
-        c.requestMethod = "POST"
-        c.connectTimeout = 30_000; c.readTimeout = 120_000
-        c.setRequestProperty("Content-Type", "application/json")
-        c.setRequestProperty("x-goog-api-key", apiKey())
-        c.doOutput = true
-        c.outputStream.use { it.write(Json.encodeToString(JsonObject.serializer(), req).toByteArray()) }
-        val code = c.responseCode
-        val body = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
-        c.disconnect()
+        val reqBytes = Json.encodeToString(JsonObject.serializer(), req).toByteArray()
+        val (code, body) = GeminiHttp.withRetry("learn") {
+            val c = URL("$base/v1beta/models/${model()}:generateContent").openConnection() as HttpURLConnection
+            c.requestMethod = "POST"
+            c.connectTimeout = 30_000; c.readTimeout = 120_000
+            c.setRequestProperty("Content-Type", "application/json")
+            c.setRequestProperty("x-goog-api-key", apiKey())
+            c.doOutput = true
+            c.outputStream.use { it.write(reqBytes) }
+            val status = c.responseCode
+            val respBody = (if (status < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
+            c.disconnect()
+            status to respBody
+        }
         if (code >= 300) { LogBus.log("learn", "HTTP $code: ${body.take(200)}"); error("Gemini HTTP $code") }
         val text = Json.parseToJsonElement(body).jsonObject["candidates"]!!.jsonArray[0]
             .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
