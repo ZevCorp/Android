@@ -11,6 +11,7 @@ import android.speech.RecognizerIntent
 import android.text.InputType
 import android.view.Gravity
 import android.view.View
+import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
 import android.widget.LinearLayout
@@ -43,6 +44,9 @@ class MainActivity : Activity(), UserChannel {
     private var voiceCallback: ((String) -> Unit)? = null
     /** Reconocedor de voz en-app (sin Activity), como el de la burbuja flotante. */
     private var recognizer: android.speech.SpeechRecognizer? = null
+    /** La barra de vidrio central; se desplaza hacia arriba cuando aparece el teclado. */
+    private var cloudBar: View? = null
+    private var imeShown = false
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
     /** Vista actual: nube (principal), usuario (gráfica "versus") o desarrollador (todo). */
@@ -67,6 +71,8 @@ class MainActivity : Activity(), UserChannel {
             window.statusBarColor = android.graphics.Color.TRANSPARENT
             window.navigationBarColor = android.graphics.Color.TRANSPARENT
             window.setDecorFitsSystemWindows(false)
+            // Que lleguen los insets del teclado (IME) para subir la barra de vidrio al enfocar.
+            window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
             setContentView(buildCloudScreen())
             // Íconos claros de la barra de estado sobre el azul del cielo.
             window.decorView.windowInsetsController?.setSystemBarsAppearance(
@@ -710,7 +716,7 @@ class MainActivity : Activity(), UserChannel {
 
     /* ---------- Vista principal: la foto de nubes ---------- */
 
-    /** Pantalla principal: la foto exacta de fondo + la barra-nube flotante (la capa de encima) + toggle. */
+    /** Pantalla principal: la foto exacta de fondo + la barra de vidrio flotante + toggle. */
     private fun buildCloudScreen(): View {
         val frame = android.widget.FrameLayout(this)
         val bg = android.widget.ImageView(this).apply {
@@ -721,10 +727,23 @@ class MainActivity : Activity(), UserChannel {
 
         val overlay = android.widget.FrameLayout(this)
         frame.addView(overlay, android.widget.FrameLayout.LayoutParams(-1, -1))
-        // Respeta el notch/barra de estado: separa el contenido de los bordes del sistema.
+
+        val bar = buildCloudBar()
+        cloudBar = bar
+
+        // Insets: separa del notch/barra de estado y, cuando aparece el teclado, sube la barra "un
+        // poco" (la mitad del alto que tapa el teclado) con una animación suave.
         overlay.setOnApplyWindowInsetsListener { v, insets ->
             val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+            val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
             v.setPadding(0, bars.top, 0, bars.bottom)
+            val overlap = (ime.bottom - bars.bottom).coerceAtLeast(0)
+            val show = overlap > dp(80)
+            if (show != imeShown) {
+                imeShown = show
+                bar.animate().cancel()
+                bar.animate().translationY(if (show) -overlap * 0.5f else 0f).setDuration(230).start()
+            }
             insets
         }
 
@@ -732,35 +751,51 @@ class MainActivity : Activity(), UserChannel {
         overlay.addView(modeToggle(), android.widget.FrameLayout.LayoutParams(-2, -2,
             Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(14) })
 
-        // La barra de nube central (la nube real de la foto) con la frase y los botones mic/enviar.
-        overlay.addView(buildCloudBar(), android.widget.FrameLayout.LayoutParams(-1, -2,
-            Gravity.CENTER).apply { leftMargin = dp(18); rightMargin = dp(18) })
+        overlay.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -2,
+            Gravity.CENTER).apply { leftMargin = dp(22); rightMargin = dp(22) })
         return frame
     }
 
     /**
-     * La barra de escritura: la nube real recortada de la foto (idéntica a la imagen, sin lupa) como
-     * fondo; encima, la frase de bienvenida y, a la derecha, el micrófono permanente y sutil (⇄ enviar
-     * cuando se escribe). Solo esta barra se dibuja/coloca con código; la textura es la de la foto.
+     * La barra de escritura estilo "vidrio" (glassmorphism), idéntica al diseño: una píldora
+     * translúcida azul-claro (blanco en gradiente sobre el cielo) con borde blanco sutil y sombra
+     * suave. Es funcional: crece hasta 3 líneas al escribir, texto y micrófono blancos, y el botón
+     * enviar (blanco) aparece solo cuando hay texto. Sin pop-up de voz (SpeechRecognizer en-app).
      */
     private fun buildCloudBar(): View {
-        val container = android.widget.FrameLayout(this)
-        val cloud = android.widget.ImageView(this).apply {
-            setImageResource(com.zevcorp.graph.R.drawable.cloud_bar)
-            adjustViewBounds = true
-            scaleType = android.widget.ImageView.ScaleType.FIT_XY
+        val radius = dp(30).toFloat()
+        val container = android.widget.FrameLayout(this).apply {
+            // Vidrio: gradiente vertical de blanco translúcido (más denso arriba) sobre el cielo azul.
+            background = android.graphics.drawable.GradientDrawable(
+                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
+                intArrayOf(0x8CFFFFFF.toInt(), 0x70FFFFFF.toInt(), 0x45FFFFFF.toInt())).apply {
+                cornerRadius = radius
+                setStroke(dp(1), 0x99FFFFFF.toInt())
+            }
+            // Sombra suave con el contorno redondeado (la píldora "flota" sobre el cielo).
+            elevation = dp(9).toFloat()
+            outlineProvider = object : android.view.ViewOutlineProvider() {
+                override fun getOutline(view: View, outline: android.graphics.Outline) {
+                    outline.setRoundRect(0, 0, view.width, view.height, radius)
+                }
+            }
+            setPadding(dp(26), dp(15), dp(14), dp(15))
         }
-        container.addView(cloud, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
 
-        val bar = row().apply { setPadding(dp(34), dp(6), dp(16), dp(6)) }
+        val bar = row()
         val input = EditText(this).apply {
             hint = "¿Qué puedo hacer hoy por ti?"
-            setHintTextColor(0xCCFFFFFF.toInt())
+            setHintTextColor(0xE6FFFFFF.toInt())
             setTextColor(Color.WHITE)
-            setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x40203040)
-            textSize = 15f
+            setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x33203040)
+            textSize = 16f
             background = null
-            maxLines = 2
+            // Multilínea real: crece hasta 3 líneas y luego hace scroll interno.
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
+                InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            isSingleLine = false
+            maxLines = 3
+            setHorizontallyScrolling(false)
             setPadding(0, 0, 0, 0)
             gravity = Gravity.CENTER_VERTICAL
         }
@@ -768,18 +803,17 @@ class MainActivity : Activity(), UserChannel {
             val p = input.text.toString().trim()
             if (p.isBlank()) return
             input.setText("")
+            input.clearFocus()
             runPrompt(p)
         }
-        input.setOnEditorActionListener { _, _, _ -> submit(); true }
 
-        // Íconos sobre la nube: mic BLANCO permanente y sutil a la derecha (con sombra suave para
-        // no perderse sobre el blanco de la nube); enviar solo aparece al escribir. Sin pop-up de voz.
+        // Íconos blancos: mic permanente (sutil) a la derecha ⇄ enviar cuando hay texto.
         val g = dp(40)
         val mic = IconView(this, Icon.MIC, tint = Color.WHITE, shadow = true).apply {
-            alpha = 0.85f; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { startVoice() }
+            alpha = 0.9f; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { startVoice() }
         }
-        val send = IconView(this, Icon.SEND, tint = 0xFF2E80D8.toInt()).apply {
-            visibility = View.GONE; setOnClickListener { submit() }
+        val send = IconView(this, Icon.SEND, tint = Color.WHITE, shadow = true).apply {
+            visibility = View.GONE; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { submit() }
         }
         val slot = android.widget.FrameLayout(this)
         slot.addView(mic, android.widget.FrameLayout.LayoutParams(g, g))
@@ -797,7 +831,7 @@ class MainActivity : Activity(), UserChannel {
 
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(slot, LinearLayout.LayoutParams(g, g))
-        container.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -1))
+        container.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
         return container
     }
 
