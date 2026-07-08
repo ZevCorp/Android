@@ -697,7 +697,7 @@ class MainActivity : Activity(), UserChannel {
 
     /* ---------- Vista principal: la foto de nubes ---------- */
 
-    /** Pantalla principal: la foto exacta de fondo + la barra (recortada de la propia foto) + toggle. */
+    /** Pantalla principal: la foto exacta de fondo + la barra-nube flotante (la capa de encima) + toggle. */
     private fun buildCloudScreen(): View {
         val frame = android.widget.FrameLayout(this)
         val bg = android.widget.ImageView(this).apply {
