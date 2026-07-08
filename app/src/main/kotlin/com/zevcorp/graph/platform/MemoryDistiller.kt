@@ -19,8 +19,8 @@ class MemoryDistiller(
     /** Devuelve la nota a recordar, o null si el input era solo una orden puntual. */
     suspend fun capture(input: String): MemoryNote? = withContext(Dispatchers.IO) {
         val prompt = """
-            Eres la memoria de Graph, un asistente que controla el teléfono Android del usuario.
-            Analiza este input del usuario y decide si contiene CONOCIMIENTO DURABLE que Graph deba
+            Eres la memoria de Ü, un asistente que controla el teléfono Android del usuario.
+            Analiza este input del usuario y decide si contiene CONOCIMIENTO DURABLE que Ü deba
             recordar para el futuro: reglas ("cada vez que te pida X haz Y"), preferencias, rutinas,
             o cómo usa una app concreta ("cuando uses Spotify, conéctate a mi parlante").
 
@@ -42,5 +42,33 @@ class MemoryDistiller(
                 note = o["note"]?.jsonPrimitive?.contentOrNull.orEmpty(),
             ).takeIf { it.note.isNotBlank() }
         }.getOrElse { LogBus.log("memory", "destilador falló: ${it.message}"); null }
+    }
+
+    /**
+     * El asistente preguntó algo por voz (aprendizaje pasivo) y el usuario respondió después, por
+     * cualquier vía. Convierte (pregunta, respuesta) en una regla durable por app, o null si la
+     * respuesta no responde la pregunta o no aporta nada reutilizable.
+     */
+    suspend fun captureAnswer(app: String, question: String, answer: String): MemoryNote? = withContext(Dispatchers.IO) {
+        val prompt = """
+            Ü (asistente que controla el Android del usuario) le preguntó algo por voz mientras
+            lo observaba usar una app, y el usuario respondió. Destila una regla o preferencia
+            DURABLE y auto-contenida que Ü deba recordar para hacer bien las tareas en esa app.
+            UNA frase imperativa, con los nombres/datos concretos, sin relleno. Si el mensaje del
+            usuario NO responde la pregunta (era otra orden) o no aporta nada reutilizable, worth=false.
+
+            App (paquete Android): $app
+            Pregunta de Ü: "$question"
+            Mensaje del usuario: "$answer"
+            Responde SOLO JSON: {"worth": true/false, "app": "nombre de la app o ''", "note": "regla en una frase"}
+        """.trimIndent()
+        runCatching {
+            val o = GeminiJson.ask(apiKey(), model(), prompt, tag = "memory")
+            if (o["worth"]?.jsonPrimitive?.booleanOrNull != true) null
+            else MemoryNote(
+                app = o["app"]?.jsonPrimitive?.contentOrNull?.ifBlank { app } ?: app,
+                note = o["note"]?.jsonPrimitive?.contentOrNull.orEmpty(),
+            ).takeIf { it.note.isNotBlank() }
+        }.getOrElse { LogBus.log("memory", "destilar respuesta falló: ${it.message}"); null }
     }
 }

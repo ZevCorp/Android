@@ -5,6 +5,8 @@ import graph.core.domain.*
 import java.net.HttpURLConnection
 import java.net.URL
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.*
 
@@ -12,24 +14,47 @@ private const val BASE = "https://generativelanguage.googleapis.com"
 
 private class HttpRes(val code: Int, val body: String)
 
-private fun http(url: String, headers: Map<String, String>, body: ByteArray): HttpRes {
-    // Reintenta ante la sobrecarga de Google (429/5xx): esos errores son temporales y sin reintento
-    // hacían "fallar todo" al primer bache de demanda.
-    val (code, text) = GeminiHttp.withRetry("gemini") {
-        val c = URL(url).openConnection() as HttpURLConnection
-        c.requestMethod = "POST"
-        c.connectTimeout = 30_000
-        c.readTimeout = 300_000
-        headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-        c.doOutput = true
-        c.outputStream.use { it.write(body) }
-        val status = c.responseCode
-        val respBody = (if (status < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
-        c.disconnect()
-        status to respBody
+/**
+ * POST al motor con DOS garantías combinadas:
+ *  · CANCELABLE de verdad: si el Job se cancela (botón Stop) mientras está bloqueada leyendo, cada
+ *    intento hace disconnect() desde otro hilo y rompe la lectura al instante (en vez de esperar el
+ *    readTimeout de 300s); el backoff usa `delay`, también cancelable.
+ *  · RESILIENTE a la sobrecarga de Google (429/5xx): esos errores son temporales ("please try again
+ *    later") y sin reintento hacían "fallar todo" al primer bache. Reintenta con backoff exponencial.
+ * Solo se reintentan códigos HTTP transitorios; las excepciones de red/cancelación se propagan.
+ */
+private suspend fun http(url: String, headers: Map<String, String>, body: ByteArray): HttpRes {
+    var wait = 800L
+    var attempt = 1
+    while (true) {
+        val res = httpOnce(url, headers, body)
+        if (!GeminiHttp.transient(res.code) || attempt >= 4) return res
+        LogBus.log("gemini", "HTTP ${res.code} transitorio (sobrecarga de Google) · reintento $attempt/3 en ${wait}ms")
+        delay(wait)
+        wait = (wait * 2).coerceAtMost(8000L)
+        attempt++
     }
-    return HttpRes(code, text)
 }
+
+private suspend fun httpOnce(url: String, headers: Map<String, String>, body: ByteArray): HttpRes =
+    suspendCancellableCoroutine { cont ->
+        val c = URL(url).openConnection() as HttpURLConnection
+        cont.invokeOnCancellation { runCatching { c.disconnect() } }
+        try {
+            c.requestMethod = "POST"
+            c.connectTimeout = 30_000
+            c.readTimeout = 300_000
+            headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
+            c.doOutput = true
+            c.outputStream.use { it.write(body) }
+            val code = c.responseCode
+            val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
+            c.disconnect()
+            if (cont.isActive) cont.resumeWith(Result.success(HttpRes(code, text)))
+        } catch (e: Throwable) {
+            if (cont.isActive) cont.resumeWith(Result.failure(e))
+        }
+    }
 
 private fun js(s: String) = JsonPrimitive(s)
 private fun jo(vararg pairs: Pair<String, JsonElement>) = JsonObject(pairs.toMap())
@@ -344,7 +369,7 @@ class GeminiBrain(
         }
 
     private fun goalPrompt(state: ScreenState, stateBlock: String) = """
-        Eres Graph, un asistente con PERSONALIDAD viva y divertida que controla un teléfono Android REAL.
+        Eres Ü, un asistente con PERSONALIDAD viva y divertida que controla un teléfono Android REAL.
         Objetivo del usuario: $goal
 
         CÓMO VES LA PANTALLA: por defecto NO recibes una imagen, sino una descripción de TEXTO del árbol de
@@ -381,7 +406,7 @@ class GeminiBrain(
         mensajes, te ayudo con lo que necesites en el teléfono").
         $memoryBlock
         Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones).
-        En las capturas puede aparecer una carita blanca flotante (Graph): IGNÓRALA, nunca la toques.
+        En las capturas puede aparecer una carita blanca flotante (Ü): IGNÓRALA, nunca la toques.
 
         $stateBlock
     """.trimIndent()

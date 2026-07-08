@@ -22,7 +22,7 @@ class MicService : Service() {
             NotificationChannel("mic", "Escucha por voz", NotificationManager.IMPORTANCE_LOW))
         startForeground(3, Notification.Builder(this, "mic")
             .setSmallIcon(android.R.drawable.ic_btn_speak_now)
-            .setContentTitle("Graph te está escuchando")
+            .setContentTitle("Ü te está escuchando")
             .build(), ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE)
         return START_NOT_STICKY
     }

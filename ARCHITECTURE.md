@@ -26,6 +26,7 @@ Clean architecture: núcleo puro y multiplataforma + una capa de adaptadores por
 │  GeminiBrain               → Brain (Interactions API)        │
 │  FloatingBubble / MainActivity → Voice · UserChannel · chat  │
 │  StopReceiver              → detener desde la notificación    │
+│  SupabaseAuth              → cuenta del usuario (sesión)     │
 └──────────────────────────────────────────────────────────────┘
 ```
 
@@ -109,8 +110,17 @@ servidor no creó la interacción, así que reintentar el mismo POST no duplica 
 Sobre el motor mixto viven dos capas de enseñanza que alimentan la capa MCP (y ambas son, además, el
 punto de creación de los workflows: ver arriba):
 
-- **Pasiva** — se activa en la **app principal**. El `GraphAccessibilityService` observa clics + árbol de UI y `PassiveLearning` (core) consolida el mapa MCP de cada app al salir de ella (`GeminiLearning` en app). Mantener oprimido el 🎓 de la burbuja dibuja los contornos de lo aprendido (`HighlightOverlay`).
+- **Pasiva** — se activa en la **app principal**. El `GraphAccessibilityService` observa clics + árbol de UI y `PassiveLearning` (core) consolida el mapa MCP de cada app al salir de ella (`GeminiLearning` en app). Mantener oprimido el 🎓 de la burbuja dibuja los contornos de lo aprendido (`HighlightOverlay`). Mientras observa, `LearningInquiry` decide con la **memoria personal a la vista** si intervenir por voz: proponer una acción (mindset propositivo en tiempo real; las instrucciones del usuario en su knowledge-base mandan), preguntar una duda valiosa, o callar. Una propuesta aceptada va al motor de ejecución.
 - **Activa** — el **🎓 de la burbuja**, al tocarlo. `ActiveLearning` (app) lanza `ScreenTeachActivity` (permiso de captura) → `ScreenTeachService` graba pantalla + audio (MediaProjection + MediaRecorder). Al terminar, `GeminiVideo` sube el mp4 a la Files API de Gemini y lo estructura como **conocimiento textual por app**, guardado en `MemoryStore` (memoria durable) y consumido fielmente por el motor al operar esa app. **Fase 1: solo texto, sin árbol de UI.**
+
+## Cuentas: quién es dueño de cada capa de conocimiento
+
+Las dos capas de enseñanza tienen **dueños distintos**, y `SupabaseAuth` (email + contraseña, sesión en prefs con auto-refresh) es la frontera:
+
+- **`LearnedToolRepo` → `graph_learned_tools`**: el mapa de UI de las apps es **compartido entre todos los usuarios** (lectura pública; escribir requiere sesión). Aprenderlo una vez sirve para todos.
+- **`MemoryStore` → `graph_memory`**: la memoria durable es **personal**. En el servidor, RLS por `user_id` (solo el dueño lee/escribe sus notas); en el teléfono, un archivo por cuenta (`memory-<userId>.json`) y un archivo anónimo (`memory.json`) para cuando no hay sesión, cuyas notas se **adoptan** a la cuenta al iniciar sesión (`MemoryStore.adoptAnonymous`, orquestado por `GraphApp.sessionChanged`).
+
+`CloudSync` adjunta el token de la sesión a todas las llamadas (`CloudSync.userToken`); sin sesión, la memoria no viaja a la nube y los aprendizajes de UI solo se leen.
 
 ## Fuera de esta fase (se integran después)
 

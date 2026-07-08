@@ -16,7 +16,9 @@ import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.MemoryStore
+import com.zevcorp.graph.platform.SupabaseAuth
 import com.zevcorp.graph.platform.Updater
+import com.zevcorp.graph.platform.UsageU
 import com.zevcorp.graph.ui.Palette
 import com.zevcorp.graph.ui.ThemeMode
 import com.zevcorp.graph.voice.IntentDistiller
@@ -44,6 +46,14 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+
+/**
+ * Una propuesta ("¿quieres que lo haga yo?") o pregunta que el asistente dijo por VOZ y quedó
+ * esperando respuesta. Vive como contexto pendiente del hilo unificado: el usuario contesta por
+ * CUALQUIER vía de input y run() le inyecta este contexto para que "sí, hazlo" signifique
+ * exactamente lo propuesto.
+ */
+data class PendingVoice(val kind: String, val app: String, val question: String, val task: String, val at: Long)
 
 /** Composition root: une el núcleo (motor mixto + MCP) con los adaptadores Android. */
 class GraphApp : Application() {
@@ -114,11 +124,27 @@ class GraphApp : Application() {
         PassiveLearning(GeminiLearning(apiKey, model), learnedTools, voice, LogBus,
             inquirer = LearningInquiry(apiKey, model, memories, scope,
                 busy = { executing || bubble?.voiceBusy == true || activeLearning.busy },
-                askByVoice = { q -> bubble?.askAloud(q) ?: "" },
-                runTask = { task -> scope.launch { runCatching { run(task, bubble) } } }),
+                speak = { bubble?.speak(it) },
+                pending = ::notePendingVoice),
             recorder = recorder,
             appName = ::appLabel,
             onLearned = { tool -> scope.launch(Dispatchers.IO) { reconcileWorkflows(tool.app) } })
+    }
+
+    /* ---------- Propuestas/preguntas por voz: contexto pendiente del hilo unificado ---------- */
+
+    @Volatile private var pendingVoice: PendingVoice? = null
+
+    /** El asistente acaba de proponer o preguntar algo por voz: queda esperando la respuesta. */
+    fun notePendingVoice(kind: String, app: String, question: String, task: String) {
+        pendingVoice = PendingVoice(kind, app, question, task, System.currentTimeMillis())
+    }
+
+    /** Toma (y limpia) lo pendiente si sigue fresco: la respuesta natural llega en minutos, no horas. */
+    private fun consumePendingVoice(): PendingVoice? {
+        val p = pendingVoice ?: return null
+        pendingVoice = null
+        return p.takeIf { System.currentTimeMillis() - it.at < 3 * 60_000L }
     }
 
     /**
@@ -157,17 +183,31 @@ class GraphApp : Application() {
      */
     val activeLearning by lazy {
         ActiveLearning(this, GeminiVideo(apiKey, model), memories, voice,
-            askAloud = { q -> bubble?.askAloud(q) ?: "" }, apiKey = apiKey, model = model)
+            // Pregunta de seguimiento: se dice por voz y se responde en el popup de la burbuja
+            // (texto o su micrófono) — el micrófono sticky flotante ya no existe.
+            askAloud = { q -> bubble?.let { b -> b.speak(q); b.ask(q) } ?: "" },
+            apiKey = apiKey, model = model)
     }
 
-    /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube). */
+    /**
+     * La cuenta del usuario: separa el conocimiento PERSONAL (memoria durable, solo suyo) del mapa
+     * de UI de las apps (compartido entre todos). Sin sesión, la memoria vive solo en el teléfono.
+     */
+    val auth by lazy { SupabaseAuth(prefs) }
+
+    /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube POR CUENTA). */
     val memories by lazy {
-        MemoryStore(filesDir) { note -> scope.launch(Dispatchers.IO) { CloudSync.pushMemory(note) } }
+        MemoryStore(filesDir, owner = { auth.userId }) { note ->
+            scope.launch(Dispatchers.IO) { CloudSync.pushMemory(note) }
+        }
     }
     private val memoryDistiller by lazy { MemoryDistiller(apiKey, model) }
 
     /** El "primer LLM" del pipeline de voz (repo Graph): destila la intención del transcript. */
     val intentDistiller by lazy { IntentDistiller(apiKey, model) }
+
+    /** El cerebro del modo reunión (escucha por esquinas): nota · construye · interviene al cierre. */
+    val meetingBrain by lazy { com.zevcorp.graph.voice.MeetingBrain(apiKey, model) }
 
     /** Pausa entre steps MCP enviados juntos, ajustable con la barra de velocidad de la app. */
     val stepDelay = { prefs.getInt("stepDelayMs", 350).toLong() }
@@ -270,7 +310,7 @@ class GraphApp : Application() {
      * Al terminar, una cadena de pensamiento breve decide si anticipar una acción segura.
      */
     suspend fun run(prompt: String, user: UserChannel?): String {
-        val surface = ui ?: return "Activa el servicio de accesibilidad de Graph"
+        val surface = ui ?: return "Activa el servicio de accesibilidad de Ü"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
         // Rotación de ventana de contexto: al superar el umbral se abre un hilo nuevo (la memoria
         // durable sobrevive). Solo aplica al empezar; no interrumpe nada en curso.
@@ -287,13 +327,36 @@ class GraphApp : Application() {
                 }
             }
         }
+        // Hilo unificado: si el asistente acaba de proponer/preguntar algo por VOZ, este prompt
+        // puede ser la respuesta (venga del panel, las esquinas o donde sea). Se inyecta como
+        // contexto para que "sí, hazlo" signifique EXACTAMENTE lo propuesto.
+        val pending = consumePendingVoice()
+        if (pending != null) LogBus.log("run", "🔗 contexto pendiente (${pending.kind}): \"${pending.question.take(80)}\"")
+        if (pending?.kind == "ask") scope.launch(Dispatchers.IO) {
+            memoryDistiller.captureAnswer(pending.app, pending.question, prompt)?.let { note ->
+                if (memories.add(note)) LogBus.log("memory", "🧠 aprendido de tu respuesta [${note.app}]: ${note.note}")
+            }
+        }
+        val pendingContext = pending?.let {
+            if (it.kind == "offer")
+                "CONTEXTO INMEDIATO: hace un momento le PROPUSISTE por voz al usuario: «${it.question}» " +
+                    "(la tarea que harías, en la app ${it.app}: «${it.task}»). Si su mensaje ACEPTA la " +
+                    "propuesta («sí», «hazlo», «dale»…), tu objetivo es EXACTAMENTE esa tarea, con todos " +
+                    "sus detalles. Si pide otra cosa, obedece lo nuevo e ignora la propuesta."
+            else
+                "CONTEXTO INMEDIATO: hace un momento le PREGUNTASTE por voz al usuario: «${it.question}» " +
+                    "(app ${it.app}). Si su mensaje es la RESPUESTA a esa pregunta, no ejecutes nada: " +
+                    "agradécele brevemente con speak y termina (su respuesta ya quedó guardada en tu " +
+                    "memoria). Si es una orden nueva, ejecútala."
+        }
         synchronized(goalPrompts) { goalPrompts.clear(); goalPrompts.add(prompt.trim()) }
         return running {
             var summary = ""
             var round = 0
             // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
             while (true) {
-                val (goal, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
+                val (goalBase, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
+                val goal = if (pendingContext != null) "$goalBase\n\n$pendingContext" else goalBase
                 bubble?.showExecutionMic(true)
                 val (engine, brain) = newSession(surface, service, user, resume = true)
                 val holder = arrayOf("")
@@ -378,6 +441,7 @@ class GraphApp : Application() {
         // (en background, para no retrasar la respuesta). Si el 🎓 ya estaba activo, no se toca.
         val autoLearn = !passive.active
         if (autoLearn) passive.start(quiet = true)
+        val startedAt = System.currentTimeMillis()
         try {
             return block()
         } finally {
@@ -389,6 +453,10 @@ class GraphApp : Application() {
             bubble?.stopExecLive(announce = false) // la escucha en vivo muere con su ejecución
             notifyRunning(false)
             if (autoLearn && passive.active) scope.launch(Dispatchers.IO) { passive.stop(quiet = true) }
+            // Tiempo que Ü usó el dispositivo por ti → alimenta la gráfica del modo usuario.
+            val elapsed = System.currentTimeMillis() - startedAt
+            prefs.edit().putLong(UsageU.KEY_U_ACTIVE_MS,
+                prefs.getLong(UsageU.KEY_U_ACTIVE_MS, 0L) + elapsed).apply()
         }
     }
 
@@ -400,13 +468,29 @@ class GraphApp : Application() {
             this, 0, Intent("com.zevcorp.graph.STOP").setPackage(packageName), PendingIntent.FLAG_IMMUTABLE)
         nm.notify(2, Notification.Builder(this, "run")
             .setSmallIcon(android.R.drawable.ic_media_pause)
-            .setContentTitle("Graph está ejecutando")
+            .setContentTitle("Ü está ejecutando")
             .setContentText("Toca para detener")
             .setOngoing(true)
             .setColor(0xFFE5534B.toInt())
             .setContentIntent(stop)
             .addAction(Notification.Action.Builder(null, "⏹ Detener", stop).build())
             .build())
+    }
+
+    /**
+     * La sesión cambió (login/logout desde la app). Al ENTRAR: los recuerdos anónimos de este
+     * teléfono se adoptan a la cuenta, se baja la memoria de la cuenta y se suben los aprendizajes
+     * de UI locales que la nube no tenga (ya hay token para aportar). Al SALIR no hay nada que
+     * sincronizar: la memoria de la cuenta queda en la nube y el archivo local de esa cuenta deja
+     * de usarse (el prompt vuelve a las notas anónimas del teléfono).
+     */
+    fun sessionChanged() {
+        if (!auth.loggedIn) return
+        scope.launch(Dispatchers.IO) {
+            memories.adoptAnonymous()
+            memories.syncFromCloud(CloudSync.pullMemory())
+            learnedTools.syncFromCloud()
+        }
     }
 
     override fun onCreate() {
@@ -417,13 +501,18 @@ class GraphApp : Application() {
         // Tema guardado (claro por defecto): cara y app en blanco/negro, sin azul.
         Palette.mode = runCatching { ThemeMode.valueOf(prefs.getString("theme", ThemeMode.LIGHT.name)!!) }
             .getOrDefault(ThemeMode.LIGHT)
+        // Las llamadas a la nube viajan con la sesión del usuario (si hay): la memoria personal
+        // la exige (RLS por cuenta) y los aprendizajes de UI la usan para poder aportar.
+        CloudSync.userToken = { auth.accessToken() }
         // Trae los aprendizajes y la memoria de la nube (y sube lo local que falte allá).
         // Grafo de conocimiento (Neo4j Aura): credenciales en caliente desde prefs.
+        // Credenciales del grafo: lo que el usuario ponga en la UI manda; si no, caen a las incrustadas
+        // en el APK (BuildConfig, horneadas desde apikey.properties) para que funcione recién instalado.
         KnowledgeGraph.credentials = {
             Triple(
-                prefs.getString("neo4jUri", "") ?: "",
-                prefs.getString("neo4jUser", "") ?: "",
-                prefs.getString("neo4jPass", "") ?: "",
+                prefs.getString("neo4jUri", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_URI } ?: BuildConfig.DEFAULT_NEO4J_URI,
+                prefs.getString("neo4jUser", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_USER } ?: BuildConfig.DEFAULT_NEO4J_USER,
+                prefs.getString("neo4jPass", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_PASS } ?: BuildConfig.DEFAULT_NEO4J_PASS,
             )
         }
         scope.launch(Dispatchers.IO) {
@@ -468,7 +557,8 @@ class GraphApp : Application() {
     companion object {
         lateinit var instance: GraphApp
 
-        /** API key por defecto (proyecto "Devable AI"), inyectada al compilar — nunca vive en git. */
+        /** Keys por defecto, incrustadas al compilar. Modificables desde la UI (prefs las sobrescriben). */
         const val DEFAULT_API_KEY = BuildConfig.DEFAULT_API_KEY
+        const val DEFAULT_DEEPGRAM_KEY = BuildConfig.DEFAULT_DEEPGRAM_KEY
     }
 }

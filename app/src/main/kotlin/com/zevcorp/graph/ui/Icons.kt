@@ -10,13 +10,20 @@ import android.view.View
 import android.widget.FrameLayout
 
 /** Set de íconos de línea limpios (trazo fino, extremos redondeados) estilo Apple/OpenAI. */
-enum class Icon { MIC, SEND, CLOSE, STOP, TEACH, EYE, BOLT, TOOLS, CODE, ASSISTANT }
+enum class Icon { MIC, SEND, CLOSE, STOP, TEACH, EYE, BOLT, TOOLS, CODE, ASSISTANT, CLOUD }
 
 /**
  * Ícono vectorial dibujado en Canvas — nítido a cualquier tamaño y con la estética de línea
  * minimalista (SF Symbols / OpenAI) en vez de los emojis anteriores.
  */
-class IconView(context: Context, private val icon: Icon, var tint: Int = Palette.text) : View(context) {
+class IconView(
+    context: Context,
+    private val icon: Icon,
+    var tint: Int = Palette.text,
+    /** Sombra suave detrás del trazo: para que un ícono claro no se pierda sobre un fondo claro
+     * (p.ej. blanco sobre la nube). Requiere LAYER_TYPE_SOFTWARE en la vista anfitriona. */
+    private val shadow: Boolean = false,
+) : View(context) {
 
     private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         style = Paint.Style.STROKE
@@ -35,6 +42,10 @@ class IconView(context: Context, private val icon: Icon, var tint: Int = Palette
         stroke.color = tint
         fill.color = tint
         stroke.strokeWidth = s * 0.072f
+        if (shadow) {
+            stroke.setShadowLayer(s * 0.10f, 0f, s * 0.02f, 0x40203040)
+            fill.setShadowLayer(s * 0.10f, 0f, s * 0.02f, 0x40203040)
+        }
 
         when (icon) {
             Icon.MIC -> {
@@ -103,6 +114,16 @@ class IconView(context: Context, private val icon: Icon, var tint: Int = Palette
             Icon.ASSISTANT -> { // destello + orbe: identidad del asistente
                 canvas.drawCircle(x(0.5f), y(0.5f), s * 0.26f, stroke)
                 sparkle(canvas, ::x, ::y, 0.5f, 0.5f, 0.14f, s)
+            }
+            Icon.CLOUD -> { // silueta de nube de línea
+                val base = y(0.64f)
+                path.reset()
+                path.moveTo(x(0.24f), base)
+                path.cubicTo(x(0.06f), base, x(0.08f), y(0.42f), x(0.28f), y(0.42f))
+                path.cubicTo(x(0.27f), y(0.22f), x(0.55f), y(0.18f), x(0.58f), y(0.40f))
+                path.cubicTo(x(0.80f), y(0.32f), x(0.90f), y(0.56f), x(0.74f), base)
+                path.close()
+                canvas.drawPath(path, stroke)
             }
         }
     }

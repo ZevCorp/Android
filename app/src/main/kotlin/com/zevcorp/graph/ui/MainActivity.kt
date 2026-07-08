@@ -4,6 +4,7 @@ import android.app.Activity
 import android.app.AlertDialog
 import android.content.Intent
 import android.content.res.ColorStateList
+import android.graphics.Color
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -19,10 +20,12 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
+import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.KnowledgeGraph
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.Release
 import com.zevcorp.graph.platform.Updater
+import com.zevcorp.graph.platform.UsageU
 import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
 import graph.core.domain.Workflow
@@ -39,9 +42,16 @@ class MainActivity : Activity(), UserChannel {
     private lateinit var logView: TextView
     private lateinit var mcpPanel: LinearLayout
     private lateinit var workflowPanel: LinearLayout
+    private lateinit var accountBody: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
+    /** Reconocedor de voz en-app (sin Activity), como el de la burbuja flotante. */
+    private var recognizer: android.speech.SpeechRecognizer? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
+    /** Vista actual: nube (principal), usuario (gráfica "versus") o desarrollador (todo). */
+    private var mode = MODE_CLOUD
+    /** Acceso a estadísticas de uso con el que se dibujó la gráfica (para recrear al concederlo). */
+    private var builtWithAccess = false
 
     /* Actualizaciones */
     private var updStatus: TextView? = null
@@ -52,24 +62,60 @@ class MainActivity : Activity(), UserChannel {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         builtWithMode = Palette.mode
+        mode = app.prefs.getString(KEY_UI_MODE, MODE_CLOUD) ?: MODE_CLOUD
+
+        // Vista principal: la textura de nubes viva (cielo animado + barra de nube). Pantalla propia,
+        // a pantalla completa detrás de las barras del sistema para que el cielo llegue a los bordes.
+        if (mode == MODE_CLOUD) {
+            window.statusBarColor = android.graphics.Color.TRANSPARENT
+            window.navigationBarColor = android.graphics.Color.TRANSPARENT
+            window.setDecorFitsSystemWindows(false)
+            setContentView(buildCloudScreen())
+            // Íconos claros de la barra de estado sobre el azul del cielo.
+            window.decorView.windowInsetsController?.setSystemBarsAppearance(
+                0,
+                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
+                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+            requestPermissions(arrayOf(
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                android.Manifest.permission.CALL_PHONE,
+            ), 3)
+            return
+        }
+
         window.statusBarColor = Palette.bg
         window.navigationBarColor = Palette.bg
+        window.setDecorFitsSystemWindows(true)
 
         val root = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setBackgroundColor(Palette.bg)
             setPadding(dp(18), dp(24), dp(18), dp(24))
         }
 
-        // Header
+        // Header: carita + nombre + botón de modo (arriba a la derecha)
         val header = row()
         header.addView(FaceView(this), LinearLayout.LayoutParams(dp(56), dp(56)))
         val titles = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL; setPadding(dp(12), 0, 0, 0) }
-        titles.addView(title("Graph", 22f))
+        titles.addView(title("Ü", 22f))
         titles.addView(caption("Pídeme algo · lo hago con gestos MCP y computer-use"))
-        header.addView(titles)
+        header.addView(titles, LinearLayout.LayoutParams(0, -2, 1f))
+        header.addView(modeToggle())
         root.addView(header)
         root.gap(dp(16))
+
+        // Modo usuario: una sola gráfica central. El resto (modo desarrollador) sigue abajo intacto.
+        if (mode == MODE_USER) {
+            buildUserMode(root)
+            setContentView(withStaticSky(ScrollView(this).apply { addView(root) }))
+            applyBarIcons()
+            requestPermissions(arrayOf(
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                android.Manifest.permission.CALL_PHONE,
+            ), 3)
+            return
+        }
 
         // Actualizaciones: versión instalada, buscar/instalar la nueva. Mantén oprimido el título
         // para el panel de administrador (publicar una versión y notificar a todos).
@@ -93,6 +139,22 @@ class MainActivity : Activity(), UserChannel {
         root.addView(upd)
         root.gap(dp(14))
 
+        // Tu cuenta: separa las dos capas de conocimiento. Lo que Ü aprende de la UI de las
+        // apps (calculadora, WhatsApp…) es de TODOS los usuarios; tu knowledge-base personal
+        // (recuerdos, preferencias, "mi mamá está guardada como…") pertenece SOLO a tu cuenta.
+        val account = card()
+        val accHead = row()
+        accHead.addView(iconChip(Icon.ASSISTANT, sizeDp = 34, tint = Palette.accent))
+        accHead.addView(title("Tu cuenta").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        account.addView(accHead)
+        account.gap(dp(4))
+        accountBody = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        account.addView(accountBody)
+        paintAccount()
+        root.addView(account)
+        root.gap(dp(14))
+
         // Config: API key + accesibilidad
         val setup = card()
         val keyInput = EditText(this).apply {
@@ -109,7 +171,7 @@ class MainActivity : Activity(), UserChannel {
         val deepgramInput = EditText(this).apply {
             hint = "Deepgram API key (opcional: dictado nova-3 en las esquinas)"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(app.prefs.getString("deepgramKey", ""))
+            setText(app.prefs.getString("deepgramKey", GraphApp.DEFAULT_DEEPGRAM_KEY))
             setTextColor(Palette.text)
             setHintTextColor(Palette.textDim)
             background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
@@ -154,12 +216,12 @@ class MainActivity : Activity(), UserChannel {
         }, LinearLayout.LayoutParams(0, -2, 1f))
         setup.addView(setupRow)
         setup.gap(dp(8))
-        setup.addView(button("Hacer de Graph tu asistente (botón de encendido)") {
+        setup.addView(button("Hacer de Ü tu asistente (botón de encendido)") {
             startActivity(Intent(Settings.ACTION_MANAGE_DEFAULT_APPS_SETTINGS))
         })
         setup.gap(dp(6))
         setup.addView(caption("Al activar accesibilidad aparece la burbuja flotante. En Apps predeterminadas → " +
-            "App de asistente digital elige Graph: lo invocas manteniendo el botón de encendido."))
+            "App de asistente digital elige Ü: lo invocas manteniendo el botón de encendido."))
         root.addView(setup)
         root.gap(dp(14))
 
@@ -185,18 +247,14 @@ class MainActivity : Activity(), UserChannel {
         val bar = row()
         bar.addView(promptInput, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
-        bar.addView(iconChip(Icon.MIC, sizeDp = 44) {
-            voiceCallback = { t -> if (t.isNotBlank()) runPrompt(t) }
-            startActivityForResult(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
-                .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
-        })
+        bar.addView(iconChip(Icon.MIC, sizeDp = 44) { startVoice() })
         bar.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
         bar.addView(iconChip(Icon.SEND, sizeDp = 44, primary = true) { submitPrompt() })
         ask.addView(bar)
         root.addView(ask)
         root.gap(dp(14))
 
-        // Aprendizaje pasivo: se activa/desactiva AQUÍ (antes estaba en la burbuja). Graph observa
+        // Aprendizaje pasivo: se activa/desactiva AQUÍ (antes estaba en la burbuja). Ü observa
         // el uso normal del teléfono y estructura el mapa MCP de cada app al salir de ella.
         val learn = card()
         val learnHead = row()
@@ -205,7 +263,7 @@ class MainActivity : Activity(), UserChannel {
             LinearLayout.LayoutParams(0, -2, 1f))
         learn.addView(learnHead)
         learn.gap(dp(4))
-        learn.addView(caption("Graph observa cómo usas tus apps (sin interrumpir) y estructura su mapa " +
+        learn.addView(caption("Ü observa cómo usas tus apps (sin interrumpir) y estructura su mapa " +
             "MCP al salir de cada una. Para ver lo aprendido, mantén oprimido el 🎓 de la burbuja. " +
             "El 🎓 de la burbuja, al tocarlo, es el aprendizaje activo (compartir pantalla)."))
         learn.gap(dp(10))
@@ -315,7 +373,7 @@ class MainActivity : Activity(), UserChannel {
         wfCard.addView(workflowPanel)
         root.addView(wfCard)
 
-        setContentView(ScrollView(this).apply { setBackgroundColor(Palette.bg); addView(root) })
+        setContentView(withStaticSky(ScrollView(this).apply { addView(root) }))
         applyBarIcons() // tras setContentView: ya existe el decorView (antes daba NPE)
         requestPermissions(arrayOf(
             android.Manifest.permission.RECORD_AUDIO,
@@ -451,13 +509,30 @@ class MainActivity : Activity(), UserChannel {
         dialog.show()
     }
 
+    /** La burbuja flotante de la accesibilidad (null si el servicio no está activo). */
+    private fun bubble() = (app.ui as? GraphAccessibilityService)?.bubble
+
     override fun onResume() {
         super.onResume()
+        // La app pasó a primer plano: la carita se posiciona al centro superior de la pantalla.
+        bubble()?.dockToApp()
         // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
         // colores nuevos (blanco/negro coherente con la carita).
         if (builtWithMode != Palette.mode) { recreate(); return }
+        if (mode == MODE_USER) {
+            // Al volver de conceder el acceso a uso, redibuja la gráfica con el tiempo real.
+            if (builtWithAccess != UsageU.hasUsageAccess(this)) recreate()
+            return
+        }
         if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
         if (::workflowPanel.isInitialized) refreshWorkflowPanel()
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // La app pasó a segundo plano (incluye moveTaskToBack al ejecutar algo): la carita
+        // regresa a donde estaba y reanuda su reposo normal.
+        bubble()?.undockFromApp()
     }
 
     /** Íconos de la barra de estado/navegación: oscuros sobre fondo claro, claros sobre fondo oscuro. */
@@ -564,12 +639,298 @@ class MainActivity : Activity(), UserChannel {
             .show()
     }
 
+    /* ---------- Tu cuenta: login/registro (el conocimiento personal es solo tuyo) ---------- */
+
+    /** Pinta el contenido de la tarjeta de cuenta según haya sesión o no. */
+    private fun paintAccount() {
+        val auth = app.auth
+        accountBody.removeAllViews()
+
+        if (auth.loggedIn) {
+            accountBody.addView(caption("Sesión iniciada: ${auth.email}"))
+            accountBody.gap(dp(4))
+            accountBody.addView(caption("Tus recuerdos y preferencias se guardan en tu cuenta (solo tú los ves) " +
+                "y te siguen si cambias de teléfono. Lo que aprendo de la UI de las apps se comparte " +
+                "de forma anónima con todos los usuarios."))
+            accountBody.gap(dp(10))
+            accountBody.addView(button("Cerrar sesión") {
+                scope.launch {
+                    withContext(Dispatchers.IO) { app.auth.signOut() }
+                    log("Sesión cerrada")
+                    paintAccount()
+                }
+            })
+            return
+        }
+
+        accountBody.addView(caption("Con cuenta, tu conocimiento personal (recuerdos como \"mi mamá está " +
+            "guardada como 'Ale'\" o \"soy desarrollador\") pertenece solo a ti y sobrevive a reinstalaciones. " +
+            "Sin cuenta, esos recuerdos se quedan solo en este teléfono. El mapa de UI de las apps siempre " +
+            "es compartido: lo que cualquiera me enseña nos sirve a todos."))
+        accountBody.gap(dp(10))
+        val emailF = EditText(this).apply {
+            hint = "Correo"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_EMAIL_ADDRESS
+            setText(app.prefs.getString("authLastEmail", ""))
+            setTextColor(Palette.text); setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        accountBody.addView(emailF)
+        accountBody.gap(dp(8))
+        val passF = EditText(this).apply {
+            hint = "Contraseña (mínimo 8 caracteres)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setTextColor(Palette.text); setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        accountBody.addView(passF)
+        accountBody.gap(dp(8))
+        val status = caption("")
+        fun submit(newAccount: Boolean) {
+            val email = emailF.text.toString().trim()
+            val pass = passF.text.toString()
+            if (email.isBlank() || pass.isBlank()) { status.text = "Escribe correo y contraseña"; return }
+            status.text = if (newAccount) "Creando tu cuenta…" else "Entrando…"
+            scope.launch {
+                val err = withContext(Dispatchers.IO) {
+                    if (!newAccount) app.auth.signIn(email, pass)
+                    else when (val signUpErr = app.auth.signUp(email, pass)) {
+                        null -> app.auth.signIn(email, pass)
+                        else -> {
+                            // El correo puede ya tener cuenta en este proyecto (p.ej. de Miracle,
+                            // que comparte el backend): intenta entrar con esas credenciales en
+                            // vez de estrellarse contra "ya existe".
+                            if (!signUpErr.contains("Ya existe", ignoreCase = true)) signUpErr
+                            else app.auth.signIn(email, pass)?.let {
+                                "Ese correo ya tiene una cuenta (quizá de Miracle) y la contraseña " +
+                                    "no coincide. Entra con su contraseña o usa otro correo."
+                            }
+                        }
+                    }
+                }
+                if (err != null) { status.text = err; return@launch }
+                app.prefs.edit().putString("authLastEmail", email).apply()
+                log("Sesión iniciada: ${app.auth.email}")
+                app.sessionChanged() // adopta las notas anónimas y sincroniza la memoria de la cuenta
+                paintAccount()
+            }
+        }
+        val actions = row()
+        actions.addView(button("Crear cuenta") { submit(newAccount = true) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        actions.addView(View(this), LinearLayout.LayoutParams(dp(8), 1))
+        actions.addView(button("Iniciar sesión", primary = true) { submit(newAccount = false) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        accountBody.addView(actions)
+        accountBody.gap(dp(6))
+        accountBody.addView(status)
+    }
+
     private fun log(message: String) = LogBus.log("app", message)
+
+    /* ---------- Nube ⇄ usuario ("versus") ⇄ desarrollador ---------- */
+
+    /** Siguiente vista del ciclo nube → usuario → desarrollador → nube. */
+    private fun nextMode(): String = when (mode) {
+        MODE_CLOUD -> MODE_USER
+        MODE_USER -> MODE_DEV
+        else -> MODE_CLOUD
+    }
+
+    private fun iconFor(m: String): Icon = when (m) {
+        MODE_USER -> Icon.EYE   // la gráfica "versus"
+        MODE_DEV -> Icon.CODE   // el panel de desarrollador
+        else -> Icon.CLOUD      // la textura de nubes
+    }
+
+    private fun labelFor(m: String): String = when (m) {
+        MODE_USER -> "Versus"
+        MODE_DEV -> "Desarrollador"
+        else -> "Nube"
+    }
+
+    private fun cycleMode() {
+        val next = nextMode()
+        app.prefs.edit().putString(KEY_UI_MODE, next).apply()
+        Toast.makeText(this, labelFor(next), Toast.LENGTH_SHORT).show()
+        recreate()
+    }
+
+    /** Botón tipo nube arriba a la derecha que cicla entre las tres vistas (muestra la siguiente). */
+    private fun modeToggle(): View = cloudChip(iconFor(nextMode()), sizeDp = 40, subtle = true) { cycleMode() }
+
+    /** Envuelve un contenido con la foto de nubes (estática) de fondo (vistas usuario/desarrollador). */
+    private fun withStaticSky(content: View): View {
+        val frame = android.widget.FrameLayout(this)
+        val bg = android.widget.ImageView(this).apply {
+            setImageResource(com.zevcorp.graph.R.drawable.cloud_sky_full)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+        }
+        frame.addView(bg, android.widget.FrameLayout.LayoutParams(-1, -1))
+        frame.addView(content, android.widget.FrameLayout.LayoutParams(-1, -1))
+        return frame
+    }
+
+    /**
+     * Dictado por voz SIN Activity: el mismo camino que el micrófono de la burbuja flotante
+     * (SpeechRecognizer directo, sin abrir el pop-up de voz de Google).
+     */
+    private fun recognize(onResult: (String?) -> Unit) {
+        if (!android.speech.SpeechRecognizer.isRecognitionAvailable(this)) { onResult(null); return }
+        recognizer?.destroy()
+        val rec = android.speech.SpeechRecognizer.createSpeechRecognizer(this)
+        recognizer = rec
+        rec.setRecognitionListener(object : android.speech.RecognitionListener {
+            override fun onResults(results: android.os.Bundle) {
+                onResult(results.getStringArrayList(android.speech.SpeechRecognizer.RESULTS_RECOGNITION)?.firstOrNull())
+                rec.destroy(); recognizer = null
+            }
+            override fun onError(error: Int) { onResult(null); rec.destroy(); recognizer = null }
+            override fun onReadyForSpeech(params: android.os.Bundle?) {
+                Toast.makeText(this@MainActivity, "Te escucho…", Toast.LENGTH_SHORT).show()
+            }
+            override fun onBeginningOfSpeech() {}
+            override fun onRmsChanged(rmsdB: Float) {}
+            override fun onBufferReceived(buffer: ByteArray?) {}
+            override fun onEndOfSpeech() {}
+            override fun onPartialResults(partialResults: android.os.Bundle?) {}
+            override fun onEvent(eventType: Int, params: android.os.Bundle?) {}
+        })
+        rec.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
+            .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM))
+    }
+
+    /** Escucha por voz y, si oye algo, ejecuta el prompt (mic de la barra de nube y de las cards). */
+    private fun startVoice() = recognize { heard ->
+        if (!heard.isNullOrBlank()) runPrompt(heard) else Toast.makeText(this, "No te escuché", Toast.LENGTH_SHORT).show()
+    }
+
+    /* ---------- Vista principal: la foto de nubes ---------- */
+
+    /** Pantalla principal: la foto exacta de fondo + la barra-nube flotante (la capa de encima) + toggle. */
+    private fun buildCloudScreen(): View {
+        val frame = android.widget.FrameLayout(this)
+        val bg = android.widget.ImageView(this).apply {
+            setImageResource(com.zevcorp.graph.R.drawable.cloud_sky_bg)
+            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
+        }
+        frame.addView(bg, android.widget.FrameLayout.LayoutParams(-1, -1))
+
+        val overlay = android.widget.FrameLayout(this)
+        frame.addView(overlay, android.widget.FrameLayout.LayoutParams(-1, -1))
+        // Respeta el notch/barra de estado: separa el contenido de los bordes del sistema.
+        overlay.setOnApplyWindowInsetsListener { v, insets ->
+            val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+            v.setPadding(0, bars.top, 0, bars.bottom)
+            insets
+        }
+
+        // Toggle (cicla las 3 vistas), arriba a la derecha, sutil.
+        overlay.addView(modeToggle(), android.widget.FrameLayout.LayoutParams(-2, -2,
+            Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(14) })
+
+        // La barra de nube central (la nube real de la foto) con la frase y los botones mic/enviar.
+        overlay.addView(buildCloudBar(), android.widget.FrameLayout.LayoutParams(-1, -2,
+            Gravity.CENTER).apply { leftMargin = dp(18); rightMargin = dp(18) })
+        return frame
+    }
+
+    /**
+     * La barra de escritura: la nube real recortada de la foto (idéntica a la imagen, sin lupa) como
+     * fondo; encima, la frase de bienvenida y, a la derecha, el micrófono permanente y sutil (⇄ enviar
+     * cuando se escribe). Solo esta barra se dibuja/coloca con código; la textura es la de la foto.
+     */
+    private fun buildCloudBar(): View {
+        val container = android.widget.FrameLayout(this)
+        val cloud = android.widget.ImageView(this).apply {
+            setImageResource(com.zevcorp.graph.R.drawable.cloud_bar)
+            adjustViewBounds = true
+            scaleType = android.widget.ImageView.ScaleType.FIT_XY
+        }
+        container.addView(cloud, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
+
+        val bar = row().apply { setPadding(dp(34), dp(6), dp(16), dp(6)) }
+        val input = EditText(this).apply {
+            hint = "¿Qué puedo hacer hoy por ti?"
+            setHintTextColor(0xCCFFFFFF.toInt())
+            setTextColor(Color.WHITE)
+            setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x40203040)
+            textSize = 15f
+            background = null
+            maxLines = 2
+            setPadding(0, 0, 0, 0)
+            gravity = Gravity.CENTER_VERTICAL
+        }
+        fun submit() {
+            val p = input.text.toString().trim()
+            if (p.isBlank()) return
+            input.setText("")
+            runPrompt(p)
+        }
+        input.setOnEditorActionListener { _, _, _ -> submit(); true }
+
+        // Íconos sobre la nube: mic BLANCO permanente y sutil a la derecha (con sombra suave para
+        // no perderse sobre el blanco de la nube); enviar solo aparece al escribir. Sin pop-up de voz.
+        val g = dp(40)
+        val mic = IconView(this, Icon.MIC, tint = Color.WHITE, shadow = true).apply {
+            alpha = 0.85f; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { startVoice() }
+        }
+        val send = IconView(this, Icon.SEND, tint = 0xFF2E80D8.toInt()).apply {
+            visibility = View.GONE; setOnClickListener { submit() }
+        }
+        val slot = android.widget.FrameLayout(this)
+        slot.addView(mic, android.widget.FrameLayout.LayoutParams(g, g))
+        slot.addView(send, android.widget.FrameLayout.LayoutParams(g, g))
+
+        input.addTextChangedListener(object : android.text.TextWatcher {
+            override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
+            override fun afterTextChanged(s: android.text.Editable?) {
+                val typing = !s.isNullOrBlank()
+                send.visibility = if (typing) View.VISIBLE else View.GONE
+                mic.visibility = if (typing) View.GONE else View.VISIBLE
+            }
+        })
+
+        bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
+        bar.addView(slot, LinearLayout.LayoutParams(g, g))
+        container.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -1))
+        return container
+    }
+
+    /** La única pantalla del modo usuario: la gráfica "versus" y una narrativa elegante. */
+    private fun buildUserMode(root: LinearLayout) {
+        builtWithAccess = UsageU.hasUsageAccess(this)
+        val chart = card()
+        chart.addView(
+            UsageVersusView(this, UsageU.uActiveMs(this), UsageU.userScreenMs(this)),
+            LinearLayout.LayoutParams(-1, dp(360)))
+        root.addView(chart)
+        root.gap(dp(20))
+        root.addView(TextView(this).apply {
+            text = "Mientras más tiempo Ü usa tu dispositivo, menos tiempo estás tú frente a la pantalla — y más puedes disfrutar tu vida."
+            textSize = 15f
+            setTextColor(Palette.text)
+            gravity = Gravity.CENTER
+            setLineSpacing(dp(6).toFloat(), 1f)
+            setPadding(dp(10), 0, dp(10), 0)
+        })
+        if (!builtWithAccess) {
+            root.gap(dp(18))
+            root.addView(button("Permitir medir tu tiempo de pantalla") {
+                startActivity(Intent(Settings.ACTION_USAGE_ACCESS_SETTINGS))
+            })
+            root.gap(dp(6))
+            root.addView(caption("Concede acceso a estadísticas de uso para ver tu tiempo real en la pantalla."))
+        }
+    }
 
     /** Activa/desactiva el aprendizaje pasivo (movido aquí desde la burbuja). */
     private fun togglePassive(after: () -> Unit) {
         if (app.ui == null) {
-            log("Activa el servicio de accesibilidad de Graph")
+            log("Activa el servicio de accesibilidad de Ü")
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return
         }
         val passive = app.passive
@@ -584,7 +945,7 @@ class MainActivity : Activity(), UserChannel {
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
     private fun runPrompt(prompt: String) {
         if (app.ui == null) {
-            log("Activa el servicio de accesibilidad de Graph")
+            log("Activa el servicio de accesibilidad de Ü")
             startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return
         }
         log("Pídeme: $prompt")
@@ -594,6 +955,11 @@ class MainActivity : Activity(), UserChannel {
                 .onSuccess { log(it) }
                 .onFailure { log(if (it is CancellationException) "Ejecución detenida ✋" else "Error: ${it.message}") }
         }
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        recognizer?.destroy(); recognizer = null
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -628,5 +994,12 @@ class MainActivity : Activity(), UserChannel {
                 }
                 .show()
         }
+    }
+
+    private companion object {
+        const val KEY_UI_MODE = "ui_mode"
+        const val MODE_CLOUD = "cloud"
+        const val MODE_USER = "user"
+        const val MODE_DEV = "dev"
     }
 }

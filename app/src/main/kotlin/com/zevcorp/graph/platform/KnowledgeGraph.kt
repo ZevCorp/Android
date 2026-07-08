@@ -19,16 +19,25 @@ import kotlinx.serialization.json.putJsonObject
  * workflows se proyectan como un grafo — el "grado de conocimiento" del asistente — navegable en
  * Neo4j Browser/Bloom:
  *
- *   (:Workflow)-[:HAS_STEP]->(:Step)-[:NEXT]->(:Step)     ← el flujo de la tarea
- *   (:Step)-[:TAPS]->(:Element)-[:IN_APP]->(:App)         ← steps subconscientes tocan elementos
- *   (:McpMap)-[:KNOWS]->(:Element), (:McpMap)-[:MAPS]->(:App) ← el mapa MCP de cada app
- *   (:Workflow)-[:USES_APP]->(:App)
+ *   (:YouWorkflow)-[:HAS_STEP]->(:YouStep)-[:NEXT]->(:YouStep)     ← el flujo de la tarea
+ *   (:YouStep)-[:TAPS]->(:YouElement)-[:IN_APP]->(:YouApp)         ← steps subconscientes tocan elementos
+ *   (:YouMcpMap)-[:KNOWS]->(:YouElement), (:YouMcpMap)-[:MAPS]->(:YouApp) ← el mapa MCP de cada app
+ *   (:YouWorkflow)-[:USES_APP]->(:YouApp)
+ *
+ * SEPARACIÓN DE DATOS: esta app comparte cuenta/instancia Aura con OTRO backend, así que TODOS sus
+ * nodos usan labels con prefijo `You` propios (nunca `:Workflow`/`:App` a secas) y además marcan
+ * `source: '$SOURCE'`. Así ambas implementaciones conviven en la misma instancia sin que un MERGE
+ * de una toque los nodos de la otra. Para ver/limpiar solo lo de la app:
+ *   `MATCH (n) WHERE n.source = 'you-android' RETURN n`
  *
  * Igual que CloudSync: OFFLINE-FIRST. El disco local sigue siendo la fuente en caliente; el grafo se
  * actualiza en background (push al guardar, sync completo al arrancar) y NUNCA lanza. Si no hay
  * credenciales configuradas (URI/usuario/contraseña de Aura en la app), la capa queda en silencio.
  */
 object KnowledgeGraph {
+
+    /** Marca de origen en cada nodo: divide los datos de esta app de los del backend en la misma cuenta. */
+    private const val SOURCE = "you-android"
 
     /** Credenciales en caliente (las lee de prefs vía GraphApp): (uri, user, password). */
     @Volatile var credentials: () -> Triple<String, String, String> = { Triple("", "", "") }
@@ -44,13 +53,15 @@ object KnowledgeGraph {
         runCatching {
             cypher(
                 """
-                MERGE (a:App {pkg: ${'$'}app})
-                MERGE (m:McpMap {name: ${'$'}name})
-                SET m.description = ${'$'}description
+                MERGE (a:YouApp {pkg: ${'$'}app})
+                SET a.source = ${'$'}source
+                MERGE (m:YouMcpMap {name: ${'$'}name})
+                SET m.description = ${'$'}description, m.source = ${'$'}source
                 MERGE (m)-[:MAPS]->(a)
                 WITH m, a
                 UNWIND ${'$'}elements AS label
-                MERGE (e:Element {label: label, app: ${'$'}app})
+                MERGE (e:YouElement {label: label, app: ${'$'}app})
+                SET e.source = ${'$'}source
                 MERGE (e)-[:IN_APP]->(a)
                 MERGE (m)-[:KNOWS]->(e)
                 """.trimIndent(),
@@ -58,6 +69,7 @@ object KnowledgeGraph {
                     put("app", tool.app)
                     put("name", tool.name)
                     put("description", tool.description)
+                    put("source", SOURCE)
                     putJsonArray("elements") { tool.elements.forEach { add(it) } }
                 },
             )
@@ -71,27 +83,30 @@ object KnowledgeGraph {
         runCatching {
             cypher(
                 """
-                MERGE (w:Workflow {name: ${'$'}name})
-                SET w.description = ${'$'}description, w.source = ${'$'}source
+                MERGE (w:YouWorkflow {name: ${'$'}name})
+                SET w.description = ${'$'}description, w.taughtBy = ${'$'}taughtBy, w.source = ${'$'}source
                 WITH w
-                OPTIONAL MATCH (w)-[:HAS_STEP]->(old:Step)
+                OPTIONAL MATCH (w)-[:HAS_STEP]->(old:YouStep)
                 DETACH DELETE old
                 WITH DISTINCT w
                 UNWIND ${'$'}steps AS st
-                MERGE (a:App {pkg: st.app})
-                CREATE (s:Step {order: st.order, action: st.action, subconscious: st.subconscious, note: st.note})
+                MERGE (a:YouApp {pkg: st.app})
+                SET a.source = ${'$'}source
+                CREATE (s:YouStep {order: st.order, action: st.action, subconscious: st.subconscious, note: st.note, source: ${'$'}source})
                 MERGE (w)-[:HAS_STEP]->(s)
                 MERGE (s)-[:IN_APP]->(a)
                 MERGE (w)-[:USES_APP]->(a)
                 FOREACH (_ IN CASE WHEN st.target <> '' THEN [1] ELSE [] END |
-                  MERGE (e:Element {label: st.target, app: st.app})
+                  MERGE (e:YouElement {label: st.target, app: st.app})
+                  SET e.source = ${'$'}source
                   MERGE (e)-[:IN_APP]->(a)
                   MERGE (s)-[:TAPS]->(e))
                 """.trimIndent(),
                 buildJsonObject {
                     put("name", wf.name)
                     put("description", wf.description)
-                    put("source", wf.source)
+                    put("taughtBy", wf.source)
+                    put("source", SOURCE)
                     putJsonArray("steps") {
                         wf.steps.forEachIndexed { i, s ->
                             addJsonObject {
@@ -109,7 +124,7 @@ object KnowledgeGraph {
             // La cadena temporal del flujo: step 1 → step 2 → … (primero a, después b, después c).
             cypher(
                 """
-                MATCH (w:Workflow {name: ${'$'}name})-[:HAS_STEP]->(s:Step)
+                MATCH (w:YouWorkflow {name: ${'$'}name})-[:HAS_STEP]->(s:YouStep)
                 WITH s ORDER BY s.order
                 WITH collect(s) AS ss
                 UNWIND range(0, size(ss) - 2) AS i
@@ -129,8 +144,8 @@ object KnowledgeGraph {
         runCatching {
             cypher(
                 """
-                MATCH (w:Workflow {name: ${'$'}name})
-                OPTIONAL MATCH (w)-[:HAS_STEP]->(s:Step)
+                MATCH (w:YouWorkflow {name: ${'$'}name})
+                OPTIONAL MATCH (w)-[:HAS_STEP]->(s:YouStep)
                 DETACH DELETE w, s
                 """.trimIndent(),
                 buildJsonObject { put("name", name) },

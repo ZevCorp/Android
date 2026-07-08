@@ -109,10 +109,10 @@ object Updater {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT)
         nm.notify(NOTIF_ID, Notification.Builder(context, CHANNEL)
             .setSmallIcon(android.R.drawable.stat_sys_download_done)
-            .setContentTitle("Hay una nueva versión de Graph 🚀")
-            .setContentText("Graph ${r.versionName} · toca para actualizar")
+            .setContentTitle("Hay una nueva versión de Ü 🚀")
+            .setContentText("Ü ${r.versionName} · toca para actualizar")
             .setStyle(Notification.BigTextStyle().bigText(
-                "Graph ${r.versionName} disponible.${if (r.notes.isNotBlank()) "\n${r.notes}" else ""}\nToca para actualizar."))
+                "Ü ${r.versionName} disponible.${if (r.notes.isNotBlank()) "\n${r.notes}" else ""}\nToca para actualizar."))
             .setAutoCancel(true)
             .setContentIntent(open)
             .build())

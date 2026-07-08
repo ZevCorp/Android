@@ -77,13 +77,17 @@ menos un workflow que se ejecute 100 % subconsciente de principio a fin.
 **Esperado:**
 - Logs: `[neo4j] 🕸 grafo sincronizado: X mapas MCP + Y workflows` (y `🕸 … proyectado` en cada
   aprendizaje nuevo).
-- En Neo4j Browser, este Cypher dibuja el conocimiento:
+- En Neo4j Browser, este Cypher dibuja el conocimiento de la app (labels con prefijo `You`):
   ```cypher
-  MATCH p = (w:Workflow)-[:HAS_STEP]->(:Step)-[r]->()
+  MATCH p = (w:YouWorkflow)-[:HAS_STEP]->(:YouStep)-[r]->()
   RETURN p LIMIT 100
   ```
-  Modelo: `(:Workflow)-[:HAS_STEP]->(:Step)-[:NEXT]->(:Step)`, `(:Step)-[:TAPS]->(:Element)`,
-  `(:McpMap)-[:KNOWS]->(:Element)-[:IN_APP]->(:App)`, `(:Workflow)-[:USES_APP]->(:App)`.
+  Modelo: `(:YouWorkflow)-[:HAS_STEP]->(:YouStep)-[:NEXT]->(:YouStep)`, `(:YouStep)-[:TAPS]->(:YouElement)`,
+  `(:YouMcpMap)-[:KNOWS]->(:YouElement)-[:IN_APP]->(:YouApp)`, `(:YouWorkflow)-[:USES_APP]->(:YouApp)`.
+- **Separación del backend**: la app comparte la MISMA instancia Aura que tu backend, sin interferir:
+  todos sus nodos llevan labels `You*` propios y `source: 'you-android'`. Para ver solo lo de la app:
+  `MATCH (n) WHERE n.source = 'you-android' RETURN count(n)`. El backend, con sus propios labels,
+  queda intacto (ningún MERGE de la app toca sus nodos).
 
 ### Prueba 6 — Resiliencia ante la sobrecarga de Google
 

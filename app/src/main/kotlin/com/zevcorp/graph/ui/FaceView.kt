@@ -111,9 +111,17 @@ class FaceView(context: Context) : View(context) {
                 0f, 0f, width.toFloat(), height.toFloat(),
                 Palette.faceFillTop, Palette.faceFillBottom, Shader.TileMode.CLAMP)
             canvas.drawPath(squirclePath(cx, cy, r), fill)
-            border.color = Palette.faceBorder
-            border.strokeWidth = 1.5f * s
-            canvas.drawPath(squirclePath(cx, cy, r), border)
+            if (Palette.mode == ThemeMode.DARK) {
+                // Línea blanca extremadamente delgada, separada del borde hacia adentro lo mismo que su grosor.
+                val hairline = 0.35f * s
+                border.color = Color.WHITE
+                border.strokeWidth = hairline
+                canvas.drawPath(squirclePath(cx, cy, r - hairline * 1.5f), border)
+            } else {
+                border.color = Palette.faceBorder
+                border.strokeWidth = 1.5f * s
+                canvas.drawPath(squirclePath(cx, cy, r), border)
+            }
         } else {
             // Sin relleno: dibuja el contorno del rostro con la misma línea (negra) para que se lea.
             border.color = Palette.faceLine

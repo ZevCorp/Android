@@ -15,7 +15,7 @@ import android.widget.TextView
 enum class ThemeMode { LIGHT, DARK, TRANSPARENT }
 
 /**
- * Tokens de diseño de Graph. Tres modos que se alternan tocando la carita del cuadro de diálogo:
+ * Tokens de diseño de Ü. Tres modos que se alternan tocando la carita del cuadro de diálogo:
  * CLARO (cara blanca · fondo blanco), OSCURO (cara oscura · fondo negro) y TRANSPARENCIA (relleno de
  * la cara transparente, líneas negras). El acento es siempre el OPUESTO del fondo, de modo que el
  * contraste es siempre blanco↔negro. Nunca hay azul.
@@ -49,7 +49,7 @@ object Palette {
     /* ---------- La cara (FaceView) ---------- */
     val faceLine: Int get() = if (dark) WHITE else BLACK
     val faceFillTop: Int get() = if (dark) 0xFF1A1A1A.toInt() else WHITE
-    val faceFillBottom: Int get() = if (dark) BLACK else 0xFFEFEFEF.toInt()
+    val faceFillBottom: Int get() = if (dark) BLACK else WHITE
     val faceBorder: Int get() = if (dark) 0x33FFFFFF else 0x1F000000
     val faceTransparent: Boolean get() = mode == ThemeMode.TRANSPARENT
 

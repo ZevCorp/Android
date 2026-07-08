@@ -50,21 +50,23 @@ Hay **dos modos** de enseñanza, separados a propósito:
 
 Actívala/desactívala desde el botón **"Aprendizaje pasivo"** de la **app principal** (antes estaba en la burbuja). No hay barra, ni botón de detener, ni popups, ni iluminación: usas el teléfono **con normalidad** y el asistente solo observa — captura el **árbol de UI completo** y tus **clics como señales de valor**. Cuando **sales de una app** (o apagas el modo), estructura lo observado como herramienta MCP con criterio estricto: **solo guarda lo que entendió con certeza muy alta y tiene valor real según tus clics**; si la app ya tenía mapa, lo **refina** en vez de duplicarlo.
 
+Mientras observa, el asistente también puede **intervenir por voz por iniciativa propia** (proponer ayuda, preguntar una duda valiosa, o callar — el default). Esa decisión está **conectada a tu knowledge-base personal**: si le diste una instrucción como *"cada vez que estemos en WhatsApp y un usuario me pida una mejora, propón hacerla tú"*, al ver ese escenario en vivo te lo **propone por voz** y, si aceptas, **lo ejecuta**. Es un mindset propositivo (detectar en tiempo real algo que te ahorraría tiempo), distinto del "amigo prevenido" de después de cada ejecución (proteger la acción recién hecha).
+
 **Mantén oprimido el 🎓** de la burbuja para ver lo que ya sabe: se iluminan los contornos de todos los elementos ya trackeados en MCPs de la app visible, y el overlay se actualiza mientras navegas a otras apps. Vuelve a mantenerlo oprimido para ocultarlo. (Esto no cambió.)
 
 ### Enseñanza ACTIVA (el 🎓 de la burbuja, al tocarlo — compartir pantalla)
 
 **Toca el 🎓** de la burbuja para iniciar la enseñanza **activa**: se **comparte la pantalla** (se graba video **y audio**) y le enseñas al asistente hablándole mientras le muestras cosas. Vuelve a tocar el 🎓 (o la acción de la notificación) para **terminar**. Al terminar, **todo el video se procesa con Gemini** y se estructura como **conocimiento textual por app** en la capa MCP (la memoria durable / knowledge-base): p.ej. *"el contacto de mi mamá en WhatsApp se llama 'Ale', no 'mamá'"*. Cuando después el asistente vaya a **usar esa app**, consume **fielmente** ese contexto completo.
 
-Como el micrófono está ocupado grabando, si al procesar el video queda algo por confirmar, el asistente te lo **pregunta por voz al terminar** (igual que puede preguntarte durante la enseñanza pasiva), y tu respuesta también se guarda.
+Como el micrófono está ocupado grabando, si al procesar el video queda algo por confirmar, el asistente te lo **pregunta por voz al terminar** (igual que puede preguntarte durante la enseñanza pasiva) y abre su popup para que respondas por texto o con el micrófono del popup; tu respuesta también se guarda.
 
 > **Fase 1 (esta versión):** la enseñanza activa **aún no** estructura el árbol de UI — guarda **solo texto** de cómo usar las apps en la knowledge-base MCP. El árbol de UI llegará después.
 
-Mientras el modo está activo, el asistente puede **intervenir por voz por iniciativa propia**, con una cadena de pensamiento corta que decide entre tres: **proponer ayuda** con algo concreto y pendiente que ve en pantalla ("veo que te escribieron, ¿quieres que te ayude con eso?" — si aceptas, lo ejecuta), **preguntar** una duda genuinamente útil (se guarda como memoria durable de esa app), o **quedarse callado** (el default). Siempre que interviene por voz, respondes con el **micrófono sticky** que aparece bajo la carita.
+Mientras el modo está activo, el asistente puede **intervenir por voz por iniciativa propia**, con una cadena de pensamiento corta que decide entre tres: **proponer ayuda** con algo concreto y pendiente que ve en pantalla, **preguntar** una duda genuinamente útil (se guarda como memoria durable de esa app), o **quedarse callado** (el default). La decisión corre **sin thinking del modelo** (el razonamiento es el propio campo del JSON) para que la propuesta llegue en segundos, y siempre **nombra su referente concreto** ("en ese chat con Julián veo que te pidió X, ¿quieres que lo haga yo?") — así la entiendes aunque ya hayas cambiado de pantalla. Le respondes por **cualquier vía de siempre** — tocar la carita y usar el texto o el micrófono del panel, las esquinas — porque lo que propuso queda como **contexto pendiente del hilo unificado**: un "sí, hazlo" ejecuta exactamente esa tarea. (El micrófono sticky flotante que aparecía bajo la carita se eliminó: nadie lo usaba.)
 
-**Durante la ejecución** el motor pregunta ante la **mínima duda** sobre datos que solo tú sabes ("¿cuál es el chat de Sebastián?"). Si respondes esa duda con el micrófono sticky, se enciende la **escucha en tiempo real por el resto de esa ejecución** (todo lo que digas se suma al objetivo); se apaga al terminar o tocando la burbuja. Es el único caso donde ese modo se enciende fuera de las esquinas.
+**Durante la ejecución** el motor pregunta ante la **mínima duda** sobre datos que solo tú sabes ("¿cuál es el chat de Sebastián?"). Si respondes esa duda por voz ("Responder con voz" en el popup), se enciende la **escucha en tiempo real por el resto de esa ejecución** (todo lo que digas se suma al objetivo); se apaga al terminar o tocando la burbuja. Es el único caso donde ese modo se enciende fuera de las esquinas.
 
-**Voz por esquinas.** Arrastra la burbuja **con el dedo** hasta una esquina superior y **mantenla ahí ~2.5 s**: eso enciende la escucha permanente (transcripción → destilador de intención → motor). Lanzarla de un flick a la esquina **no** activa la voz — hace falta el dedo sostenido, que es la señal de intención clara. Sacas la burbuja de la esquina para apagarla.
+**Modo reunión (esquinas).** Arrastra la burbuja **con el dedo** hasta una esquina superior y **mantenla ahí ~2.5 s**: Ü entra a la reunión como un integrante más y escucha la conversación de corrido — sirve igual para una sola persona dictando órdenes que para varias personas desarrollando ideas. Cada fragmento pasa por el **cerebro de reunión** (`MeetingBrain`), que decide su jugada: **tomar nota** de lo importante, **lanzar una construcción en paralelo** cuando se define algo ("probemos X" → crear repo en GitHub, abrir Claude → Code, sesión nueva con el repo y un prompt detallado que construya el MVP; la escucha nunca se detiene mientras el motor trabaja), **hablar solo si le hablan**, o **detectar el cierre** de la reunión e intervenir por voz: resume las notas, muestra lo que construyó con una demo narrada sección por sección e invita a pedir cambios de una vez. Todo queda en `files/meetings/reunion_<fecha>.md` (notas + tareas + transcripción). Lanzarla de un flick a la esquina **no** activa el modo — hace falta el dedo sostenido. Sacar la burbuja de la esquina termina la reunión.
 
 **En ejecución** la herramienta aprendida es generalista: su descripción documenta los grupos de elementos y cómo componerlos, y el modelo pasa `taps` con la secuencia que necesite (`calculadora(taps="5,+,7,+,8,=")`) — cualquier cálculo, no solo el que vio. Se reproduce por árbol de UI, sin imagen. La **barra de velocidad** de la app principal ajusta la pausa entre esos steps. La carita además **parpadea al cambiar de vía**: 1 vez al pasar a ejecución consciente (computer-use con screenshots), 2 veces al pasar a subconsciente (MCP).
 
@@ -92,6 +94,17 @@ El asistente está inspirado en el ser humano: ejecutando **una misma tarea** pu
   conocimiento (mapas MCP, elementos, workflows y sus steps) se proyecta como grafo navegable.
   Plan de pruebas conjunto en `TESTING.md`.
 
+## Tu cuenta: dos capas de conocimiento, dos dueños
+
+El asistente mejora con el uso por dos vías **separadas a propósito**, y el inicio de sesión (tarjeta **"Tu cuenta"** de la app, email + contraseña) es la frontera entre ambas:
+
+- **El mapa de UI de las apps es TRANSVERSAL** (`graph_learned_tools`): si un usuario le enseña la calculadora o WhatsApp, ese entendimiento del árbol de UI les sirve a **todos** los usuarios. Cualquiera lo lee (con o sin cuenta); **aportar** aprendizajes nuevos requiere sesión.
+- **La knowledge-base personal es SOLO TUYA** (`graph_memory`, la memoria durable): cosas como *"mi mamá está guardada como 'Ale' en WhatsApp"* o *"soy desarrollador: ayúdame con las tareas de desarrollo entrantes"* pertenecen a tu **cuenta**. En el servidor lo garantiza RLS por `user_id`: nadie más puede leerlas, ni siquiera con la key pública de la app.
+
+Sin sesión el asistente funciona igual, pero tus recuerdos viven **solo en ese teléfono** (archivo anónimo local). Al iniciar sesión, esas notas anónimas se **adoptan a tu cuenta** (se suben y te siguen entre teléfonos y reinstalaciones); al cerrar sesión, el motor deja de inyectarlas y tu memoria queda a salvo en la nube. Localmente cada cuenta tiene su propio archivo (`memory-<userId>.json`), así que varios usuarios en un mismo teléfono no se mezclan.
+
+El registro crea la cuenta al instante (sin confirmación por correo) vía la Edge Function `graph-signup`.
+
 ## Las dos vías, un solo cerebro
 
 `GeminiBrain` declara al modelo, en el mismo turno, la herramienta nativa `computer_use` **y** las herramientas MCP como funciones. Cuando el modelo llama una función MCP → `Mcp.call()`; cuando usa computer-use → primitivas de `Phone`. El bucle vive en `ExecutionEngine` (core).
@@ -102,7 +115,7 @@ Mientras el asistente ejecuta aparece un **micrófono casi invisible** abajo. Si
 
 ## El amigo prevenido (anticipación)
 
-Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, `set_volume alarm 100`); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible.
+Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. (Mindset **protector** de la acción recién ejecutada — p.ej. alarma puesta → subir el volumen. El mindset **propositivo** en tiempo real vive en el aprendizaje pasivo, arriba.) Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, `set_volume alarm 100`); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible.
 
 ## La burbuja flotante
 

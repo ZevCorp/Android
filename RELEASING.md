@@ -62,6 +62,21 @@ service role puede escribir).
 servidor y hace upsert de la fila con la service role. Endpoint:
 `https://zyvfamlhlmztliexvmej.supabase.co/functions/v1/publish-release`
 
+### Cuentas y capas de conocimiento (Supabase Auth)
+
+- **Registro**: Edge Function **`graph-signup`** (`verify_jwt = false`) — crea la cuenta **ya
+  confirmada** con la service role (el proyecto exige confirmación por email para la otra app que
+  vive aquí, pero Graph no la necesita) y la marca con `user_metadata {app:"graph"}`. El trigger
+  `private.handle_new_user` **omite** a estos usuarios (no les crea perfil clínico ni organización).
+- **Login**: grant de contraseña normal de GoTrue (`/auth/v1/token?grant_type=password`), con
+  refresh automático en el cliente (`SupabaseAuth.kt`).
+- **Tabla `graph_memory`** (knowledge-base PERSONAL): columnas `id`, `user_id` (default
+  `auth.uid()`), `app`, `note`, `updated_at`; unique `(user_id, note)`. **RLS: solo el dueño** lee y
+  escribe sus filas. Las filas antiguas de antes de las cuentas quedaron con `user_id null`
+  (invisibles por la API).
+- **Tabla `graph_learned_tools`** (mapa de UI, TRANSVERSAL): RLS con **lectura pública** (anon y
+  autenticados) y **escritura solo autenticada** — todos se benefician, aportar pide cuenta.
+
 ### Token de administrador (SECRETO)
 
 ```
@@ -73,11 +88,38 @@ cambiarlo: edita la constante y vuelve a desplegar la función (`deploy_edge_fun
 
 ---
 
+## 3b. Play Protect y la instalación en teléfonos de usuarios
+
+Graph es sideloaded y usa accesibilidad + overlay + micrófono: exactamente el perfil que Play
+Protect mira con lupa. Para que la instalación sea lo más confiable posible:
+
+**Del lado del desarrollador (ya aplicado en el build):**
+- **Distribuir SIEMPRE el build `release`** (`gradle :app:assembleRelease`), nunca `app-debug.apk`:
+  un APK `debuggable` sideloaded es lo primero que Play Protect bloquea. El release se firma con la
+  misma clave compartida, así que actualiza sin problema sobre instalaciones previas.
+- Sin ofuscación (`isMinifyEnabled = false`): el código ofuscado puntúa PEOR en el análisis.
+- `versionCode` siempre creciente y firma estable (misma `graph-release.jks`).
+- Si Play Protect marca la app aun así, existe el **formulario de apelación oficial** para apps
+  distribuidas fuera de Play (busca "Play Protect appeals form" en la documentación de Google Play);
+  Google la analiza y deja de marcarla para todos los usuarios. La solución definitiva a futuro:
+  publicarla en Play Console como **prueba cerrada/interna** — firmada y distribuida por Google, las
+  advertencias desaparecen.
+
+**Lo que ve el usuario al instalar (guía para compartirles):**
+1. Al abrir el APK, Android pide permitir "instalar apps desconocidas" para esa app (Chrome,
+   WhatsApp, Files…): **Permitir** solo esta vez.
+2. Si Play Protect muestra "App no segura" / "Se bloqueó la instalación": tocar **"Más detalles"** →
+   **"Instalar de todas formas"**. Si ofrece "enviar la app para su análisis", mejor: tras el
+   análisis, Google suele dejar de advertir.
+3. En Android 13+ el sistema puede bloquear la activación de accesibilidad para apps sideloaded
+   ("Ajuste restringido"): ir a **Ajustes → Apps → Graph → ⋮ (arriba a la derecha) → "Permitir
+   ajustes restringidos"**, y luego sí activar el servicio de accesibilidad.
+
 ## 4. Lanzar una versión nueva (paso a paso)
 
 1. **Sube el número de versión** en `app/build.gradle.kts`: incrementa `versionCode` (entero) y
    `versionName`. El `versionCode` DEBE ser mayor al publicado.
-2. **Compila el APK** (ver §5). Sale firmado con la clave fija.
+2. **Compila el APK RELEASE** (ver §5; `assembleRelease`, no debug). Sale firmado con la clave fija.
 3. **Sube el APK al bucket `apks`** desde el panel de Supabase (Storage → `apks` → Upload). Nombre
    sugerido: `graph-<versionCode>.apk` (p.ej. `graph-23.apk`). Copia su URL pública.
 4. **Publica desde la app** (como admin): en la tarjeta **"Actualizaciones"** mantén oprimido el
@@ -114,8 +156,9 @@ yes | ./latest/bin/sdkmanager --sdk_root=$ANDROID_SDK_ROOT --licenses
 # 2) Build (el wrapper puede fallar al bajar Gradle; usa el gradle del sistema si existe: /opt/gradle/bin/gradle)
 cd <repo>
 printf 'sdk.dir=/root/android-sdk\n' > local.properties
-gradle :app:assembleDebug --no-daemon    # o ./gradlew si el wrapper funciona
-# APK: app/build/outputs/apk/debug/app-debug.apk
+gradle :app:assembleRelease --no-daemon  # o ./gradlew si el wrapper funciona
+# APK: app/build/outputs/apk/release/app-release.apk  ← este es el que se distribuye
+# (assembleDebug solo para desarrollo; NUNCA distribuir app-debug.apk a usuarios)
 ```
 
 Verifica la firma (debe decir `CN=Graph, O=ZevCorp`):
