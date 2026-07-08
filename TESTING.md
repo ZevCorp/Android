@@ -71,8 +71,12 @@ menos un workflow que se ejecute 100 % subconsciente de principio a fin.
 
 ### Prueba 5 — El grafo de conocimiento (Neo4j)
 
-1. Crea una instancia gratis en **Neo4j AuraDB** (console.neo4j.io) y copia URI, usuario y contraseña.
-2. Pégalas en la card de configuración de la app y toca **Guardar keys**.
+**Ya incrustado desde v0.33**: las credenciales de la instancia Aura compartida (`fafa1415`) vienen
+horneadas en el APK — no hace falta configurar nada, la app se conecta sola. Verificado por fuera de
+la app (smoke test directo contra Aura): un push namespaced con `You*`/`source=you-android` no movió
+ni un nodo de los labels del backend (`Workflow`/`Step`/`SurfaceProfile`); los nodos de prueba se
+limpiaron después. Si quieres apuntar a OTRA instancia, la card de configuración sigue disponible y
+lo que pongas ahí manda sobre lo incrustado.
 
 **Esperado:**
 - Logs: `[neo4j] 🕸 grafo sincronizado: X mapas MCP + Y workflows` (y `🕸 … proyectado` en cada
