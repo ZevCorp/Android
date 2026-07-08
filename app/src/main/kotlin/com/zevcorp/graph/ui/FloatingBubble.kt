@@ -280,6 +280,36 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         snapTo(cornerX(left), service.dp(6))
     }
 
+    /* ---------- Anclaje al centro superior mientras la app está abierta ---------- */
+
+    private var preAppDockX = -1
+    private var preAppDockY = -1
+    private var appDocked = false
+
+    /** La app (MainActivity) pasó a primer plano: la burbuja se posiciona al centro superior,
+     * despierta a tamaño completo y no se encoge ni pasea mientras dure. Recuerda de dónde venía. */
+    fun dockToApp() {
+        if (appDocked) return
+        appDocked = true
+        preAppDockX = bubbleParams.x
+        preAppDockY = bubbleParams.y
+        wanderJob?.cancel()
+        idleJob?.cancel()
+        if (shrunk) animateScale(1f, idleGrow)
+        val m = service.resources.displayMetrics
+        val destX = (m.widthPixels - bubbleParams.width) / 2
+        val destY = service.dp(150) // debajo de la barra de estado y del botón nube, encima de la barra de texto
+        snapTo(destX, destY, dur = 420, interp = idleGrow)
+    }
+
+    /** La app volvió a segundo plano: la burbuja regresa a donde estaba y reanuda su reposo normal. */
+    fun undockFromApp() {
+        if (!appDocked) return
+        appDocked = false
+        if (preAppDockX >= 0) snapTo(preAppDockX, preAppDockY, dur = 320)
+        scheduleIdleShrink()
+    }
+
     /** Animación de encaje hacia un punto (esquinas, regreso tras ejecutar, paseo en reposo). */
     private fun snapTo(destX: Int, destY: Int, dur: Long = 220, interp: android.view.animation.Interpolator? = null) {
         val fromX = bubbleParams.x; val fromY = bubbleParams.y

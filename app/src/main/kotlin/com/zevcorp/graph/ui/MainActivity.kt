@@ -20,6 +20,7 @@ import android.widget.SeekBar
 import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
+import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.Release
 import com.zevcorp.graph.platform.Updater
@@ -463,8 +464,13 @@ class MainActivity : Activity(), UserChannel {
         dialog.show()
     }
 
+    /** La burbuja flotante de la accesibilidad (null si el servicio no está activo). */
+    private fun bubble() = (app.ui as? GraphAccessibilityService)?.bubble
+
     override fun onResume() {
         super.onResume()
+        // La app pasó a primer plano: la carita se posiciona al centro superior de la pantalla.
+        bubble()?.dockToApp()
         // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
         // colores nuevos (blanco/negro coherente con la carita).
         if (builtWithMode != Palette.mode) { recreate(); return }
@@ -474,6 +480,13 @@ class MainActivity : Activity(), UserChannel {
             return
         }
         if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // La app pasó a segundo plano (incluye moveTaskToBack al ejecutar algo): la carita
+        // regresa a donde estaba y reanuda su reposo normal.
+        bubble()?.undockFromApp()
     }
 
     /** Íconos de la barra de estado/navegación: oscuros sobre fondo claro, claros sobre fondo oscuro. */
