@@ -564,10 +564,21 @@ class MainActivity : Activity(), UserChannel {
     /** La burbuja flotante de la accesibilidad (null si el servicio no está activo). */
     private fun bubble() = (app.ui as? GraphAccessibilityService)?.bubble
 
+    /** Punto donde se asienta la carita pequeña: el inicio de la barra de texto (sobre su borde). */
+    private fun dockFaceToBar() {
+        val bar = cloudBar ?: return
+        bar.post {
+            val loc = IntArray(2)
+            bar.getLocationOnScreen(loc)
+            bubble()?.dockToBar(loc[0] + dp(12), loc[1] + bar.height / 2)
+        }
+    }
+
     override fun onResume() {
         super.onResume()
-        // La app pasó a primer plano: la carita se posiciona al centro superior de la pantalla.
-        bubble()?.dockToApp()
+        // La app pasó a primer plano: en la vista principal la carita se asienta pequeña al inicio
+        // de la barra (ahí es el micrófono); en las otras vistas, arriba al centro.
+        if (mode == MODE_CLOUD) dockFaceToBar() else bubble()?.dockToApp()
         // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
         // colores nuevos (blanco/negro coherente con la carita).
         if (builtWithMode != Palette.mode) { recreate(); return }
@@ -887,7 +898,14 @@ class MainActivity : Activity(), UserChannel {
             if (show != imeShown) {
                 imeShown = show
                 bar.animate().cancel()
-                bar.animate().translationY(if (show) -overlap * 0.5f else 0f).setDuration(230).start()
+                bar.animate().translationY(if (show) -overlap * 0.5f else 0f).setDuration(230)
+                    .withEndAction {
+                        // La carita asentada al inicio de la barra la sigue en su nueva altura.
+                        val loc = IntArray(2)
+                        bar.getLocationOnScreen(loc)
+                        bubble()?.trackBar(loc[0] + dp(12), loc[1] + bar.height / 2)
+                    }
+                    .start()
             }
             insets
         }
@@ -902,35 +920,30 @@ class MainActivity : Activity(), UserChannel {
     }
 
     /**
-     * La barra de escritura estilo "vidrio" (glassmorphism), idéntica al diseño: una píldora
-     * translúcida azul-claro (blanco en gradiente sobre el cielo) con borde blanco sutil y sombra
-     * suave. Es funcional: crece hasta 3 líneas al escribir, texto y micrófono blancos, y el botón
-     * enviar (blanco) aparece solo cuando hay texto. Sin pop-up de voz (SpeechRecognizer en-app).
+     * La barra de escritura "liquid glass", calcada del diseño (LiquidGlassDrawable: mitad superior
+     * lechosa, cuerpo transparente y luz de rebote abajo). Sin botón de micrófono: la carita
+     * flotante se asienta pequeña al INICIO de la barra (dockToBar) y hace de micrófono al tocarla.
+     * Funcional: crece hasta 3 líneas al escribir; el botón enviar (blanco) aparece solo con texto.
      */
     private fun buildCloudBar(): View {
-        val radius = dp(30).toFloat()
         val container = android.widget.FrameLayout(this).apply {
-            // Vidrio: gradiente vertical de blanco translúcido (más denso arriba) sobre el cielo azul.
-            background = android.graphics.drawable.GradientDrawable(
-                android.graphics.drawable.GradientDrawable.Orientation.TOP_BOTTOM,
-                intArrayOf(0x8CFFFFFF.toInt(), 0x70FFFFFF.toInt(), 0x45FFFFFF.toInt())).apply {
-                cornerRadius = radius
-                setStroke(dp(1), 0x99FFFFFF.toInt())
-            }
-            // Sombra suave con el contorno redondeado (la píldora "flota" sobre el cielo).
-            elevation = dp(9).toFloat()
+            background = LiquidGlassDrawable(dp(32).toFloat(), dp(2).toFloat() * 0.75f)
+            // Sombra suave bajo la píldora (el contorno sigue al alto real: cápsula hasta 3 líneas).
+            elevation = dp(10).toFloat()
             outlineProvider = object : android.view.ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    outline.setRoundRect(0, 0, view.width, view.height, radius)
+                    val r = minOf(view.height / 2f, dp(32).toFloat())
+                    outline.setRoundRect(0, 0, view.width, view.height, r)
                 }
             }
-            setPadding(dp(26), dp(15), dp(14), dp(15))
+            // El padding izquierdo deja el hueco donde se asienta la carita pequeña (el "mic").
+            setPadding(dp(48), dp(17), dp(18), dp(17))
         }
 
         val bar = row()
         val input = EditText(this).apply {
             hint = "¿Qué puedo hacer hoy por ti?"
-            setHintTextColor(0xE6FFFFFF.toInt())
+            setHintTextColor(0xF2FFFFFF.toInt())
             setTextColor(Color.WHITE)
             setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x33203040)
             textSize = 16f
@@ -952,25 +965,19 @@ class MainActivity : Activity(), UserChannel {
             runPrompt(p)
         }
 
-        // Íconos blancos: mic permanente (sutil) a la derecha ⇄ enviar cuando hay texto.
+        // Enviar (blanco), solo cuando hay texto. El micrófono ya no existe: lo reemplaza la carita.
         val g = dp(40)
-        val mic = IconView(this, Icon.MIC, tint = Color.WHITE, shadow = true).apply {
-            alpha = 0.9f; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { startVoice() }
-        }
         val send = IconView(this, Icon.SEND, tint = Color.WHITE, shadow = true).apply {
             visibility = View.GONE; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { submit() }
         }
         val slot = android.widget.FrameLayout(this)
-        slot.addView(mic, android.widget.FrameLayout.LayoutParams(g, g))
         slot.addView(send, android.widget.FrameLayout.LayoutParams(g, g))
 
         input.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
-                val typing = !s.isNullOrBlank()
-                send.visibility = if (typing) View.VISIBLE else View.GONE
-                mic.visibility = if (typing) View.GONE else View.VISIBLE
+                send.visibility = if (s.isNullOrBlank()) View.GONE else View.VISIBLE
             }
         })
 

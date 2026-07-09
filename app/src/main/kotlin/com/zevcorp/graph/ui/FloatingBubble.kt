@@ -115,6 +115,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 execLive -> stopExecLive()
                 // Durante la escucha por esquina: el toque termina la grabación y procesa.
                 voiceDock.listening -> voiceDock.stopNow()
+                // Pequeña al inicio de la barra de la app: UN toque = sube grande y es el micrófono.
+                appDocked && atBar -> flyUpAndListen()
                 // Estado normal: gestos por número de toques (1 menú · 2 micrófono · 3 tema).
                 else -> onBubbleTap()
             }
@@ -136,12 +138,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     /** Reinicia el temporizador de reposo; si estaba encogida, la agranda de nuevo. */
     private fun wake() {
+        if (appDocked) return // anclada a la app: su tamaño y posición los gobierna la app
         wanderJob?.cancel()
         if (shrunk) animateScale(1f, idleGrow)
         scheduleIdleShrink()
     }
 
     private fun scheduleIdleShrink() {
+        if (appDocked) return
         idleJob?.cancel()
         idleJob = scope.launch {
             delay(15_000) // ~15 s sin usarla → se encoge para no estorbar
@@ -280,33 +284,91 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         snapTo(cornerX(left), service.dp(6))
     }
 
-    /* ---------- Anclaje al centro superior mientras la app está abierta ---------- */
+    /* ---------- Anclaje a la app: pequeña al inicio de la barra de texto; un toque = micrófono ---------- */
 
     private var preAppDockX = -1
     private var preAppDockY = -1
     private var appDocked = false
+    /** Está asentada (pequeña) al inicio de la barra de texto. */
+    private var atBar = false
+    private var barDockX = -1
+    private var barDockY = -1
 
-    /** La app (MainActivity) pasó a primer plano: la burbuja se posiciona al centro superior,
-     * despierta a tamaño completo y no se encoge ni pasea mientras dure. Recuerda de dónde venía. */
+    /** La app (MainActivity) pasó a primer plano SIN barra (vistas versus/desarrollador): la burbuja
+     * se posiciona al centro superior a tamaño completo, sin encogerse ni pasear mientras dure. */
     fun dockToApp() {
-        if (appDocked) return
+        if (appDocked && !atBar) return
+        rememberHome()
         appDocked = true
-        preAppDockX = bubbleParams.x
-        preAppDockY = bubbleParams.y
+        atBar = false
         wanderJob?.cancel()
         idleJob?.cancel()
-        if (shrunk) animateScale(1f, idleGrow)
+        animateScale(1f, idleGrow)
         val m = service.resources.displayMetrics
-        val destX = (m.widthPixels - bubbleParams.width) / 2
-        val destY = service.dp(150) // debajo de la barra de estado y del botón nube, encima de la barra de texto
-        snapTo(destX, destY, dur = 420, interp = idleGrow)
+        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 420, interp = idleGrow)
     }
 
-    /** La app volvió a segundo plano: la burbuja regresa a donde estaba y reanuda su reposo normal. */
+    /** Vista principal: la carita se hace PEQUEÑA y se asienta al inicio de la barra de texto
+     * (cx,cy = centro deseado, en coordenadas de pantalla). Ahí ES el micrófono: ver el click. */
+    fun dockToBar(cx: Int, cy: Int) {
+        rememberHome()
+        val first = !appDocked || !atBar
+        appDocked = true
+        atBar = true
+        barDockX = cx - bubbleParams.width / 2
+        barDockY = cy - bubbleParams.height / 2
+        wanderJob?.cancel()
+        idleJob?.cancel()
+        animateScale(BAR_SCALE, idleEase)
+        snapTo(barDockX, barDockY, dur = if (first) 420 else 200, interp = idleGrow)
+    }
+
+    /** Sigue a la barra si se mueve (p.ej. sube con el teclado); no hace nada si está volando/mic. */
+    fun trackBar(cx: Int, cy: Int) {
+        if (appDocked && atBar) dockToBar(cx, cy)
+    }
+
+    /** Guarda la posición "de la calle" solo al entrar al modo app (no al moverse dentro de él). */
+    private fun rememberHome() {
+        if (!appDocked) { preAppDockX = bubbleParams.x; preAppDockY = bubbleParams.y }
+    }
+
+    /** Toque estando en la barra: vuela arriba (grande) y ESCUCHA — la carita es el micrófono. */
+    private fun flyUpAndListen() {
+        atBar = false
+        val m = service.resources.displayMetrics
+        animateScale(1f, idleGrow)
+        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 380, interp = idleGrow)
+        scope.launch {
+            delay(420) // deja aterrizar la carita antes de abrir el oído
+            recognize { heard ->
+                if (heard.isNullOrBlank()) {
+                    toast("No te escuché")
+                    redockToBar()
+                } else scope.launch {
+                    runPromptAwait(heard)
+                    redockToBar() // si la app sigue abierta, vuelve a su puesto en la barra
+                }
+            }
+        }
+    }
+
+    /** Vuelve pequeña a su puesto en la barra (si la app sigue en primer plano). */
+    private fun redockToBar() {
+        if (!appDocked || barDockX < 0) return
+        atBar = true
+        animateScale(BAR_SCALE, idleEase)
+        snapTo(barDockX, barDockY, dur = 320, interp = idleGrow)
+    }
+
+    /** La app volvió a segundo plano: la burbuja recupera su tamaño y regresa a donde estaba. */
     fun undockFromApp() {
         if (!appDocked) return
         appDocked = false
-        if (preAppDockX >= 0) snapTo(preAppDockX, preAppDockY, dur = 320)
+        atBar = false
+        animateScale(1f, idleGrow)
+        // Si hay una ejecución en curso, no pelear con flyTo: el motor gobierna la posición.
+        if (!app.executing && preAppDockX >= 0) snapTo(preAppDockX, preAppDockY, dur = 320)
         scheduleIdleShrink()
     }
 
@@ -874,5 +936,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     private companion object {
         const val GESTURE_WINDOW_MS = 260L
+        /** Escala de la carita cuando está asentada al inicio de la barra de texto de la app. */
+        const val BAR_SCALE = 0.45f
     }
 }
