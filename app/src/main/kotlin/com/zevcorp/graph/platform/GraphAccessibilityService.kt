@@ -131,7 +131,12 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
      * registra en UiBugBus (panel "Bugs de UI"). No modifica el mecanismo real: solo lo re-ejecuta.
      */
     private fun probeResolved(source: AccessibilityNodeInfo, label: String) {
-        val resolved = findByLabel(label) ?: return
+        // Resolver contra el árbol DEL MOMENTO DEL CLIC (la raíz del propio nodo del evento), no contra
+        // rootInActiveWindow: si la UI cambia al instante (p.ej. Spotify), el nodo tocado sigue vivo en
+        // el snapshot del evento y la detección NO se pierde. findByLabel hace el mismo DFS que usa el
+        // agente, pero sobre la misma pantalla en la que tocaste, para que la comparación sea válida.
+        val clickRoot = generateSequence(source) { runCatching { it.parent }.getOrNull() }.last()
+        val resolved = findByLabel(clickRoot, label) ?: source
         val resolvedTarget = clickableAncestor(resolved) ?: resolved
         val resolvedRect = Rect().also { resolvedTarget.getBoundsInScreen(it) }
         // Lo que TÚ tocaste, llevado a su ancestro clickable igual que hace tapLabel al ejecutar.
@@ -140,7 +145,7 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         val isBug = resolvedRect != touchedRect
         highlighter.probe(resolvedRect, isBug)
         uiHandler.removeCallbacks(probeClear)
-        uiHandler.postDelayed(probeClear, if (isBug) 2500 else 1200)
+        uiHandler.postDelayed(probeClear, if (isBug) 3000 else 1600)
         if (isBug) {
             LogBus.log("bug-ui", "❌ \"$label\": tocaste ${touchedRect.centerX()},${touchedRect.centerY()} " +
                 "pero el agente iría a ${resolvedRect.centerX()},${resolvedRect.centerY()}")
@@ -395,8 +400,11 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         return ok
     }
 
-    private fun findByLabel(label: String): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
+    private fun findByLabel(label: String): AccessibilityNodeInfo? = findByLabel(rootInActiveWindow, label)
+
+    /** Primer nodo (en orden de árbol, DFS) cuya etiqueta coincide, buscando dentro de `root`. */
+    private fun findByLabel(root: AccessibilityNodeInfo?, label: String): AccessibilityNodeInfo? {
+        root ?: return null
         var found: AccessibilityNodeInfo? = null
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
