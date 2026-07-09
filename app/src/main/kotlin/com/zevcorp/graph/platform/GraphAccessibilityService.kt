@@ -69,16 +69,21 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 if (visualizing) refreshLearnedOverlay()
             }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                val observing = app.passive.active || app.recorder.active
+                // El diagnóstico visual (naranja/rojo) va con `visualizing` (solo mantener el 🎓, sin
+                // necesitar enseñanza activa); el diagnóstico AUTÓNOMO por LLM va con el aprendizaje
+                // pasivo, sin necesitar la visualización. Son dos gates independientes, misma señal.
+                val observing = visualizing || app.passive.active || app.recorder.active
                 if (!observing || !isRealApp(pkg) || pkg == launcherPkg) return
                 val src = event.source
                 val label = src?.let { labelOf(it) } ?: ""
                 val screenNow = currentScreen()
-                if (app.passive.active && label.isNotBlank()) {
-                    val visible = elementsNow()
-                    // Diagnóstico autónomo: ¿replicar este clic por su etiqueta caería en otro elemento?
+                if (label.isNotBlank() && (visualizing || app.passive.active)) {
+                    // detectClickMismatch decide internamente qué hacer con cada señal: destello visual
+                    // solo si `visualizing`, diagnóstico LLM solo si `app.passive.active`.
                     src?.let { runCatching { detectClickMismatch(it, pkg, screenNow) } }
-                    app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+                }
+                if (app.passive.active && label.isNotBlank()) {
+                    app.scope.launch { app.passive.signal(pkg, screenNow, label, elementsNow()) }
                 } else if (app.recorder.active) {
                     // Enseñanza activa, o clic que el árbol de UI no logró etiquetar: igual es un
                     // step del workflow (sin etiqueta quedará como paso consciente).
@@ -104,7 +109,8 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val overlayRefresh = Runnable { refreshLearnedOverlayNow() }
 
-    /** Alterna el modo: dibuja el contorno de todo elemento ya trackeado en MCPs en la app visible. */
+    /** Alterna el modo: dibuja el contorno de TODO elemento accionable que el sistema detecta en la app
+     *  visible (verde = ya aprendido/trackeado en MCPs, acento = detectado pero aún no aprendido). */
     fun toggleLearnedVisualization(): Boolean {
         visualizing = !visualizing
         if (visualizing) {
@@ -116,11 +122,14 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
             }
         } else {
             uiHandler.removeCallbacks(overlayRefresh)
+            uiHandler.removeCallbacks(probeClear)
             highlighter.hide()
         }
         LogBus.log("learn", if (visualizing) "👁 visualización de lo aprendido ON" else "visualización OFF")
         return visualizing
     }
+
+    private val probeClear = Runnable { highlighter.probe(null) }
 
     /** Debounce con cola: coalescea la ráfaga de eventos pero SIEMPRE ejecuta el último refresco,
      *  para que los recuadros terminen alineados con la UI final (scroll, animaciones, navegación). */
@@ -131,20 +140,22 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
 
     private fun refreshLearnedOverlayNow() {
         if (!visualizing) return
-        val root = rootInActiveWindow ?: return highlighter.show(emptyList())
+        val root = rootInActiveWindow ?: return highlighter.show(emptyList(), emptyList())
         val pkg = root.packageName?.toString() ?: ""
         // Mapas de esta app + mapas antiguos sin paquete (compatibilidad): se intenta igual.
         val labels = learnedLabels[pkg].orEmpty() + learnedLabels[""].orEmpty()
-        if (labels.isEmpty()) { highlighter.show(emptyList()); return }
-        val rects = mutableListOf<Rect>()
+        val learnedRects = mutableListOf<Rect>()
+        val detectedRects = mutableListOf<Rect>()
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
-            if (n.isVisibleToUser && (n.isClickable || n.isEditable) && labelOf(n).lowercase() in labels)
-                rects += Rect().also { n.getBoundsInScreen(it) }
+            if (n.isVisibleToUser && (n.isClickable || n.isEditable)) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (labelOf(n).lowercase() in labels) learnedRects += r else detectedRects += r
+            }
             for (i in 0 until n.childCount) walk(n.getChild(i))
         }
         walk(root)
-        highlighter.show(rects)
+        highlighter.show(learnedRects, detectedRects)
     }
 
     /* ---------- Estado de pantalla (georreferenciación por árbol de UI) ---------- */
@@ -397,7 +408,22 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         val resolvedTarget = clickableAncestor(resolved) ?: resolved
         val touchedRect = Rect().also { touchedTarget.getBoundsInScreen(it) }
         val resolvedRect = Rect().also { resolvedTarget.getBoundsInScreen(it) }
-        if (touchedRect == resolvedRect) return // resuelve correcto: no hay bug
+        val isBug = touchedRect != resolvedRect
+
+        // Destello VISUAL (solo si estás con el 🎓 en visualización): naranja si resuelve correcto,
+        // rojo si es un bug — encima de los recuadros estáticos verde/detectado, momentáneo.
+        if (visualizing) {
+            uiHandler.removeCallbacks(probeClear)
+            highlighter.probe(if (isBug) resolvedRect else touchedRect, isBug)
+            uiHandler.postDelayed(probeClear, if (isBug) 3000 else 1600)
+        }
+        if (!isBug) {
+            if (visualizing) LogBus.log("learn", "🔎 \"$label\" resuelve correcto en ${touchedRect.centerX()},${touchedRect.centerY()}")
+            return // resuelve correcto: no hay bug que diagnosticar
+        }
+        // El diagnóstico AUTÓNOMO (LLM) requiere aprendizaje pasivo activo (aunque solo estés
+        // visualizando con el 🎓, sin enseñanza en curso, el destello rojo ya se mostró arriba).
+        if (!app.passive.active) return
 
         val snapshot = snapshotForBug(clickRoot, touchedRect, resolvedRect)
         LogBus.log("bug-ui", "❌ \"$label\": tocaste ${touchedRect.centerX()},${touchedRect.centerY()} " +

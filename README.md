@@ -52,7 +52,15 @@ Actívala/desactívala desde el botón **"Aprendizaje pasivo"** de la **app prin
 
 Mientras observa, el asistente también puede **intervenir por voz por iniciativa propia** (proponer ayuda, preguntar una duda valiosa, o callar — el default). Esa decisión está **conectada a tu knowledge-base personal**: si le diste una instrucción como *"cada vez que estemos en WhatsApp y un usuario me pida una mejora, propón hacerla tú"*, al ver ese escenario en vivo te lo **propone por voz** y, si aceptas, **lo ejecuta**. Es un mindset propositivo (detectar en tiempo real algo que te ahorraría tiempo), distinto del "amigo prevenido" de después de cada ejecución (proteger la acción recién hecha).
 
-**Mantén oprimido el 🎓** de la burbuja para ver lo que ya sabe: se iluminan los contornos de todos los elementos ya trackeados en MCPs de la app visible, y el overlay se actualiza mientras navegas a otras apps. Vuelve a mantenerlo oprimido para ocultarlo. (Esto no cambió.)
+**Mantén oprimido el 🎓** de la burbuja para ver lo que ya sabe: se iluminan los contornos de **todos** los elementos accionables detectados en la app visible — **verde** los que ya están trackeados en MCPs, en el **acento del tema** (negro/blanco) el resto — y el overlay se actualiza mientras navegas. Mientras lo mantienes oprimido, cada toque destella el elemento que el agente resolvería al replicar ese clic: **naranja** si coincide con lo que tocaste, **rojo** si es un bug de ID ambiguo (ver "Bugs de UI" abajo). Vuelve a mantenerlo oprimido para ocultarlo.
+
+**Bugs de UI (mejora continua, transversal a cualquier app).** El agente aprende un clic por la
+ETIQUETA del elemento y, al replicarlo, toca el PRIMER nodo con esa etiqueta — en listas donde varias
+filas comparten el mismo id (p.ej. todos los chats de WhatsApp con `contact_row_container`) eso
+siempre cae en el primero. Un diagnóstico corre **solo, sin necesitar la visualización**, en cada clic
+del aprendizaje pasivo: si detecta ese desajuste, un LLM (`GeminiClickDoctor`) analiza el snapshot de
+la pantalla, halla el **ID único correcto** y escribe un **resumen de cómo endurecer la detección
+nativa**. Todo aparece en la card **"Bugs de UI"** del panel de desarrollador.
 
 ### Enseñanza ACTIVA (el 🎓 de la burbuja, al tocarlo — compartir pantalla)
 
