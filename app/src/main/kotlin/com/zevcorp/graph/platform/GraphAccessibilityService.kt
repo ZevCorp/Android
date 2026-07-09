@@ -49,7 +49,6 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         if (GraphApp.instance.ui === this) GraphApp.instance.ui = null
         bubble?.destroy()
         highlighter.destroy()
-        if (visualizing) touchCapture.stop()
         super.onDestroy()
     }
 
@@ -70,15 +69,18 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 if (visualizing) refreshLearnedOverlay()
             }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                // En modo 🎓 el proxy táctil ya capturó este gesto ANTES del cambio de UI (y además el
-                // evento puede venir del gesto reinyectado): no duplicar la señal ni el diagnóstico.
-                if (visualizing) return
-                if (!app.passive.active || !isRealApp(pkg) || pkg == launcherPkg) return
-                val label = event.source?.let { labelOf(it) } ?: return
-                if (label.isBlank()) return
-                val screenNow = currentScreen()
-                val visible = elementsNow()
-                app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+                if (!isRealApp(pkg) || pkg == launcherPkg) return
+                val src = event.source ?: return
+                val label = labelOf(src).takeIf { it.isNotBlank() } ?: return
+                // Diagnóstico (modo visualización del 🎓): ilumina el nodo que el AGENTE resolvería para
+                // esta etiqueta con su MISMO mecanismo, y detecta el bug si no es el que tocaste. Solo visual.
+                if (visualizing) probeResolved(src, label)
+                // Enseñanza pasiva: comportamiento existente, intacto.
+                if (app.passive.active) {
+                    val screenNow = currentScreen()
+                    val visible = elementsNow()
+                    app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+                }
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.TYPE_VIEW_SCROLLED ->
                 if (visualizing) refreshLearnedOverlay()
@@ -100,12 +102,10 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
     private val overlayRefresh = Runnable { refreshLearnedOverlayNow() }
 
     /** Alterna el modo: dibuja el contorno de TODO elemento accionable que el sistema detecta en la app
-     *  visible (verde = ya aprendido/trackeado en MCPs, acento = detectado pero aún no aprendido), y
-     *  activa el proxy táctil que diagnostica cada toque contra la resolución por etiqueta del agente. */
+     *  visible (verde = ya aprendido/trackeado en MCPs, acento = detectado pero aún no aprendido). */
     fun toggleLearnedVisualization(): Boolean {
         visualizing = !visualizing
         if (visualizing) {
-            touchCapture.start()
             app.scope.launch {
                 val tools = app.learnedTools.list()
                 learnedLabels = tools.groupBy { it.app }
@@ -113,7 +113,6 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 withContext(Dispatchers.Main) { refreshLearnedOverlayNow() }
             }
         } else {
-            touchCapture.stop()
             uiHandler.removeCallbacks(overlayRefresh)
             uiHandler.removeCallbacks(probeClear)
             highlighter.hide()
@@ -124,76 +123,36 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
 
     private val probeClear = Runnable { highlighter.probe(null) }
 
-    /* ---------- Proxy táctil del 🎓: snapshot en el DOWN (pre-cambio) + diagnóstico + señal ---------- */
-
     /**
-     * Captura del gesto ANTES de que la app lo reciba (TouchCapture): el snapshot se toma en el
-     * ACTION_DOWN, cuando la UI todavía es la que el usuario está viendo — la única forma universal de
-     * no perder elementos en apps que no emiten TYPE_VIEW_CLICKED (Compose, vistas custom tipo el play
-     * de Spotify) o cuya UI cambia al instante. Failsafe: si la reinyección falla, el modo se apaga solo
-     * para no dejar la pantalla sin respuesta.
+     * DIAGNÓSTICO (solo visual, modo 🎓): al tocar TÚ un elemento, resuelve su etiqueta EXACTAMENTE como
+     * el agente en tapLabel (findByLabel + clickableAncestor) y compara el resultado con lo que tocaste.
+     * Si coinciden, destella en NARANJA (resolución correcta). Si por etiquetas duplicadas resuelve a
+     * OTRO elemento (bounds distintos) —el agente llamaría por ID uno equivocado—, destella en ROJO y lo
+     * registra en UiBugBus (panel "Bugs de UI"). No modifica el mecanismo real: solo lo re-ejecuta.
      */
-    private val touchCapture by lazy {
-        com.zevcorp.graph.ui.TouchCapture(
-            this,
-            onDown = { x, y -> captureSnapshotAt(x, y) },
-            onTap = { confirmProbe() },
-            onBroken = {
-                LogBus.log("bug-ui", "reinyección de gesto falló: apago el modo prueba por seguridad")
-                if (visualizing) toggleLearnedVisualization()
-            },
-        )
-    }
-
-    private class TouchProbe(
-        val label: String, val touched: Rect, val resolved: Rect,
-        val screen: String, val pkg: String, val elements: List<String>,
-    )
-
-    @Volatile private var pendingProbe: TouchProbe? = null
-
-    /**
-     * En el DOWN: identifica el elemento bajo el dedo (nodeAt, el mismo criterio que usa computer-use)
-     * y resuelve su etiqueta EXACTAMENTE como el agente en tapLabel (findByLabel + clickableAncestor),
-     * todo sobre el árbol AÚN sin cambiar. Se guarda también el contexto (pantalla, elementos) para la
-     * señal de aprendizaje: es el estado que el asistente debe aprender, no el de después del clic.
-     */
-    private fun captureSnapshotAt(x: Int, y: Int) {
-        pendingProbe = null
-        val node = nodeAt(x, y) ?: return
-        val label = labelOf(node).ifBlank { labelOf(clickableAncestor(node) ?: node) }
-        if (label.isBlank()) return
-        val touchedTarget = clickableAncestor(node) ?: node
+    private fun probeResolved(source: AccessibilityNodeInfo, label: String) {
+        // Resolver contra el árbol DEL MOMENTO DEL CLIC (la raíz del propio nodo del evento), no contra
+        // rootInActiveWindow: si la UI cambia al instante (p.ej. Spotify), el nodo tocado sigue vivo en
+        // el snapshot del evento y la detección NO se pierde. findByLabel hace el mismo DFS que usa el
+        // agente, pero sobre la misma pantalla en la que tocaste, para que la comparación sea válida.
+        val clickRoot = generateSequence(source) { runCatching { it.parent }.getOrNull() }.last()
+        val resolved = findByLabel(clickRoot, label) ?: source
+        val resolvedTarget = clickableAncestor(resolved) ?: resolved
+        val resolvedRect = Rect().also { resolvedTarget.getBoundsInScreen(it) }
+        // Lo que TÚ tocaste, llevado a su ancestro clickable igual que hace tapLabel al ejecutar.
+        val touchedTarget = clickableAncestor(source) ?: source
         val touchedRect = Rect().also { touchedTarget.getBoundsInScreen(it) }
-        val resolved = findByLabel(label)
-        val resolvedTarget = resolved?.let { clickableAncestor(it) ?: it }
-        val resolvedRect = resolvedTarget?.let { t -> Rect().also { t.getBoundsInScreen(it) } } ?: touchedRect
-        val pkg = rootInActiveWindow?.packageName?.toString() ?: ""
-        pendingProbe = TouchProbe(label, touchedRect, resolvedRect, currentScreen(), pkg, elementsNow())
-    }
-
-    /**
-     * Al confirmarse que fue un TAP: destello NARANJA si el agente resolvería el mismo elemento, ROJO +
-     * registro en UiBugBus (panel "Bugs de UI") si por etiquetas duplicadas iría a otro. Además envía la
-     * señal de aprendizaje pasivo con el contexto PRE-cambio: así apps como Spotify sí se aprenden.
-     */
-    private fun confirmProbe() {
-        val p = pendingProbe ?: return
-        pendingProbe = null
-        val isBug = p.resolved != p.touched
-        highlighter.probe(p.resolved, isBug)
+        val isBug = resolvedRect != touchedRect
+        highlighter.probe(resolvedRect, isBug)
         uiHandler.removeCallbacks(probeClear)
         uiHandler.postDelayed(probeClear, if (isBug) 3000 else 1600)
         if (isBug) {
-            LogBus.log("bug-ui", "❌ \"${p.label}\": tocaste ${p.touched.centerX()},${p.touched.centerY()} " +
-                "pero el agente iría a ${p.resolved.centerX()},${p.resolved.centerY()}")
-            UiBugBus.report(p.screen, p.label, p.touched, p.resolved)
+            LogBus.log("bug-ui", "❌ \"$label\": tocaste ${touchedRect.centerX()},${touchedRect.centerY()} " +
+                "pero el agente iría a ${resolvedRect.centerX()},${resolvedRect.centerY()}")
+            UiBugBus.report(currentScreen(), label, touchedRect, resolvedRect)
         } else {
-            LogBus.log("learn", "🔎 prueba: \"${p.label}\" resuelve correcto en ${p.resolved.centerX()},${p.resolved.centerY()}")
+            LogBus.log("learn", "🔎 prueba: \"$label\" resuelve correcto en ${resolvedRect.centerX()},${resolvedRect.centerY()}")
         }
-        // Misma señal (y filtros) que la vía TYPE_VIEW_CLICKED, pero con el estado de ANTES del clic.
-        if (app.passive.active && isRealApp(p.pkg) && p.pkg != launcherPkg)
-            app.scope.launch { app.passive.signal(p.pkg, p.screen, p.label, p.elements) }
     }
 
     /** Debounce con cola: coalescea la ráfaga de eventos pero SIEMPRE ejecuta el último refresco,
@@ -441,8 +400,11 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         return ok
     }
 
-    private fun findByLabel(label: String): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
+    private fun findByLabel(label: String): AccessibilityNodeInfo? = findByLabel(rootInActiveWindow, label)
+
+    /** Primer nodo (en orden de árbol, DFS) cuya etiqueta coincide, buscando dentro de `root`. */
+    private fun findByLabel(root: AccessibilityNodeInfo?, label: String): AccessibilityNodeInfo? {
+        root ?: return null
         var found: AccessibilityNodeInfo? = null
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
