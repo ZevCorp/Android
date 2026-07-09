@@ -10,6 +10,7 @@ import android.graphics.Rect
 import android.net.Uri
 import android.os.Bundle
 import android.view.Display
+import android.view.MotionEvent
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
@@ -49,6 +50,7 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         if (GraphApp.instance.ui === this) GraphApp.instance.ui = null
         bubble?.destroy()
         highlighter.destroy()
+        deepCapture.disable()
         super.onDestroy()
     }
 
@@ -69,6 +71,9 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 if (visualizing) refreshLearnedOverlay()
             }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
+                // La captura profunda (vía moderna, panel de Desarrollador) ya cubre este toque de forma
+                // más robusta —incluye apps que ni siquiera emiten este evento—: no duplicar la señal.
+                if (deepCapture.active) return
                 if (!isRealApp(pkg) || pkg == launcherPkg) return
                 val src = event.source ?: return
                 val label = labelOf(src).takeIf { it.isNotBlank() } ?: return
@@ -93,6 +98,86 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         (pkg == launcherPkg || packageManager.getLaunchIntentForPackage(pkg) != null)
 
     override fun onInterrupt() {}
+
+    /* ---------- Captura profunda de toques (vía moderna, toggle en el panel de Desarrollador) ---------- */
+
+    override fun onMotionEvent(event: MotionEvent) = deepCapture.handle(event)
+
+    private val deepCapture by lazy {
+        DeepTouchCapture(
+            this,
+            onDown = { x, y -> captureDeepSnapshotAt(x, y) },
+            onTap = { confirmDeepProbe() },
+            onKillSwitch = { reason -> LogBus.log("deep-touch", "🛑 apagado automático: $reason") },
+        )
+    }
+
+    val deepTouchCaptureSupported get() = DeepTouchCapture.supported
+    val deepTouchCaptureOn get() = deepCapture.active
+
+    /** Alterna la captura profunda (API 34+). Devuelve el estado resultante (false si no es soportada). */
+    fun setDeepTouchCapture(on: Boolean): Boolean {
+        if (on) {
+            val ok = deepCapture.enable()
+            LogBus.log("deep-touch", if (ok) "🟢 captura profunda ACTIVADA" else "no se pudo activar (¿Android < 14?)")
+        } else {
+            deepCapture.disable()
+            LogBus.log("deep-touch", "captura profunda desactivada")
+        }
+        return deepCapture.active
+    }
+
+    private class TouchProbe(
+        val label: String, val touched: Rect, val resolved: Rect,
+        val screen: String, val pkg: String, val elements: List<String>,
+    )
+
+    @Volatile private var pendingProbe: TouchProbe? = null
+
+    /**
+     * En el DOWN (touchscreen aún sin llegar a la app): identifica el elemento bajo el dedo (nodeAt,
+     * igual que computer-use) y resuelve su etiqueta EXACTAMENTE como el agente en tapLabel
+     * (findByLabel + clickableAncestor). Guarda también el contexto para la señal de aprendizaje: es el
+     * estado que el asistente debe aprender, el de ANTES del toque, no el de después de que la UI cambie.
+     */
+    private fun captureDeepSnapshotAt(x: Int, y: Int) {
+        pendingProbe = null
+        val node = nodeAt(x, y) ?: return
+        val label = labelOf(node).ifBlank { labelOf(clickableAncestor(node) ?: node) }
+        if (label.isBlank()) return
+        val touchedTarget = clickableAncestor(node) ?: node
+        val touchedRect = Rect().also { touchedTarget.getBoundsInScreen(it) }
+        val resolved = findByLabel(label)
+        val resolvedTarget = resolved?.let { clickableAncestor(it) ?: it }
+        val resolvedRect = resolvedTarget?.let { t -> Rect().also { t.getBoundsInScreen(it) } } ?: touchedRect
+        val pkg = rootInActiveWindow?.packageName?.toString() ?: ""
+        pendingProbe = TouchProbe(label, touchedRect, resolvedRect, currentScreen(), pkg, elementsNow())
+    }
+
+    /**
+     * Al confirmarse que fue un TAP: si el modo 🎓 está visualizando, destella naranja/rojo y registra
+     * en UiBugBus igual que la vía por evento. Envía además la señal de aprendizaje pasivo con el
+     * contexto PRE-toque — así apps que nunca emiten TYPE_VIEW_CLICKED (Spotify, Compose) sí se aprenden.
+     */
+    private fun confirmDeepProbe() {
+        val p = pendingProbe ?: return
+        pendingProbe = null
+        if (visualizing) {
+            val isBug = p.resolved != p.touched
+            highlighter.probe(p.resolved, isBug)
+            uiHandler.removeCallbacks(probeClear)
+            uiHandler.postDelayed(probeClear, if (isBug) 3000 else 1600)
+            if (isBug) {
+                LogBus.log("bug-ui", "❌ \"${p.label}\": tocaste ${p.touched.centerX()},${p.touched.centerY()} " +
+                    "pero el agente iría a ${p.resolved.centerX()},${p.resolved.centerY()}")
+                UiBugBus.report(p.screen, p.label, p.touched, p.resolved)
+            } else {
+                LogBus.log("learn", "🔎 prueba: \"${p.label}\" resuelve correcto en ${p.resolved.centerX()},${p.resolved.centerY()}")
+            }
+        }
+        if (app.passive.active && isRealApp(p.pkg) && p.pkg != launcherPkg)
+            app.scope.launch { app.passive.signal(p.pkg, p.screen, p.label, p.elements) }
+    }
 
     /* ---------- Ver la detección (mantener oprimido el 🎓): contorno de TODO lo detectado, verde = aprendido ---------- */
 

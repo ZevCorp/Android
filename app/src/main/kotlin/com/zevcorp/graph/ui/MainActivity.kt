@@ -305,7 +305,41 @@ class MainActivity : Activity(), UserChannel {
         devHead.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
         devHead.addView(button("Limpiar") { LogBus.clear(); logView.text = "" })
         dev.addView(devHead)
-        dev.gap(dp(8))
+        dev.gap(dp(10))
+
+        // Captura profunda de toques: vía moderna (API 34+) para detectar toques que la app nunca
+        // reporta (Compose, botones custom tipo el play de Spotify). Apagada por defecto; el usuario
+        // la enciende/apaga aquí a propósito. Si algo va mal, el atajo de volumen arriba+abajo (nativo
+        // de Android para des/activar el servicio de accesibilidad) sigue funcionando siempre: es una
+        // fuente de entrada distinta (KeyEvent), no la toca esta captura.
+        val deepRow = row()
+        deepRow.addView(title("Captura profunda de toques", size = 13f), LinearLayout.LayoutParams(0, -2, 1f))
+        lateinit var deepBtn: Button
+        fun deepLabel(on: Boolean) = if (on) "ON" else "OFF"
+        fun currentDeepState() = (app.ui as? GraphAccessibilityService)?.deepTouchCaptureOn ?: false
+        deepBtn = button(deepLabel(currentDeepState()), primary = currentDeepState()) {
+            val svc = app.ui as? GraphAccessibilityService
+            if (svc == null) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return@button }
+            if (!svc.deepTouchCaptureSupported) {
+                Toast.makeText(this, "Necesita Android 14 o superior", Toast.LENGTH_SHORT).show(); return@button
+            }
+            val turningOn = !svc.deepTouchCaptureOn
+            val nowOn = svc.setDeepTouchCapture(turningOn)
+            deepBtn.text = deepLabel(nowOn)
+            deepBtn.isAllCaps = false
+            deepBtn.background = rounded(if (nowOn) Palette.accent else Palette.card, dp(14).toFloat(),
+                if (nowOn) 0 else Palette.cardBorder)
+            deepBtn.setTextColor(if (nowOn) Palette.bg else Palette.text)
+            if (turningOn && !nowOn) Toast.makeText(this, "No se pudo activar", Toast.LENGTH_SHORT).show()
+        }
+        deepRow.addView(deepBtn)
+        dev.addView(deepRow)
+        dev.gap(dp(4))
+        dev.addView(caption("Experimental: intercepta y reinyecta cada toque para leerlo aunque la app " +
+            "no lo reporte (Spotify, etc). Se apaga sola ante cualquier fallo. Si algo se ve raro, el " +
+            "atajo de volumen arriba+abajo desactiva el servicio de accesibilidad completo sin importar " +
+            "este modo."))
+        dev.gap(dp(10))
         logView = TextView(this).apply {
             textSize = 10f
             typeface = android.graphics.Typeface.MONOSPACE
