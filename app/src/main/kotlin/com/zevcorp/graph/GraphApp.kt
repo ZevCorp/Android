@@ -14,7 +14,9 @@ import com.zevcorp.graph.platform.CloudSync
 import com.zevcorp.graph.platform.GeminiBrain
 import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
+import com.zevcorp.graph.platform.GeminiClickDoctor
 import com.zevcorp.graph.platform.MemoryDistiller
+import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.MemoryStore
 import com.zevcorp.graph.platform.SupabaseAuth
 import com.zevcorp.graph.platform.Updater
@@ -207,6 +209,27 @@ class GraphApp : Application() {
         }
     }
     private val memoryDistiller by lazy { MemoryDistiller(apiKey, model) }
+
+    /** El doctor de clics: diagnostica con el LLM los fallos de ID ambiguo detectados en tiempo real. */
+    private val clickDoctor by lazy { GeminiClickDoctor(apiKey, model) }
+
+    /**
+     * La capa de diagnóstico detectó que replicar un clic por su etiqueta caería en otro elemento
+     * (IDs duplicados). Se registra en el bus (panel "Bugs de UI") y, en background, el LLM halla el
+     * ID único correcto y resume cómo endurecer la detección nativa. Fire-and-forget: nunca bloquea.
+     */
+    fun diagnoseClickBug(app: String, screen: String, label: String, touched: String, resolved: String, snapshot: String) {
+        val bug = UiBugBus.report(app, screen, label, touched, resolved) ?: return // ya diagnosticado
+        scope.launch(Dispatchers.IO) {
+            val dx = runCatching { clickDoctor.diagnose(app, screen, label, snapshot) }.getOrNull()
+            if (dx != null) {
+                UiBugBus.attachDiagnosis(bug, dx.panelLine())
+                LogBus.log("bug-ui", "🩺 \"$label\" → ${dx.panelLine()}")
+            } else {
+                UiBugBus.attachDiagnosis(bug, "no se pudo diagnosticar (reintenta al reaparecer)")
+            }
+        }
+    }
 
     /** El "primer LLM" del pipeline de voz (repo Graph): destila la intención del transcript. */
     val intentDistiller by lazy { IntentDistiller(apiKey, model) }

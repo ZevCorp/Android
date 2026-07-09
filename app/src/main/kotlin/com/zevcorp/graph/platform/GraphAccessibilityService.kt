@@ -71,10 +71,13 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
                 val observing = app.passive.active || app.recorder.active
                 if (!observing || !isRealApp(pkg) || pkg == launcherPkg) return
-                val label = event.source?.let { labelOf(it) } ?: ""
+                val src = event.source
+                val label = src?.let { labelOf(it) } ?: ""
                 val screenNow = currentScreen()
                 if (app.passive.active && label.isNotBlank()) {
                     val visible = elementsNow()
+                    // Diagnóstico autónomo: ¿replicar este clic por su etiqueta caería en otro elemento?
+                    src?.let { runCatching { detectClickMismatch(it, pkg, screenNow) } }
                     app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
                 } else if (app.recorder.active) {
                     // Enseñanza activa, o clic que el árbol de UI no logró etiquetar: igual es un
@@ -359,8 +362,12 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         return ok
     }
 
-    private fun findByLabel(label: String): AccessibilityNodeInfo? {
-        val root = rootInActiveWindow ?: return null
+    private fun findByLabel(label: String): AccessibilityNodeInfo? = findByLabel(rootInActiveWindow, label)
+
+    /** Igual que la resolución del agente (primer nodo con esa etiqueta), pero contra un root dado:
+     *  se usa para el diagnóstico contra el snapshot del clic (la UI puede cambiar al instante). */
+    private fun findByLabel(root: AccessibilityNodeInfo?, label: String): AccessibilityNodeInfo? {
+        root ?: return null
         var found: AccessibilityNodeInfo? = null
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
@@ -369,6 +376,73 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         }
         walk(root)
         return found
+    }
+
+    /* ---------- Diagnóstico autónomo de fallos de clic (IDs ambiguos) ---------- */
+
+    /**
+     * Corre en cada clic del aprendizaje pasivo (SIN necesitar la visualización 🎓). Resuelve la
+     * etiqueta del elemento tocado EXACTAMENTE como el agente lo haría al replicar (findByLabel +
+     * ancestro clickable) y compara con lo que de verdad se tocó. Si por etiquetas duplicadas resuelve
+     * a OTRO elemento —el bug de "siempre el primer chat"—, arma el snapshot rico de la pantalla y
+     * dispara el diagnóstico del LLM (que halla el ID único y resume cómo endurecer la detección).
+     */
+    private fun detectClickMismatch(source: AccessibilityNodeInfo, pkg: String, screen: String) {
+        val label = labelOf(source).ifBlank { labelOf(clickableAncestor(source) ?: source) }
+        if (label.isBlank()) return
+        // Resolver contra el árbol del MOMENTO del clic (raíz del propio nodo del evento).
+        val clickRoot = generateSequence(source) { runCatching { it.parent }.getOrNull() }.last()
+        val touchedTarget = clickableAncestor(source) ?: source
+        val resolved = findByLabel(clickRoot, label) ?: return
+        val resolvedTarget = clickableAncestor(resolved) ?: resolved
+        val touchedRect = Rect().also { touchedTarget.getBoundsInScreen(it) }
+        val resolvedRect = Rect().also { resolvedTarget.getBoundsInScreen(it) }
+        if (touchedRect == resolvedRect) return // resuelve correcto: no hay bug
+
+        val snapshot = snapshotForBug(clickRoot, touchedRect, resolvedRect)
+        LogBus.log("bug-ui", "❌ \"$label\": tocaste ${touchedRect.centerX()},${touchedRect.centerY()} " +
+            "pero el agente iría a ${resolvedRect.centerX()},${resolvedRect.centerY()}")
+        app.diagnoseClickBug(pkg, screen, label,
+            "${touchedRect.centerX()},${touchedRect.centerY()}",
+            "${resolvedRect.centerX()},${resolvedRect.centerY()}", snapshot)
+    }
+
+    /** Dump de los elementos accionables con sus atributos + textos descendientes, marcando el tocado
+     *  y el que el agente resolvería. Es lo que el LLM lee para hallar el identificador único correcto. */
+    private fun snapshotForBug(root: AccessibilityNodeInfo?, touched: Rect, resolved: Rect): String {
+        val out = StringBuilder()
+        var idx = 0
+        fun descendantTexts(n: AccessibilityNodeInfo): String {
+            val texts = LinkedHashSet<String>()
+            fun dig(x: AccessibilityNodeInfo?, depth: Int) {
+                x ?: return
+                if (depth > 0) x.text?.toString()?.trim()?.takeIf { it.isNotBlank() && it.length <= 40 }?.let { texts += it }
+                for (i in 0 until x.childCount) dig(x.getChild(i), depth + 1)
+            }
+            dig(n, 0)
+            return texts.take(4).joinToString(" · ")
+        }
+        fun walk(n: AccessibilityNodeInfo?) {
+            n ?: return
+            if ((n.isClickable || n.isEditable) && idx < 40) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                val target = clickableAncestor(n) ?: n
+                val tr = Rect().also { target.getBoundsInScreen(it) }
+                val mark = when { tr == touched -> " [TOCADO]"; tr == resolved -> " [AGENTE]"; else -> "" }
+                val vid = n.viewIdResourceName?.substringAfterLast('/') ?: ""
+                val cd = n.contentDescription?.toString()?.take(40) ?: ""
+                val tx = n.text?.toString()?.take(40) ?: ""
+                val kids = descendantTexts(n)
+                out.append("#${idx}$mark label=\"${labelOf(n)}\" text=\"$tx\" desc=\"$cd\" id=\"$vid\" " +
+                    "class=${n.className?.toString()?.substringAfterLast('.') ?: "?"} centro=(${r.centerX()},${r.centerY()})")
+                if (kids.isNotBlank()) out.append(" [dentro: $kids]")
+                out.append("\n")
+                idx++
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(root)
+        return out.toString().ifBlank { "(sin elementos accionables)" }
     }
 
     /* ---------- Primitivas de accesibilidad ---------- */

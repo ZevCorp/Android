@@ -24,6 +24,7 @@ import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.KnowledgeGraph
 import com.zevcorp.graph.platform.LogBus
+import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.Release
 import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.platform.UsageU
@@ -41,6 +42,7 @@ class MainActivity : Activity(), UserChannel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private lateinit var logView: TextView
+    private var bugView: TextView? = null
     private lateinit var mcpPanel: LinearLayout
     private lateinit var workflowPanel: LinearLayout
     private lateinit var accountBody: LinearLayout
@@ -346,6 +348,42 @@ class MainActivity : Activity(), UserChannel {
         root.addView(dev)
         root.gap(dp(14))
 
+        // Bugs de UI: fallos de clic por ID ambiguo detectados en tiempo real + diagnóstico del LLM
+        // (ID único correcto + cómo endurecer la detección nativa). Se llena solo usando el teléfono.
+        val bugs = card()
+        val bugsHead = row()
+        bugsHead.addView(iconChip(Icon.BOLT, sizeDp = 34, tint = Palette.accent))
+        bugsHead.addView(title("Bugs de UI").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        bugsHead.addView(button("Copiar") {
+            val cm = getSystemService(android.content.ClipboardManager::class.java)
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("graph-ui-bugs", UiBugBus.dump()))
+            Toast.makeText(this, "Bugs copiados", Toast.LENGTH_SHORT).show()
+        })
+        bugsHead.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+        bugsHead.addView(button("Limpiar") { UiBugBus.clear() })
+        bugs.addView(bugsHead)
+        bugs.gap(dp(4))
+        bugs.addView(caption("Fallos de clic por ID ambiguo (un ID que resuelve a otro elemento, p.ej. " +
+            "siempre el primer chat de una lista) detectados solos con el aprendizaje pasivo, con el ID " +
+            "correcto y el fix nativo que propone el modelo."))
+        bugs.gap(dp(8))
+        bugView = TextView(this).apply {
+            textSize = 10f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextColor(Palette.textDim)
+            setTextIsSelectable(true)
+        }
+        val bugScroll = ScrollView(this).apply {
+            addView(bugView)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setOnTouchListener { v, _ -> v.parent.requestDisallowInterceptTouchEvent(true); false }
+        }
+        bugs.addView(bugScroll, LinearLayout.LayoutParams(-1, dp(200)))
+        root.addView(bugs)
+        root.gap(dp(14))
+
         // Panel de MCPs: lo que el asistente ha aprendido (enseñanza) + lo incorporado de fábrica
         val mcp = card()
         val mcpHead = row()
@@ -394,6 +432,14 @@ class MainActivity : Activity(), UserChannel {
                 val atBottom = logScroll.scrollY + logScroll.height >= logView.height - dp(28)
                 logView.text = LogBus.dump()
                 if (atBottom) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
+            }
+        }
+        bugView?.let { bv ->
+            bv.text = UiBugBus.dump().ifBlank { "Sin fallos de clic detectados aún." }
+            scope.launch {
+                UiBugBus.events.collect {
+                    bv.text = UiBugBus.dump().ifBlank { "Sin fallos de clic detectados aún." }
+                }
             }
         }
         refreshMcpPanel()

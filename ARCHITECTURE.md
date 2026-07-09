@@ -103,6 +103,23 @@ las llamadas (motor `GeminiBrain`, destiladores `GeminiJson`, consolidación `Ge
 "fallar todo" al primer intento; con reintento, la mayoría se recupera sola. Un `5xx` significa que el
 servidor no creó la interacción, así que reintentar el mismo POST no duplica acciones.
 
+## Diagnóstico de fallos de clic (IDs ambiguos)
+
+El agente aprende clics capturando la ETIQUETA de un elemento (`labelOf`: contentDescription → text →
+viewId) y al ejecutar toca el PRIMER nodo con esa etiqueta (`findByLabel`). Cuando varios elementos
+comparten etiqueta —típico en listas: todas las filas de chats de WhatsApp con el mismo
+`contact_row_container`— replicar el clic cae siempre en el primero (el bug de "siempre el primer chat").
+
+Una capa de diagnóstico corre **autónoma** en cada clic del aprendizaje pasivo (sin necesitar la
+visualización): `GraphAccessibilityService.detectClickMismatch` resuelve la etiqueta EXACTAMENTE como
+el agente lo haría y la compara con lo que se tocó. Si difieren, arma el snapshot rico de la pantalla
+(cada accionable con label/textos-descendientes/viewId/clase/bounds, marcando el tocado y el resuelto)
+y lo pasa a `GeminiClickDoctor`, que halla el **ID único correcto** presente en el snapshot y escribe
+un **resumen del tipo de error y cómo endurecer la detección nativa**. Todo se registra en `UiBugBus`
+y se ve en la card **"Bugs de UI"** del panel de desarrollador. Es un sistema de mejora continua
+transversal a cualquier app; hoy diagnostica y documenta (aplicar el ID corregido al replay es el
+siguiente paso).
+
 ## `Phone` / `Gestures`: la superficie por plataforma
 
 `Phone` son las primitivas de computer-use (tap/type/openApp/scroll/swipe/pressKey + `state()` con screenshot). `Gestures` son los gestos semánticos que MCP expone (home, appDrawer, notifications, panHome, scrollMenu). En Android ambos los implementa `GraphAccessibilityService` vía `dispatchGesture` y `performGlobalAction`. Para otra plataforma (DOM, macOS AX, Windows UIA) se implementan estos dos puertos sin tocar `core/`.
