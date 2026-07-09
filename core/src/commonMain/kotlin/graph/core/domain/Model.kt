@@ -35,7 +35,14 @@ class McpTool(
     val description: String,
     val params: List<McpParam> = emptyList(),
     val via: String = "Intent/API de Android",
-    val run: suspend (Map<String, String>) -> Boolean,
+    /**
+     * Ejecutor que DEVUELVE TEXTO al modelo (p.ej. resultados de búsqueda para leer y razonar).
+     * Si está presente, gana sobre `run`: su String es el resultado que ve el asistente el turno
+     * siguiente. La mayoría de tools son "fire-and-forget" y usan `run` (true/false); solo las que
+     * traen información de vuelta (como `web_search`) usan `reply`.
+     */
+    val reply: (suspend (Map<String, String>) -> String)? = null,
+    val run: suspend (Map<String, String>) -> Boolean = { true },
 )
 
 private fun Map<String, String>.int(key: String, default: Int) = this[key]?.trim()?.toIntOrNull() ?: default
@@ -58,6 +65,8 @@ class Mcp(
     /** Pausa entre los steps (taps) de una herramienta aprendida enviados juntos; ajustable en la app. */
     stepDelay: () -> Long = { 350 },
     private val log: GraphLog = GraphLog { _, _ -> },
+    /** Búsqueda web agéntica (Google grounding). Si es null, `web_search` avisa que no está disponible. */
+    search: WebSearch? = null,
 ) {
 
     /** Detalle del último fallo de una herramienta aprendida (qué pasos no se pudieron tocar). */
@@ -96,8 +105,13 @@ class Mcp(
         McpTool("send_email", "Abre un correo prellenado.",
             listOf(McpParam("to", "Destinatario (opcional)"), McpParam("subject", "Asunto (opcional)"), McpParam("body", "Cuerpo (opcional)"))) {
             system.sendEmail(it.str("to"), it.str("subject"), it.str("body")) },
-        McpTool("web_search", "Busca en la web vía el Intent de búsqueda del sistema.",
-            listOf(McpParam("query", "Qué buscar"))) { system.webSearch(it.str("query")) },
+        McpTool("web_search",
+            "Busca en la web y RECIBES los resultados para leerlos y razonar (Google + síntesis con " +
+                "fuentes). Úsala por tu cuenta cuando necesites información actual, datos que no sabes o " +
+                "verificar algo; luego responde o actúa con lo que encuentres. No abre el navegador: te " +
+                "devuelve el texto a ti.",
+            listOf(McpParam("query", "Qué buscar (en lenguaje natural)")),
+            reply = { search?.search(it.str("query")) ?: "búsqueda web no disponible ahora mismo" }),
         McpTool("open_url", "Abre una URL en el navegador.",
             listOf(McpParam("url", "URL http(s)"))) { system.openUrl(it.str("url")) },
         McpTool("open_maps", "Abre Maps en un lugar o búsqueda.",
@@ -166,6 +180,8 @@ class Mcp(
     /** Ejecuta una herramienta por nombre y devuelve un resultado legible para el modelo. */
     suspend fun call(name: String, args: Map<String, String>): String {
         val t = tool(name) ?: return "herramienta MCP desconocida: $name"
+        // Tools que traen información de vuelta (búsqueda web): su texto ES el resultado que ve el modelo.
+        t.reply?.let { return it(args) }
         lastDetail = null
         return if (t.run(args)) "ok"
         else "la herramienta no se pudo ejecutar" + (lastDetail?.let { " — $it" } ?: "")

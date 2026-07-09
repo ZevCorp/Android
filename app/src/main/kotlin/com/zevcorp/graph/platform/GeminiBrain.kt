@@ -351,10 +351,14 @@ class GeminiBrain(
            portapapeles. Herramientas: ${tools.joinToString(", ") { it.name }}.
         2) COMPUTER-USE (requiere imagen): solo para tocar elementos concretos DENTRO de una app;
            llama take_screenshot y luego click/type.
-        REGLA: para cualquier tarea del sistema (alarma, timer, llamada, abrir app, buscar, calendario,
+        REGLA: para cualquier tarea del sistema (alarma, timer, llamada, abrir app, calendario,
         ajustes…) usa SIEMPRE la herramienta MCP correspondiente, NO computer-use: es directa y sin UI.
         Si el plan son varias herramientas MCP encadenadas y predecibles (p.ej. ir al home y luego abrir
         el cajón), LLÁMALAS TODAS EN UNA SOLA RESPUESTA (varias function_call juntas) para ahorrar turnos.
+        BÚSQUEDA (web_search): decide TÚ solo, cuando lo veas útil, buscar en internet — si te falta un
+        dato, necesitas información actual (noticias, precios, horarios, hechos) o quieres verificar algo,
+        llama web_search y RAZONA sobre lo que te devuelve (viene con fuentes). No inventes ni digas "no
+        sé" sin haber buscado primero, y no le pidas permiso al usuario para buscar: hazlo por tu cuenta.
         $learnedRule
 
         En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").

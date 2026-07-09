@@ -32,13 +32,15 @@ Dos familias, ambas declaradas en `core` (`Mcp`) con nombre, esquema de parámet
 | `create_event` | `CalendarContract` (Intent de inserción) |
 | `dial` · `call` | `ACTION_DIAL` / `ACTION_CALL` |
 | `send_sms` · `send_email` | `ACTION_SENDTO` (`smsto:` / `mailto:`) |
-| `web_search` · `open_url` | `ACTION_WEB_SEARCH` / `ACTION_VIEW` |
+| `open_url` | `ACTION_VIEW` |
 | `open_maps` · `directions` | `geo:` / `google.navigation:` |
 | `open_camera` | `MediaStore.ACTION_IMAGE_CAPTURE` |
 | `open_settings` | `Settings.ACTION_*` por sección |
 | `share_text` · `set_clipboard` | `ACTION_SEND` / `ClipboardManager` |
 
 Estas usan los **Common Intents de Android** — llamadas de sistema directas, no interacción con la pantalla. El modelo las prefiere sobre computer-use para tareas del sistema. Añadir una capacidad = añadir una entrada a `tools`.
+
+**Búsqueda web agéntica** (`web_search`): a diferencia de las de arriba, no dispara un Intent. Usa el **Google Search grounding** nativo de Gemini 3.5 Flash: en una sub-llamada a `generateContent` con la tool `google_search`, el modelo busca en Google, lee los resultados y devuelve una síntesis con fuentes. Ese texto vuelve al asistente como resultado de la herramienta, así que **razona y actúa sobre lo que encuentra** en el mismo run (`GeminiSearch` → puerto `WebSearch`). El asistente decide por sí solo cuándo buscar, igual que decide cuándo hablar. Es la única herramienta MCP que *devuelve información* (campo `reply` de `McpTool`), no solo un ok/fallo.
 
 **Herramientas aprendidas** (capa de enseñanza): además, el asistente puede *crear* herramientas MCP nuevas enseñándole (ver abajo). Se ejecutan reproduciendo una secuencia de toques sobre el árbol de UI.
 

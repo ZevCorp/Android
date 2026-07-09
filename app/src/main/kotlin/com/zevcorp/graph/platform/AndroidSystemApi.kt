@@ -1,6 +1,5 @@
 package com.zevcorp.graph.platform
 
-import android.app.SearchManager
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -91,9 +90,6 @@ class AndroidSystemApi(private val ctx: Context) : SystemApi {
         Intent(Intent.ACTION_SENDTO, Uri.parse("mailto:$to"))
             .putExtra(Intent.EXTRA_SUBJECT, subject)
             .putExtra(Intent.EXTRA_TEXT, body))
-
-    override suspend fun webSearch(query: String) = fire(
-        Intent(Intent.ACTION_WEB_SEARCH).putExtra(SearchManager.QUERY, query))
 
     override suspend fun openUrl(url: String): Boolean {
         val u = if (url.startsWith("http", true)) url else "https://$url"

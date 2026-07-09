@@ -60,6 +60,9 @@ class GraphApp : Application() {
     private val apiKey = { prefs.getString("apiKey", DEFAULT_API_KEY)?.ifBlank { DEFAULT_API_KEY } ?: DEFAULT_API_KEY }
     private val model = { prefs.getString("model", "gemini-3.5-flash") ?: "gemini-3.5-flash" }
 
+    /** Búsqueda web agéntica (Google grounding) que alimenta la herramienta MCP `web_search`. */
+    private val webSearch by lazy { com.zevcorp.graph.platform.GeminiSearch(apiKey, model) }
+
     private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
 
     private val voice = object : Voice {
@@ -178,7 +181,7 @@ class GraphApp : Application() {
      * arranca un hilo fresco. Devuelve ambos para poder guardar el id/tokens del hilo al terminar.
      */
     private fun newSession(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, GeminiBrain> {
-        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus)
+        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus, webSearch)
         val brain = newBrain(mcp)
         if (resume) brain.resume(conversationId)
         val engine = ExecutionEngine(

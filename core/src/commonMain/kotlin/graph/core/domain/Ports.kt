@@ -37,7 +37,6 @@ interface SystemApi {
     suspend fun call(number: String): Boolean
     suspend fun sendSms(number: String, message: String): Boolean
     suspend fun sendEmail(to: String, subject: String, body: String): Boolean
-    suspend fun webSearch(query: String): Boolean
     suspend fun openUrl(url: String): Boolean
     suspend fun maps(query: String): Boolean
     suspend fun directions(destination: String): Boolean
@@ -49,6 +48,18 @@ interface SystemApi {
     suspend fun setVolume(stream: String, percent: Int): Boolean
     /** Sube/baja/muda/restaura un stream con un solo golpe, como el botón físico (sin porcentaje exacto). */
     suspend fun adjustVolume(stream: String, direction: String): Boolean
+}
+
+/**
+ * Búsqueda web AGÉNTICA (estado del arte): el modelo busca en Google (grounding nativo de Gemini),
+ * LEE los resultados y devuelve una síntesis con fuentes. A diferencia de abrir el buscador con un
+ * Intent, aquí el asistente recibe el texto de vuelta y puede razonar/actuar con él en el mismo run.
+ * Se expone como la herramienta MCP `web_search`, que el asistente invoca por sí solo cuando lo cree
+ * necesario (igual que decide cuándo hablar): 100% autónomo, sin bloqueos ni censura de consultas.
+ */
+fun interface WebSearch {
+    /** Ejecuta la búsqueda y devuelve texto legible para el modelo (respuesta + fuentes). */
+    suspend fun search(query: String): String
 }
 
 /* ---------- El cerebro (Gemini 3.5 Flash): computer-use + herramientas MCP ---------- */
