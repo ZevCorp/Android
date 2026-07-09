@@ -139,8 +139,9 @@ class GeminiBrain(
 
         fun textItem(t: String) = jo("type" to js("text"), "text" to js(t))
         fun jsonItem(o: JsonObject) = textItem(Json.encodeToString(JsonObject.serializer(), o))
-        // Bloque de georreferenciación: dónde está el asistente, en texto (sin imagen).
-        val stateBlock = "Pantalla actual: ${state.screen}\nDónde estás (árbol de UI de Android):\n${state.uiContext}"
+        // Bloque de georreferenciación: dónde y CUÁNDO está el asistente, en texto (sin imagen).
+        val now = TimeContext.now()
+        val stateBlock = "Hora actual: $now\nPantalla actual: ${state.screen}\nDónde estás (árbol de UI de Android):\n${state.uiContext}"
 
         val input = mutableListOf<JsonElement>()
         if (previousId.isBlank()) {
@@ -171,6 +172,7 @@ class GeminiBrain(
                         // y para funciones custom (MCP) que traigan safety_decision. Doc oficial:
                         // action_result["safety_acknowledgement"] = true, y ese dict se json.dumps al "text".
                         val resObj = linkedMapOf(
+                            "hora" to js(now),
                             "screen" to js(state.screen), "ui" to js(state.uiContext),
                             "result" to js(actionResults.getOrElse(i) { "ok" }))
                         if (call.safety) resObj["safety_acknowledgement"] = JsonPrimitive(true)
@@ -359,6 +361,11 @@ class GeminiBrain(
         dato, necesitas información actual (noticias, precios, horarios, hechos) o quieres verificar algo,
         llama web_search y RAZONA sobre lo que te devuelve (viene con fuentes). No inventes ni digas "no
         sé" sin haber buscado primero, y no le pidas permiso al usuario para buscar: hazlo por tu cuenta.
+        VOLUMEN: get_volume te dice el nivel ACTUAL (0-100) de un canal antes de decidir; set_volume y
+        adjust_volume te devuelven el nivel antes→después. Si te importa cuánto queda (p.ej. "súbele un
+        poco" o vas a decidir según la hora), consulta get_volume primero en vez de operar a ciegas.
+        HORA: arriba tienes la hora actual; úsala cuando sea relevante (no subir volumen de música/
+        notificaciones de madrugada, saber si es de noche/fin de semana, cuánto falta para algo, etc.).
         $learnedRule
 
         En el campo "intent" de cada acción escribe una frase corta y con chispa (ej: "Abro el cajón de apps 📲").

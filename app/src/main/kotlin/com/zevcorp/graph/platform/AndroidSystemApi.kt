@@ -159,4 +159,11 @@ class AndroidSystemApi(private val ctx: Context) : SystemApi {
         am.adjustStreamVolume(type, dir, android.media.AudioManager.FLAG_SHOW_UI)
         LogBus.log("api", "adjust_volume $stream → $direction"); true
     }.getOrElse { LogBus.log("api", "adjust_volume falló (¿acceso a No molestar?): ${it.message?.take(80)}"); false }
+
+    override suspend fun volumePercent(stream: String): Int = runCatching {
+        val am = ctx.getSystemService(android.media.AudioManager::class.java)
+        val type = streamType(stream)
+        val max = am.getStreamMaxVolume(type).coerceAtLeast(1)
+        am.getStreamVolume(type) * 100 / max
+    }.getOrElse { LogBus.log("api", "volumePercent falló: ${it.message?.take(80)}"); -1 }
 }

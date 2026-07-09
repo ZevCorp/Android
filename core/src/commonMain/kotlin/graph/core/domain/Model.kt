@@ -126,20 +126,42 @@ class Mcp(
             listOf(McpParam("text", "Texto a compartir"))) { system.shareText(it.str("text")) },
         McpTool("set_clipboard", "Copia un texto al portapapeles (sin UI).",
             listOf(McpParam("text", "Texto a copiar"))) { system.setClipboard(it.str("text")) },
-        McpTool("set_volume", "Ajusta el volumen de un canal de audio directamente (sin UI). Útil para " +
-            "asegurar que una alarma/llamada/medio se oiga.",
+        McpTool("get_volume", "Consulta el volumen ACTUAL (0-100) de uno o todos los canales de audio, " +
+            "antes de decidir cuánto subir/bajar. Úsala si te importa el nivel de partida (p.ej. \"sube " +
+            "un poco\" vs \"ponlo al tope\"); si solo vas a maximizar o mutear, no hace falta consultarla.",
+            listOf(McpParam("stream", "Canal de audio (vacío = todos)", listOf("media", "ring", "alarm", "notification", "call"))),
+            reply = {
+                val s = it.str("stream")
+                val streams = if (s.isBlank()) listOf("media", "ring", "alarm", "notification", "call") else listOf(s)
+                val parts = streams.map { st -> "$st: ${system.volumePercent(st)}%" }
+                parts.joinToString(" · ")
+            }),
+        McpTool("set_volume", "Ajusta el volumen de un canal de audio directamente (sin UI) y te DEVUELVE " +
+            "el nivel antes→después. Útil para asegurar que una alarma/llamada/medio se oiga.",
             listOf(
                 McpParam("stream", "Canal de audio", listOf("media", "ring", "alarm", "notification", "call")),
                 McpParam("percent", "Nivel 0-100 (usa 100 para asegurar que se oiga)"),
-            )) { system.setVolume(it.str("stream").ifBlank { "media" }, it.int("percent", 100)) },
+            ), reply = {
+                val stream = it.str("stream").ifBlank { "media" }
+                val before = system.volumePercent(stream)
+                val ok = system.setVolume(stream, it.int("percent", 100))
+                val after = system.volumePercent(stream)
+                if (ok) "$stream: $before% → $after%" else "no se pudo ajustar $stream (seguía en $before%)"
+            }),
         McpTool("adjust_volume", "Sube, baja, muda o restaura el volumen de un canal de audio con un solo " +
-            "golpe (como el botón físico), sin necesitar un porcentaje exacto. Úsala, por ejemplo, para " +
-            "bajar el volumen tras poner música/un video si crees que puede molestar, o subirlo si el " +
-            "usuario no lo va a escuchar bien.",
+            "golpe (como el botón físico), sin necesitar un porcentaje exacto, y te DEVUELVE el nivel " +
+            "antes→después. Úsala, por ejemplo, para bajar el volumen tras poner música/un video si crees " +
+            "que puede molestar, o subirlo si el usuario no lo va a escuchar bien.",
             listOf(
                 McpParam("stream", "Canal de audio", listOf("media", "ring", "alarm", "notification", "call")),
                 McpParam("direction", "Acción", listOf("raise", "lower", "mute", "unmute")),
-            )) { system.adjustVolume(it.str("stream").ifBlank { "media" }, it.str("direction")) },
+            ), reply = {
+                val stream = it.str("stream").ifBlank { "media" }
+                val before = system.volumePercent(stream)
+                val ok = system.adjustVolume(stream, it.str("direction"))
+                val after = system.volumePercent(stream)
+                if (ok) "$stream: $before% → $after%" else "no se pudo ajustar $stream (seguía en $before%)"
+            }),
     )
 
     // Herramientas aprendidas: el mapa de una pantalla estructurado en la enseñanza. El modelo compone

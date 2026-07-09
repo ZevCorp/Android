@@ -37,10 +37,15 @@ Dos familias, ambas declaradas en `core` (`Mcp`) con nombre, esquema de parámet
 | `open_camera` | `MediaStore.ACTION_IMAGE_CAPTURE` |
 | `open_settings` | `Settings.ACTION_*` por sección |
 | `share_text` · `set_clipboard` | `ACTION_SEND` / `ClipboardManager` |
+| `get_volume` · `set_volume` · `adjust_volume` | `AudioManager` |
 
 Estas usan los **Common Intents de Android** — llamadas de sistema directas, no interacción con la pantalla. El modelo las prefiere sobre computer-use para tareas del sistema. Añadir una capacidad = añadir una entrada a `tools`.
 
-**Búsqueda web agéntica** (`web_search`): a diferencia de las de arriba, no dispara un Intent. Usa el **Google Search grounding** nativo de Gemini 3.5 Flash: en una sub-llamada a `generateContent` con la tool `google_search`, el modelo busca en Google, lee los resultados y devuelve una síntesis con fuentes. Ese texto vuelve al asistente como resultado de la herramienta, así que **razona y actúa sobre lo que encuentra** en el mismo run (`GeminiSearch` → puerto `WebSearch`). El asistente decide por sí solo cuándo buscar, igual que decide cuándo hablar. Es la única herramienta MCP que *devuelve información* (campo `reply` de `McpTool`), no solo un ok/fallo.
+**Búsqueda web agéntica** (`web_search`): a diferencia de las de arriba, no dispara un Intent. Usa el **Google Search grounding** nativo de Gemini 3.5 Flash: en una sub-llamada a `generateContent` con la tool `google_search`, el modelo busca en Google, lee los resultados y devuelve una síntesis con fuentes. Ese texto vuelve al asistente como resultado de la herramienta, así que **razona y actúa sobre lo que encuentra** en el mismo run (`GeminiSearch` → puerto `WebSearch`). El asistente decide por sí solo cuándo buscar, igual que decide cuándo hablar.
+
+**Volumen con contexto** (`get_volume` / `set_volume` / `adjust_volume`): el asistente nunca ajusta a ciegas. `get_volume` consulta el nivel 0-100 de un canal (o de todos) *antes* de decidir cuánto mover; `set_volume`/`adjust_volume` devuelven el nivel **antes→después** de actuar, así que el resultado mismo de la acción ya le da el contexto que le faltaba. Estas tres, junto a `web_search`, son las únicas herramientas MCP que *devuelven información* (campo `reply` de `McpTool`) en vez de solo un ok/fallo.
+
+**Contexto de hora**: cada turno de una ejecución lleva la hora actual (`TimeContext`, es-ES) junto al estado de pantalla — el modelo la usa para decisiones sensibles al momento (no subir volumen de madrugada, saber si es fin de semana…). Es especialmente importante en `Anticipation` (ver abajo): la recomendación que hace el asistente al terminar una tarea depende de qué hora es.
 
 **Herramientas aprendidas** (capa de enseñanza): además, el asistente puede *crear* herramientas MCP nuevas enseñándole (ver abajo). Se ejecutan reproduciendo una secuencia de toques sobre el árbol de UI.
 
@@ -96,7 +101,7 @@ Mientras el asistente ejecuta aparece un **micrófono casi invisible** abajo. Si
 
 ## El amigo prevenido (anticipación)
 
-Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. (Mindset **protector** de la acción recién ejecutada — p.ej. alarma puesta → subir el volumen. El mindset **propositivo** en tiempo real vive en el aprendizaje pasivo, arriba.) Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, `set_volume alarm 100`); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible.
+Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. (Mindset **protector** de la acción recién ejecutada — p.ej. alarma puesta → subir el volumen. El mindset **propositivo** en tiempo real vive en el aprendizaje pasivo, arriba.) Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, consultar `get_volume alarm` y solo subirlo con `set_volume alarm 100` si hace falta); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible. Recibe la **hora actual** en el prompt: la usa para juzgar qué es razonable según el momento (p.ej. no subir volumen de medios/notificaciones de madrugada, salvo que sea una alarma).
 
 ## La burbuja flotante
 

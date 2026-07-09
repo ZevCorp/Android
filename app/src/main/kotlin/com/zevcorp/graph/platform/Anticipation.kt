@@ -30,15 +30,19 @@ class Anticipation(
             que se anticipa a los problemas antes de que pasen (vamos al carro → nota que vas corto de
             gasolina y busca una estación en el camino).
 
+            Hora actual: ${TimeContext.now()}
             Lo que el usuario pidió: "$request"
             Lo que hiciste: "$done"
             Herramientas/acciones disponibles para actuar: $tools
 
             PIENSA CORTO (campo "reasoning", UNA frase): ¿hay algo que hacer JUSTO AHORA para que lo
-            pedido no se tropiece? Ejemplos: tras poner una ALARMA, asegurar que el volumen de la
-            alarma esté arriba (set_volume alarm 100); antes de transmitir a un parlante, que el wifi
-            esté encendido; tras poner música o reproducir un video, bajar el volumen de media si crees
-            que puede molestar (o subirlo si va a costar oírlo) con adjust_volume/set_volume.
+            pedido no se tropiece? Ejemplos: tras poner una ALARMA, consultar get_volume alarm y, si está
+            bajo, subirlo con set_volume alarm 100 (una alarma SIEMPRE debe oírse, sin importar la hora);
+            antes de transmitir a un parlante, que el wifi esté encendido; tras poner música o reproducir
+            un video, usar get_volume media y bajarlo con adjust_volume/set_volume si crees que puede
+            molestar dada la hora (p.ej. de noche/madrugada), o subirlo si va a costar oírlo.
+            TEN EN CUENTA LA HORA para juzgar qué molesta: lo que es razonable a media tarde puede no
+            serlo de madrugada (llamadas, volumen de notificaciones/medios), salvo que sea una alarma.
 
             REGLAS ESTRICTAS:
             - "task": SOLO si es una acción de CERTEZA TOTAL, segura y reversible, que claramente

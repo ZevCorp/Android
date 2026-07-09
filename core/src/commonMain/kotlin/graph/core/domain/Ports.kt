@@ -48,6 +48,8 @@ interface SystemApi {
     suspend fun setVolume(stream: String, percent: Int): Boolean
     /** Sube/baja/muda/restaura un stream con un solo golpe, como el botón físico (sin porcentaje exacto). */
     suspend fun adjustVolume(stream: String, direction: String): Boolean
+    /** Nivel actual de un stream (media/ring/alarm/notification/call), 0..100. -1 si no se pudo leer. */
+    suspend fun volumePercent(stream: String): Int
 }
 
 /**
