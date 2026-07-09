@@ -49,6 +49,13 @@ El propio modelo elige la vía: `GeminiBrain` le declara, en el mismo turno, la 
 
 Hoy los gestos están hardcodeados contra la superficie de accesibilidad; las herramientas aprendidas del árbol de UI y los workflows se añaden al catálogo sin tocar el motor.
 
+> **⏸ Ejecución subconsciente desconectada temporalmente.** El interruptor `subconsciousExecution`
+> (en `GraphApp`) está en `false`: la EJECUCIÓN no expone al modelo las herramientas aprendidas del
+> árbol de UI ni los workflows encadenados, así que el asistente resuelve todo por la vía CONSCIENTE
+> (computer-use) apoyado en el MCP base (gestos + acciones de sistema, incl. `web_search`). El
+> APRENDIZAJE sigue intacto (pasivo y activo graban workflows, consolidan mapas MCP y todo se
+> persiste/sincroniza); solo se apaga el REPLAY. Reactivar = poner el flag en `true`.
+
 ## Workflows: el puente consciente ↔ subconsciente
 
 El asistente está inspirado en el ser humano: una misma tarea se ejecuta alternando entre lo

@@ -254,6 +254,20 @@ class GraphApp : Application() {
         if (subconscious) bubble?.pulse()
     }
 
+    /**
+     * INTERRUPTOR TEMPORAL — ejecución SUBCONSCIENTE desconectada.
+     *
+     * Con `false`, la EJECUCIÓN no expone al modelo las herramientas aprendidas del árbol de UI ni los
+     * workflows encadenados: el asistente resuelve todo por la vía CONSCIENTE (computer-use) apoyado en
+     * el MCP base (gestos de accesibilidad + acciones de sistema, incluido `web_search`). Una sola vía
+     * = ejecución más simple y directa.
+     *
+     * El APRENDIZAJE sigue 100 % vivo: la enseñanza pasiva y activa graban workflows, consolidan los
+     * mapas MCP de cada app y todo se persiste y sincroniza (disco + nube + Neo4j). Lo único apagado es
+     * el REPLAY de ese conocimiento. Para reactivar la vía subconsciente, poner en `true`.
+     */
+    private val subconsciousExecution = false
+
     private fun newBrain(mcp: Mcp) = GeminiBrain(apiKey, model, mcp.tools, listApps = {
         packageManager.getInstalledApplications(0)
             .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
@@ -284,14 +298,20 @@ class GraphApp : Application() {
     private fun newSession(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, GeminiBrain> {
         // El runner de workflows: los steps subconscientes salen por MCP (clic por árbol de UI) y los
         // conscientes por un motor acotado a ese step; el switch de vía se señala igual que siempre.
-        val runner = WorkflowRunner(
+        // Solo se cablea si la vía subconsciente está activa.
+        val runner = if (subconsciousExecution) WorkflowRunner(
             player = service,
             elements = { service.elements() }, // árbol de UI vivo: para encadenar y saltar pasos ya cumplidos
             conscious = { wf, step, context -> consciousStep(surface, service, wf, step, context) },
             mode = modeSignal, stepDelay = stepDelay, log = LogBus,
-        )
-        val mcp = Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus,
-            workflows = workflows.list(), workflowExecutor = runner)
+        ) else null
+        // Subconsciente OFF: el Mcp no expone herramientas aprendidas ni workflows; solo el MCP base
+        // (gestos + sistema). El aprendizaje los sigue grabando y consolidando, pero no se ejecutan.
+        val mcp = if (subconsciousExecution)
+            Mcp(service, AndroidSystemApi(service), learnedTools.list(), service, stepDelay, LogBus,
+                workflows = workflows.list(), workflowExecutor = runner)
+        else
+            Mcp(service, AndroidSystemApi(service), emptyList(), service, stepDelay, LogBus)
         val brain = newBrain(mcp)
         if (resume) brain.resume(conversationId)
         val engine = ExecutionEngine(
@@ -427,7 +447,9 @@ class GraphApp : Application() {
     /** Cadena de pensamiento breve al terminar → acción autónoma segura y/o aviso hablado. */
     private suspend fun anticipate(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, summary: String) {
         val request = synchronized(goalPrompts) { goalPrompts.joinToString(" · ") }
-        val tools = Mcp(service, AndroidSystemApi(service), learnedTools.list()).tools.joinToString(", ") { it.name }
+        // Coherente con la vía activa: sin subconsciente, la anticipación solo ve el MCP base.
+        val availableLearned = if (subconsciousExecution) learnedTools.list() else emptyList()
+        val tools = Mcp(service, AndroidSystemApi(service), availableLearned).tools.joinToString(", ") { it.name }
         val foresight = runCatching { anticipation.consider(request, summary, tools) }.getOrNull() ?: return
         if (foresight.say.isNotBlank()) voice.speak(foresight.say)
         if (foresight.task.isNotBlank()) {
