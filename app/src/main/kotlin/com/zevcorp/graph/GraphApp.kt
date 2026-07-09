@@ -263,6 +263,7 @@ class GraphApp : Application() {
         // conscientes por un motor acotado a ese step; el switch de vía se señala igual que siempre.
         val runner = WorkflowRunner(
             player = service,
+            elements = { service.elements() }, // árbol de UI vivo: para encadenar y saltar pasos ya cumplidos
             conscious = { wf, step, context -> consciousStep(surface, service, wf, step, context) },
             mode = modeSignal, stepDelay = stepDelay, log = LogBus,
         )

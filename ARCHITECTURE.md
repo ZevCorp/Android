@@ -75,12 +75,14 @@ el clic** sobre un elemento del árbol de UI.
     cantidad ni acciones.
   - *Ambos en la misma pasada*: al salir de una app la secuencia es consolidar el MCP → reconectar
     workflows previos → estructurar el workflow (que ya ve el catálogo fresco). Sin carreras.
-- **Ejecución** — la ejecución MCP está plasmada encima de los workflows: cada workflow se declara
-  como herramienta MCP (`workflow_*`) y el modelo la invoca entera. `WorkflowRunner` (core) recorre
-  los steps haciendo **switch** entre vías según avanza: los subconscientes tocan por árbol de UI
-  (`UiPlayer.tapLabel`, sin pantalla) y los conscientes corren un motor acotado a ese único step. Si
-  un clic subconsciente falla, el step cae en caliente a la vía consciente, como un humano que "despierta"
-  cuando algo no está donde lo esperaba.
+- **Ejecución** — la ejecución MCP está plasmada encima de los workflows: cuando el objetivo coincide
+  con un workflow, el modelo lo invoca ENTERO en su primera respuesta (una sola llamada API) y de ahí
+  `WorkflowRunner` (core) encadena los steps **sin volver al modelo**. Es adaptativo: en cada paso lee
+  el árbol de UI VIVO (lectura local, sin API) y decide — si el elemento está, lo toca por árbol de UI
+  (subconsciente, en cadena); si no está pero el de un paso POSTERIOR sí, **salta los pasos ya
+  cumplidos** (p.ej. Spotify abrió directo en "Me Gusta") y encadena desde ahí; solo si ningún
+  elemento aplica, ese paso cae a un motor consciente acotado. Así una segunda ejecución de algo
+  aprendido avanza en ~1-2 s en vez de una llamada API por paso.
 - **Persistencia** — `WorkflowRepo` (files/workflows/) + copia en la nube (`graph_workflows`).
 - **Grafo de conocimiento (Neo4j)** — `KnowledgeGraph` proyecta los aprendizajes del árbol de UI y
   los workflows a Neo4j Aura (Cypher por HTTP, credenciales en la app): `(:Workflow)-[:HAS_STEP]->`
