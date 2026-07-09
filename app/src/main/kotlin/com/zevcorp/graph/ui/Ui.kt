@@ -47,6 +47,8 @@ object Palette {
     val danger = 0xFFE5534B.toInt()
     /** Verde semántico: marca los elementos de UI que el sistema YA aprendió (visualización del 🎓). */
     val learned = 0xFF2FBF71.toInt()
+    /** Naranja de diagnóstico: destello del elemento que el AGENTE resolvería al tocar tú (prueba del 🎓). */
+    val probe = 0xFFFF9500.toInt()
 
     /* ---------- La cara (FaceView) ---------- */
     val faceLine: Int get() = if (dark) WHITE else BLACK

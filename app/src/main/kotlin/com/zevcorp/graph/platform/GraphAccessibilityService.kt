@@ -69,12 +69,17 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
                 if (visualizing) refreshLearnedOverlay()
             }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
-                if (!app.passive.active || !isRealApp(pkg) || pkg == launcherPkg) return
-                val label = event.source?.let { labelOf(it) } ?: return
-                if (label.isBlank()) return
-                val screenNow = currentScreen()
-                val visible = elementsNow()
-                app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+                if (!isRealApp(pkg) || pkg == launcherPkg) return
+                val label = event.source?.let { labelOf(it) }?.takeIf { it.isNotBlank() } ?: return
+                // Diagnóstico (modo visualización del 🎓): ilumina el nodo que el AGENTE resolvería para
+                // esta etiqueta con su MISMO mecanismo, para comparar con el que tocaste. Solo visual.
+                if (visualizing) probeResolved(label)
+                // Enseñanza pasiva: comportamiento existente, intacto.
+                if (app.passive.active) {
+                    val screenNow = currentScreen()
+                    val visible = elementsNow()
+                    app.scope.launch { app.passive.signal(pkg, screenNow, label, visible) }
+                }
             }
             AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED, AccessibilityEvent.TYPE_VIEW_SCROLLED ->
                 if (visualizing) refreshLearnedOverlay()
@@ -108,10 +113,30 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
             }
         } else {
             uiHandler.removeCallbacks(overlayRefresh)
+            uiHandler.removeCallbacks(probeClear)
             highlighter.hide()
         }
         LogBus.log("learn", if (visualizing) "👁 visualización de lo aprendido ON" else "visualización OFF")
         return visualizing
+    }
+
+    private val probeClear = Runnable { highlighter.probe(null) }
+
+    /**
+     * DIAGNÓSTICO (solo visual, modo 🎓): al tocar TÚ un elemento, ilumina en naranja el nodo que el
+     * agente TOCARÍA al llamar esa etiqueta, resuelto EXACTAMENTE como en tapLabel (findByLabel +
+     * clickableAncestor). Si por etiquetas duplicadas cae en un nodo distinto del que tocaste, verás el
+     * destello sobre el elemento equivocado — justo el caso que se quiere detectar. No modifica el
+     * mecanismo real (IDs/llamadas del modelo): solo lo re-ejecuta para leer los bounds y pintarlos.
+     */
+    private fun probeResolved(label: String) {
+        val node = findByLabel(label) ?: return
+        val target = clickableAncestor(node) ?: node
+        val r = Rect().also { target.getBoundsInScreen(it) }
+        LogBus.log("learn", "🔎 prueba: tocaste \"$label\" → el agente iría a ${r.centerX()},${r.centerY()}")
+        highlighter.probe(r)
+        uiHandler.removeCallbacks(probeClear)
+        uiHandler.postDelayed(probeClear, 1200)
     }
 
     /** Debounce con cola: coalescea la ráfaga de eventos pero SIEMPRE ejecuta el último refresco,

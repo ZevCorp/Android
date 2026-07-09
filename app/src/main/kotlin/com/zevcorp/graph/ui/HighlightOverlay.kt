@@ -48,8 +48,19 @@ class HighlightOverlay(private val service: AccessibilityService) {
         v.invalidate()
     }
 
+    /**
+     * Destello de DIAGNÓSTICO: ilumina en naranja, encima de todo, el recuadro del elemento que el
+     * agente resolvería al tocar (ver GraphAccessibilityService.probeResolved). `null` lo apaga. No
+     * afecta a los recuadros estáticos (aprendido/detectado): es una capa separada y momentánea.
+     */
+    fun probe(rect: Rect?) {
+        view?.let { it.probeBox = rect?.let { r -> RectF(r) }; it.invalidate() }
+    }
+
     fun hide() {
-        view?.let { it.learnedBoxes = emptyList(); it.detectedBoxes = emptyList(); it.invalidate() }
+        view?.let {
+            it.learnedBoxes = emptyList(); it.detectedBoxes = emptyList(); it.probeBox = null; it.invalidate()
+        }
     }
 
     fun destroy() {
@@ -60,6 +71,7 @@ class HighlightOverlay(private val service: AccessibilityService) {
     private class BoxView(c: Context) : View(c) {
         var learnedBoxes: List<RectF> = emptyList()
         var detectedBoxes: List<RectF> = emptyList()
+        var probeBox: RectF? = null
         private val screenLoc = IntArray(2)
         private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE; strokeWidth = 7f
@@ -67,7 +79,7 @@ class HighlightOverlay(private val service: AccessibilityService) {
         private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
         override fun onDraw(canvas: Canvas) {
-            if (learnedBoxes.isEmpty() && detectedBoxes.isEmpty()) return
+            if (learnedBoxes.isEmpty() && detectedBoxes.isEmpty() && probeBox == null) return
             // Los bounds son coordenadas de PANTALLA (getBoundsInScreen); la ventana puede no
             // empezar en (0,0), así que se resta su posición real — igual que hace TalkBack.
             getLocationOnScreen(screenLoc)
@@ -75,8 +87,10 @@ class HighlightOverlay(private val service: AccessibilityService) {
             canvas.translate(-screenLoc[0].toFloat(), -screenLoc[1].toFloat())
             // Primero lo detectado-pero-no-aprendido en el acento del tema (negro/blanco: nunca azul)…
             drawBoxes(canvas, detectedBoxes, Palette.accent)
-            // …y encima lo aprendido en verde, para que resalte sobre el resto.
+            // …lo aprendido en verde, para que resalte sobre el resto…
             drawBoxes(canvas, learnedBoxes, Palette.learned)
+            // …y por ENCIMA de todo, el destello de diagnóstico (naranja) del elemento resuelto al tocar.
+            probeBox?.let { drawBoxes(canvas, listOf(it), Palette.probe) }
             canvas.restore()
         }
 
