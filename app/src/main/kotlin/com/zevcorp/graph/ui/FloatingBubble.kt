@@ -87,6 +87,23 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     /** El micrófono está ocupado por la escucha de esquina: el aprendizaje no debe interrumpir ahora. */
     val voiceBusy get() = voiceDock.docked || voiceDock.listening
 
+    /**
+     * ¿El punto (coords de pantalla) cae sobre la carita o el panel abierto? Lo usa la captura profunda
+     * de toques para DEJAR PASAR esos toques tal cual mientras intercepta el touchscreen — así la carita
+     * y su panel siguen siendo tocables y el usuario puede salir del modo (mantener oprimido el 🎓).
+     */
+    fun overOwnUi(x: Int, y: Int): Boolean {
+        if (!::bubbleParams.isInitialized) return false
+        val bx = bubbleParams.x; val by = bubbleParams.y
+        if (x >= bx && x <= bx + bubbleParams.width && y >= by && y <= by + bubbleParams.height) return true
+        panel?.let { p ->
+            val loc = IntArray(2)
+            p.getLocationOnScreen(loc)
+            if (x >= loc[0] && x <= loc[0] + p.width && y >= loc[1] && y <= loc[1] + p.height) return true
+        }
+        return false
+    }
+
     fun show() {
         tts = TextToSpeech(service) { status ->
             if (status == TextToSpeech.SUCCESS) {
@@ -767,8 +784,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         val button = service.iconChip(Icon.TEACH, primary = active) { toggleActiveLearning() }
         if (active) button.background = rounded(Palette.accent, service.dp(21).toFloat())
         button.setOnLongClickListener {
-            val on = (service as? GraphAccessibilityService)?.toggleLearnedVisualization() ?: false
-            toast(if (on) "Te muestro todo lo que detecto · en verde lo que ya aprendí" else "Oculto la detección")
+            val svc = service as? GraphAccessibilityService
+            val on = svc?.toggleLearnedVisualization() ?: false
+            val deep = on && svc?.deepTouchCaptureEnabled == true
+            toast(when {
+                deep -> "Modo TalkBack: un toque ENMARCA el elemento (no lo activa) · doble toque para interactuar"
+                on -> "Te muestro todo lo que detecto · en verde lo que ya aprendí"
+                else -> "Oculto la detección"
+            })
             closePanel()
             true
         }

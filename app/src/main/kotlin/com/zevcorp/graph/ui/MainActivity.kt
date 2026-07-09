@@ -313,32 +313,33 @@ class MainActivity : Activity(), UserChannel {
         // de Android para des/activar el servicio de accesibilidad) sigue funcionando siempre: es una
         // fuente de entrada distinta (KeyEvent), no la toca esta captura.
         val deepRow = row()
-        deepRow.addView(title("Captura profunda de toques", size = 13f), LinearLayout.LayoutParams(0, -2, 1f))
+        deepRow.addView(title("Detección moderna de toques", size = 13f), LinearLayout.LayoutParams(0, -2, 1f))
         lateinit var deepBtn: Button
         fun deepLabel(on: Boolean) = if (on) "ON" else "OFF"
-        fun currentDeepState() = (app.ui as? GraphAccessibilityService)?.deepTouchCaptureOn ?: false
-        deepBtn = button(deepLabel(currentDeepState()), primary = currentDeepState()) {
+        fun paintDeep(btn: Button, on: Boolean) {
+            btn.text = deepLabel(on); btn.isAllCaps = false
+            btn.background = rounded(if (on) Palette.accent else Palette.card, dp(14).toFloat(),
+                if (on) 0 else Palette.cardBorder)
+            btn.setTextColor(if (on) Palette.bg else Palette.text)
+        }
+        val deepOn0 = (app.ui as? GraphAccessibilityService)?.deepTouchCaptureEnabled ?: false
+        deepBtn = button(deepLabel(deepOn0), primary = deepOn0) {
             val svc = app.ui as? GraphAccessibilityService
             if (svc == null) { startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS)); return@button }
             if (!svc.deepTouchCaptureSupported) {
                 Toast.makeText(this, "Necesita Android 14 o superior", Toast.LENGTH_SHORT).show(); return@button
             }
-            val turningOn = !svc.deepTouchCaptureOn
-            val nowOn = svc.setDeepTouchCapture(turningOn)
-            deepBtn.text = deepLabel(nowOn)
-            deepBtn.isAllCaps = false
-            deepBtn.background = rounded(if (nowOn) Palette.accent else Palette.card, dp(14).toFloat(),
-                if (nowOn) 0 else Palette.cardBorder)
-            deepBtn.setTextColor(if (nowOn) Palette.bg else Palette.text)
-            if (turningOn && !nowOn) Toast.makeText(this, "No se pudo activar", Toast.LENGTH_SHORT).show()
+            val nowOn = svc.setDeepTouchCaptureEnabled(!svc.deepTouchCaptureEnabled)
+            paintDeep(deepBtn, nowOn)
         }
         deepRow.addView(deepBtn)
         dev.addView(deepRow)
         dev.gap(dp(4))
-        dev.addView(caption("Experimental: intercepta y reinyecta cada toque para leerlo aunque la app " +
-            "no lo reporte (Spotify, etc). Se apaga sola ante cualquier fallo. Si algo se ve raro, el " +
-            "atajo de volumen arriba+abajo desactiva el servicio de accesibilidad completo sin importar " +
-            "este modo."))
+        dev.addView(caption("Experimental (Android 14+): NO se activa aquí. Solo habilita que, al MANTENER " +
+            "oprimido el 🎓, entres en modo tipo TalkBack — un toque enmarca el elemento (sin activarlo) y " +
+            "el DOBLE toque sí interactúa. Sirve para leer toques que la app no reporta (Spotify, etc). Se " +
+            "apaga sola ante cualquier fallo; y el atajo de volumen arriba+abajo desactiva el servicio de " +
+            "accesibilidad completo pase lo que pase."))
         dev.gap(dp(10))
         logView = TextView(this).apply {
             textSize = 10f

@@ -10,39 +10,41 @@ import android.view.MotionEvent
 import android.view.ViewConfiguration
 
 /**
- * CAPTURA PROFUNDA DE TOQUES — experimental, API 34+, APAGADA por defecto. Toggle manual desde el
- * panel de Desarrollador (nunca se reactiva sola entre reinicios del servicio).
+ * CAPTURA PROFUNDA DE TOQUES estilo TalkBack — experimental, API 34+. Su capacidad se HABILITA en el
+ * panel de Desarrollador, pero solo se ACTIVA (empieza a interceptar) mientras el 🎓 está mantenido
+ * oprimido. Nunca intercepta por su cuenta.
  *
- * Por qué existe: muchas apps modernas (UI de Compose, vistas custom como el botón de play de Spotify)
- * NUNCA emiten TYPE_VIEW_CLICKED al tocarlas con el dedo — no es que la señal llegue tarde, es que no
- * existe. Es la causa real por la que el aprendizaje nunca detectaba esos toques.
+ * Modelo de interacción (como el explorador táctil de TalkBack):
+ *  - UN toque: se CONSUME (no llega a la app) y se avisa (onExplore) para enmarcar el elemento tocado.
+ *    Es exploración: ver qué hay sin activarlo.
+ *  - DOBLE toque (sobre el mismo punto, rápido): AHORA sí se reinyecta el clic real con dispatchGesture
+ *    para que el sistema interactúe (onActivate).
+ *  - Arrastre/desliz de un dedo: se reinyecta tal cual, para poder navegar/scrollear con normalidad.
  *
- * La vía "moderna": registrar el servicio para OBSERVAR los MotionEvent crudos del touchscreen
- * (AccessibilityServiceInfo#setMotionEventSources, API 34) y REINYECTAR cada gesto con dispatchGesture
- * para que la app los reciba con normalidad — el usuario no nota diferencia salvo una latencia mínima.
+ * Por qué observar el touchscreen crudo (setMotionEventSources, API 34): muchas apps modernas (Compose,
+ * vistas custom como el play de Spotify) NUNCA emiten TYPE_VIEW_CLICKED al tocarlas; esta vía capta el
+ * toque físico sin depender de que la app coopere.
  *
- * RIESGO REAL (por qué está tan acotado): la documentación de Android es explícita — los MotionEvent
- * de las fuentes registradas "are not sent to the rest of the system" mientras estén activas. Si la
- * reinyección fallara sin red de seguridad, el touchscreen completo dejaría de responder, en cualquier
- * app, incluida la pantalla de Ajustes para desactivar el servicio. Por eso:
- *  - Apagada por defecto; el toggle vive en el panel de Desarrollador y no se persiste como "encendida".
- *  - Kill switch INMEDIATO (`fail()`) ante la primera señal real de problema: dispatchGesture
- *    rechazado o gesto cancelado dos veces seguidas, o un segundo dedo en pantalla (multitouch: fuera
- *    de alcance de esta primera versión — se prefiere perder ESE gesto puntual a arriesgar quedar
- *    atascado). `disable()` es segura de llamar en cualquier estado y devuelve el touchscreen a las
- *    apps de inmediato.
- *  - El gesto físico de volumen arriba+abajo (atajo NATIVO de Android para activar/desactivar un
- *    servicio de accesibilidad) sigue funcionando SIEMPRE pase lo que pase aquí: es un KeyEvent, una
- *    fuente de entrada distinta a SOURCE_TOUCHSCREEN, así que nunca se ve afectado por esta captura.
+ * Seguridad (la doc de Android confirma que las fuentes registradas "are not sent to the rest of the
+ * system" mientras están activas):
+ *  - disable() es SIEMPRE segura de llamar y devuelve el touchscreen a las apps de inmediato.
+ *  - Kill switch (fail): ante dispatchGesture rechazado o cancelado dos veces seguidas, o un segundo
+ *    dedo (multitouch fuera de alcance), se apaga sola. Se prefiere perder ESE gesto puntual a
+ *    arriesgar quedar atascado.
+ *  - El atajo físico de volumen arriba+abajo (nativo de Android para des/activar accesibilidad) es un
+ *    KeyEvent, fuente distinta a SOURCE_TOUCHSCREEN: nunca se ve afectado por esta captura.
  */
 class DeepTouchCapture(
     private val service: AccessibilityService,
-    /** ACTION_DOWN en coordenadas de pantalla: la UI todavía no ha reaccionado al toque. */
-    private val onDown: (x: Int, y: Int) -> Unit,
-    /** El gesto terminó y fue un TAP (sin arrastre significativo). */
-    private val onTap: () -> Unit,
-    /** El kill switch se disparó: quien controla el toggle debe reflejar el apagado (UI, log, aviso). */
+    /** UN toque (consumido, no pasa a la app): enmarca el elemento en (x,y). Coords de pantalla. */
+    private val onExplore: (x: Int, y: Int) -> Unit,
+    /** DOBLE toque: el clic real ya se reinyectó en (x,y); consolidar/aprender lo interactuado. */
+    private val onActivate: (x: Int, y: Int) -> Unit,
+    /** El kill switch se disparó: reflejar el apagado (log/UI). */
     private val onKillSwitch: (reason: String) -> Unit,
+    /** ¿El punto cae sobre NUESTRA propia UI (carita/panel)? Esos toques se dejan pasar TAL CUAL, para
+     *  que el usuario pueda abrir el panel y salir del modo (si no, la carita quedaría intocable). */
+    private val isPassthrough: (x: Int, y: Int) -> Boolean = { _, _ -> false },
 ) {
     companion object {
         val supported get() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE
@@ -52,67 +54,102 @@ class DeepTouchCapture(
         private set
 
     private val slop = ViewConfiguration.get(service).scaledTouchSlop
+    private val doubleTapSlop = ViewConfiguration.get(service).scaledDoubleTapSlop
+    private val doubleTapTimeout = ViewConfiguration.getDoubleTapTimeout().toLong()
+
     private val path = Path()
     private var downX = 0f
     private var downY = 0f
     private var downAt = 0L
     private var dragged = false
+    private var passthrough = false
+    private var lastTapX = 0f
+    private var lastTapY = 0f
+    private var lastTapAt = 0L
     private var consecutiveFailures = 0
+    // Tras reinyectar, ignora eventos un instante: cortafuegos contra un posible bucle si los gestos
+    // reinyectados reaparecieran por onMotionEvent (evita cualquier realimentación descontrolada).
+    @Volatile private var ignoreUntil = 0L
 
-    /** Activa la observación del touchscreen a nivel de sistema. false si no es soportado o falla. */
+    /** Empieza a interceptar el touchscreen. false si no es soportado o falla. */
     fun enable(): Boolean {
-        if (!supported) return false
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE) return false
         val ok = runCatching {
             val info = service.serviceInfo ?: return@runCatching false
             info.motionEventSources = InputDevice.SOURCE_TOUCHSCREEN
             service.serviceInfo = info
             true
         }.getOrDefault(false)
-        if (ok) { active = true; consecutiveFailures = 0 }
+        if (ok) { active = true; consecutiveFailures = 0; lastTapAt = 0L }
         return ok
     }
 
-    /** Kill switch: SIEMPRE segura de llamar en cualquier estado; libera el touchscreen de inmediato. */
+    /** Kill switch: SIEMPRE segura; libera el touchscreen de inmediato. */
     fun disable() {
         active = false
-        runCatching {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) runCatching {
             val info = service.serviceInfo ?: return@runCatching
             info.motionEventSources = 0
             service.serviceInfo = info
         }
         path.reset()
+        lastTapAt = 0L
     }
 
     /** Llamar desde AccessibilityService.onMotionEvent. No hace nada si no está activa. */
     fun handle(e: MotionEvent) {
         if (!active) return
+        if (SystemClock.elapsedRealtime() < ignoreUntil) return
         if (e.pointerCount > 1) { fail("segundo dedo en pantalla (multitouch no soportado)"); return }
+        // rawX/rawY: coordenadas de PANTALLA (las mismas de getBoundsInScreen y dispatchGesture).
+        val ex = e.rawX; val ey = e.rawY
         when (e.actionMasked) {
             MotionEvent.ACTION_DOWN -> {
-                path.reset()
-                path.moveTo(e.x, e.y)
-                downX = e.x; downY = e.y
-                downAt = SystemClock.elapsedRealtime()
-                dragged = false
-                onDown(e.x.toInt(), e.y.toInt())
+                path.reset(); path.moveTo(ex, ey)
+                downX = ex; downY = ey; downAt = SystemClock.elapsedRealtime(); dragged = false
+                passthrough = isPassthrough(ex.toInt(), ey.toInt())
             }
             MotionEvent.ACTION_MOVE -> {
-                path.lineTo(e.x, e.y)
-                if (kotlin.math.abs(e.x - downX) > slop || kotlin.math.abs(e.y - downY) > slop) dragged = true
+                path.lineTo(ex, ey)
+                if (kotlin.math.abs(ex - downX) > slop || kotlin.math.abs(ey - downY) > slop) dragged = true
             }
             MotionEvent.ACTION_UP -> {
                 val duration = (SystemClock.elapsedRealtime() - downAt).coerceIn(1, 59_000)
-                if (!dragged) onTap()
-                replay(duration)
+                when {
+                    // Toque sobre nuestra carita/panel: se pasa TAL CUAL (con su duración real, para que
+                    // funcionen tanto el toque como el mantener-oprimido del 🎓 para salir del modo).
+                    passthrough -> { reinject(Path(path), duration); lastTapAt = 0L }
+                    // Arrastre en la app: pasa tal cual, para poder scrollear/navegar.
+                    dragged -> { reinject(Path(path), duration); lastTapAt = 0L }
+                    else -> {
+                        val now = SystemClock.elapsedRealtime()
+                        val isDouble = lastTapAt != 0L && now - lastTapAt <= doubleTapTimeout &&
+                            kotlin.math.abs(downX - lastTapX) <= doubleTapSlop &&
+                            kotlin.math.abs(downY - lastTapY) <= doubleTapSlop
+                        if (isDouble) {
+                            // Segundo toque: AHORA se pasa el clic al sistema (en el punto explorado).
+                            reinject(clickPath(lastTapX, lastTapY), 50)
+                            onActivate(lastTapX.toInt(), lastTapY.toInt())
+                            lastTapAt = 0L
+                        } else {
+                            // Primer toque: exploración — se consume y se enmarca, sin pasarlo a la app.
+                            lastTapX = downX; lastTapY = downY; lastTapAt = now
+                            onExplore(downX.toInt(), downY.toInt())
+                        }
+                    }
+                }
             }
-            MotionEvent.ACTION_CANCEL -> path.reset()
+            MotionEvent.ACTION_CANCEL -> { path.reset(); passthrough = false }
         }
     }
 
-    private fun replay(duration: Long) {
+    private fun clickPath(x: Float, y: Float) = Path().apply { moveTo(x, y); lineTo(x, y) }
+
+    private fun reinject(gesturePath: Path, duration: Long) {
         if (!active) return
+        ignoreUntil = SystemClock.elapsedRealtime() + duration + 80 // cortafuegos anti-bucle
         val gesture = GestureDescription.Builder()
-            .addStroke(GestureDescription.StrokeDescription(Path(path), 0, duration))
+            .addStroke(GestureDescription.StrokeDescription(gesturePath, 0, duration))
             .build()
         val ok = runCatching {
             service.dispatchGesture(gesture, object : AccessibilityService.GestureResultCallback() {
