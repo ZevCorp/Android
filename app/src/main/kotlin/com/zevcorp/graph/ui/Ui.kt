@@ -45,6 +45,8 @@ object Palette {
     val text: Int get() = if (dark) 0xFFF5F5F5.toInt() else 0xFF0A0A0A.toInt()
     val textDim: Int get() = if (dark) 0xFF9AA0A6.toInt() else 0xFF6B6B6B.toInt()
     val danger = 0xFFE5534B.toInt()
+    /** Verde semántico: marca los elementos de UI que el sistema YA aprendió (visualización del 🎓). */
+    val learned = 0xFF2FBF71.toInt()
 
     /* ---------- La cara (FaceView) ---------- */
     val faceLine: Int get() = if (dark) WHITE else BLACK

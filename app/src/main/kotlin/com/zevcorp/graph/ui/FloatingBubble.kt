@@ -768,7 +768,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         if (active) button.background = rounded(Palette.accent, service.dp(21).toFloat())
         button.setOnLongClickListener {
             val on = (service as? GraphAccessibilityService)?.toggleLearnedVisualization() ?: false
-            toast(if (on) "Te muestro lo que ya aprendí" else "Oculto lo aprendido")
+            toast(if (on) "Te muestro todo lo que detecto · en verde lo que ya aprendí" else "Oculto la detección")
             closePanel()
             true
         }

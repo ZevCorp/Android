@@ -244,8 +244,9 @@ class MainActivity : Activity(), UserChannel {
         learn.addView(learnHead)
         learn.gap(dp(4))
         learn.addView(caption("Ü observa cómo usas tus apps (sin interrumpir) y estructura su mapa " +
-            "MCP al salir de cada una. Para ver lo aprendido, mantén oprimido el 🎓 de la burbuja. " +
-            "El 🎓 de la burbuja, al tocarlo, es el aprendizaje activo (compartir pantalla)."))
+            "MCP al salir de cada una. Mantén oprimido el 🎓 de la burbuja para ver TODO lo que detecta " +
+            "en pantalla (en verde, lo que ya aprendió). El 🎓 de la burbuja, al tocarlo, es el " +
+            "aprendizaje activo (compartir pantalla)."))
         learn.gap(dp(10))
         var learnBtn: Button? = null
         fun paintLearn() {

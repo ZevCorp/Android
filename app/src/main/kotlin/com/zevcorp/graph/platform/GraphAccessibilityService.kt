@@ -88,14 +88,15 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
 
     override fun onInterrupt() {}
 
-    /* ---------- Ver lo aprendido (mantener oprimido el 🎓): contornos de lo ya trackeado ---------- */
+    /* ---------- Ver la detección (mantener oprimido el 🎓): contorno de TODO lo detectado, verde = aprendido ---------- */
 
     @Volatile private var visualizing = false
     private var learnedLabels: Map<String, Set<String>> = emptyMap() // paquete → etiquetas (minúsculas)
     private val uiHandler = android.os.Handler(android.os.Looper.getMainLooper())
     private val overlayRefresh = Runnable { refreshLearnedOverlayNow() }
 
-    /** Alterna el modo: dibuja el contorno de todo elemento ya trackeado en MCPs en la app visible. */
+    /** Alterna el modo: dibuja el contorno de TODO elemento accionable que el sistema detecta en la app
+     *  visible (verde = ya aprendido/trackeado en MCPs, acento = detectado pero aún no aprendido). */
     fun toggleLearnedVisualization(): Boolean {
         visualizing = !visualizing
         if (visualizing) {
@@ -122,20 +123,25 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
 
     private fun refreshLearnedOverlayNow() {
         if (!visualizing) return
-        val root = rootInActiveWindow ?: return highlighter.show(emptyList())
+        val root = rootInActiveWindow ?: return highlighter.show(emptyList(), emptyList())
         val pkg = root.packageName?.toString() ?: ""
         // Mapas de esta app + mapas antiguos sin paquete (compatibilidad): se intenta igual.
         val labels = learnedLabels[pkg].orEmpty() + learnedLabels[""].orEmpty()
-        if (labels.isEmpty()) { highlighter.show(emptyList()); return }
-        val rects = mutableListOf<Rect>()
+        // Dos cubetas: lo que el sistema DETECTA como accionable (visible + clickable/editable) se
+        // resalta todo; los que ya están aprendidos van aparte para pintarse en verde. Aunque no haya
+        // nada aprendido en esta app, se muestran igual todos los detectados (así se ve la cobertura).
+        val learned = mutableListOf<Rect>()
+        val detected = mutableListOf<Rect>()
         fun walk(n: AccessibilityNodeInfo?) {
             n ?: return
-            if (n.isVisibleToUser && (n.isClickable || n.isEditable) && labelOf(n).lowercase() in labels)
-                rects += Rect().also { n.getBoundsInScreen(it) }
+            if (n.isVisibleToUser && (n.isClickable || n.isEditable)) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                if (labelOf(n).lowercase() in labels) learned += r else detected += r
+            }
             for (i in 0 until n.childCount) walk(n.getChild(i))
         }
         walk(root)
-        highlighter.show(rects)
+        highlighter.show(learned, detected)
     }
 
     /* ---------- Estado de pantalla (georreferenciación por árbol de UI) ---------- */

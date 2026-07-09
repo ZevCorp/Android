@@ -14,14 +14,17 @@ import android.view.WindowManager
 /**
  * Overlay que dibuja recuadros brillantes alrededor de elementos del árbol de UI. Lo usa el modo
  * "ver lo aprendido" (mantener oprimido el 🎓): ilumina a la vez el contorno de TODOS los elementos
- * que ya están trackeados en MCPs dentro de la app visible, y se refresca al navegar.
+ * accionables que el sistema DETECTA en la app visible, y se refresca al navegar. Distingue por color:
+ * los que ya están trackeados en MCPs (aprendidos) se pintan en VERDE; el resto de lo detectado, en el
+ * acento del tema (negro/blanco). Es puramente visual: no cambia qué elementos son usables.
  */
 class HighlightOverlay(private val service: AccessibilityService) {
 
     private val wm = service.getSystemService(WindowManager::class.java)
     private var view: BoxView? = null
 
-    fun show(rects: List<Rect>) {
+    /** Aprendidos (verde) y el resto de lo detectado (acento). Ambos son recuadros a dibujar a la vez. */
+    fun show(learned: List<Rect>, detected: List<Rect>) {
         val v = view ?: BoxView(service).also {
             view = it
             // Ventana a PANTALLA COMPLETA real (sin insets de barras ni cutout): los bounds del
@@ -40,12 +43,13 @@ class HighlightOverlay(private val service: AccessibilityService) {
             }
             runCatching { wm.addView(it, p) }
         }
-        v.boxes = rects.map { RectF(it) }
+        v.learnedBoxes = learned.map { RectF(it) }
+        v.detectedBoxes = detected.map { RectF(it) }
         v.invalidate()
     }
 
     fun hide() {
-        view?.let { it.boxes = emptyList(); it.invalidate() }
+        view?.let { it.learnedBoxes = emptyList(); it.detectedBoxes = emptyList(); it.invalidate() }
     }
 
     fun destroy() {
@@ -54,7 +58,8 @@ class HighlightOverlay(private val service: AccessibilityService) {
     }
 
     private class BoxView(c: Context) : View(c) {
-        var boxes: List<RectF> = emptyList()
+        var learnedBoxes: List<RectF> = emptyList()
+        var detectedBoxes: List<RectF> = emptyList()
         private val screenLoc = IntArray(2)
         private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE; strokeWidth = 7f
@@ -62,21 +67,27 @@ class HighlightOverlay(private val service: AccessibilityService) {
         private val glow = Paint(Paint.ANTI_ALIAS_FLAG).apply { style = Paint.Style.FILL }
 
         override fun onDraw(canvas: Canvas) {
-            if (boxes.isEmpty()) return
-            // Contorno en el acento del tema (negro en claro, blanco en oscuro): nunca azul.
-            val a = Palette.accent
-            stroke.color = a
-            glow.color = Color.argb(38, Color.red(a), Color.green(a), Color.blue(a))
+            if (learnedBoxes.isEmpty() && detectedBoxes.isEmpty()) return
             // Los bounds son coordenadas de PANTALLA (getBoundsInScreen); la ventana puede no
             // empezar en (0,0), así que se resta su posición real — igual que hace TalkBack.
             getLocationOnScreen(screenLoc)
             canvas.save()
             canvas.translate(-screenLoc[0].toFloat(), -screenLoc[1].toFloat())
+            // Primero lo detectado-pero-no-aprendido en el acento del tema (negro/blanco: nunca azul)…
+            drawBoxes(canvas, detectedBoxes, Palette.accent)
+            // …y encima lo aprendido en verde, para que resalte sobre el resto.
+            drawBoxes(canvas, learnedBoxes, Palette.learned)
+            canvas.restore()
+        }
+
+        private fun drawBoxes(canvas: Canvas, boxes: List<RectF>, color: Int) {
+            if (boxes.isEmpty()) return
+            stroke.color = color
+            glow.color = Color.argb(38, Color.red(color), Color.green(color), Color.blue(color))
             for (box in boxes) {
                 canvas.drawRoundRect(box, 18f, 18f, glow)
                 canvas.drawRoundRect(box, 18f, 18f, stroke)
             }
-            canvas.restore()
         }
     }
 }
