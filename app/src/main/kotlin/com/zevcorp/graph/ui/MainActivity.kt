@@ -56,6 +56,8 @@ class MainActivity : Activity(), UserChannel {
     private var builtWithMode = Palette.mode
     /** Vista actual: nube (principal), usuario (gráfica "versus") o desarrollador (todo). */
     private var mode = MODE_CLOUD
+    /** Toques recientes sobre el área secreta (arriba a la derecha): 3 seguidos abren el panel dev. */
+    private val secretTapTimes = mutableListOf<Long>()
     /** Acceso a estadísticas de uso con el que se dibujó la gráfica (para recrear al concederlo). */
     private var builtWithAccess = false
 
@@ -824,6 +826,24 @@ class MainActivity : Activity(), UserChannel {
     /** Botón tipo nube arriba a la derecha que cicla entre las tres vistas (muestra la siguiente). */
     private fun modeToggle(): View = cloudChip(iconFor(nextMode()), sizeDp = 40, subtle = true) { cycleMode() }
 
+    /**
+     * Área invisible (sin ícono, sin fondo) que reemplaza al toggle en la pantalla principal: solo
+     * reacciona a un TRIPLE toque rápido, y abre directo el panel de Desarrollador (salta el modo
+     * Usuario). Pensada para quedar indetectable a un usuario final.
+     */
+    private fun secretDevArea(): View = View(this).apply {
+        setOnClickListener {
+            val now = System.currentTimeMillis()
+            secretTapTimes.removeAll { now - it > 600 }
+            secretTapTimes.add(now)
+            if (secretTapTimes.size >= 3) {
+                secretTapTimes.clear()
+                app.prefs.edit().putString(KEY_UI_MODE, MODE_DEV).apply()
+                recreate()
+            }
+        }
+    }
+
     /** Envuelve un contenido con la foto de nubes (estática) de fondo (vistas usuario/desarrollador). */
     private fun withStaticSky(content: View): View {
         val frame = android.widget.FrameLayout(this)
@@ -910,8 +930,10 @@ class MainActivity : Activity(), UserChannel {
             insets
         }
 
-        // Toggle (cicla las 3 vistas), arriba a la derecha, sutil.
-        overlay.addView(modeToggle(), android.widget.FrameLayout.LayoutParams(-2, -2,
+        // El panel de Desarrollador queda OCULTO para el usuario final: sin ícono ni fondo, un área
+        // reducida arriba a la derecha (misma posición que antes el toggle) que solo reacciona a un
+        // TRIPLE toque. El modo Usuario ("Versus") deja de ser alcanzable desde esta pantalla.
+        overlay.addView(secretDevArea(), android.widget.FrameLayout.LayoutParams(dp(40), dp(40),
             Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(14) })
 
         overlay.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -2,
