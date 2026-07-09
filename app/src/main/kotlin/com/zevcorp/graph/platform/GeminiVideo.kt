@@ -193,6 +193,7 @@ class GeminiVideo(
         val text = Json.parseToJsonElement(body).jsonObject["candidates"]!!.jsonArray[0]
             .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
             .firstNotNullOf { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
-        return Json.parseToJsonElement(text).jsonObject
+        // Tolera ```fences``` y basura antes/después (un "}" de más reventaba el parseo estricto).
+        return GeminiJson.firstJsonObject(text)
     }
 }

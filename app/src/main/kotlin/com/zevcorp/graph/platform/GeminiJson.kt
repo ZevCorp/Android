@@ -64,7 +64,42 @@ object GeminiJson {
         val text = Json.parseToJsonElement(body).jsonObject["candidates"]!!.jsonArray[0]
             .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
             .firstNotNullOf { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
-        return Json.parseToJsonElement(text).jsonObject
+        // El modelo a veces envuelve el JSON en ```fences``` o le añade basura (p.ej. un "}" de más),
+        // lo que reventaba el parseo estricto. Extrae el primer objeto JSON balanceado.
+        return firstJsonObject(text)
+    }
+
+    /**
+     * Extrae el primer objeto JSON BALANCEADO de la respuesta del modelo, tolerando ```fences``` y
+     * cualquier basura antes o después (un "}" extra, texto suelto…). Respeta strings y escapes para
+     * no cortar donde no debe. Lanza si no hay ningún objeto.
+     */
+    fun firstJsonObject(raw: String): JsonObject {
+        var s = raw.trim()
+        if (s.startsWith("```")) {
+            s = s.removePrefix("```").let { if (it.startsWith("json")) it.drop(4) else it }
+                .substringBeforeLast("```").trim()
+        }
+        val start = s.indexOf('{')
+        require(start >= 0) { "sin objeto JSON en la respuesta" }
+        var depth = 0; var inStr = false; var esc = false
+        var i = start
+        while (i < s.length) {
+            val c = s[i]
+            if (inStr) {
+                when {
+                    esc -> esc = false
+                    c == '\\' -> esc = true
+                    c == '"' -> inStr = false
+                }
+            } else when (c) {
+                '"' -> inStr = true
+                '{' -> depth++
+                '}' -> { depth--; if (depth == 0) return Json.parseToJsonElement(s.substring(start, i + 1)).jsonObject }
+            }
+            i++
+        }
+        error("objeto JSON sin cerrar en la respuesta")
     }
 
     /** Igual que ask() pero devuelve TEXTO libre (respuestas conversacionales). "" si falla. */

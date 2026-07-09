@@ -64,7 +64,12 @@ class GraphApp : Application() {
     /** La superficie del teléfono, viva mientras el servicio de accesibilidad esté activo. */
     @Volatile var ui: Phone? = null
 
-    private val apiKey = { prefs.getString("apiKey", DEFAULT_API_KEY)?.ifBlank { DEFAULT_API_KEY } ?: DEFAULT_API_KEY }
+    // Sanitiza la key: un salto de línea pegado por error en el campo tumbaba TODAS las llamadas con
+    // "Unexpected char 0x0a in header value" (una key nunca lleva espacios/saltos de línea válidos).
+    private val apiKey = {
+        (prefs.getString("apiKey", DEFAULT_API_KEY)?.ifBlank { DEFAULT_API_KEY } ?: DEFAULT_API_KEY)
+            .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
+    }
     private val model = { prefs.getString("model", "gemini-3.5-flash") ?: "gemini-3.5-flash" }
 
     private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
@@ -369,9 +374,19 @@ class GraphApp : Application() {
                 engineCanceller = { child.cancel(CancellationException("reencaminar")) }
                 child.join()
                 engineCanceller = null
-                // Persiste el hilo compartido para que la próxima activación continúe la conversación.
-                conversationId = brain.interactionId
-                conversationTokens = brain.totalTokens
+                // Persiste el hilo compartido SOLO si terminó limpio. Si quedó con function_calls sin
+                // responder (error/500/Stop/maxTurns/cancelación a mitad), el hilo está ENVENENADO:
+                // reanudarlo haría fallar cualquier tarea futura con 400 "Each Function Response must
+                // be matched to a Function Call by name". En ese caso, la próxima activación arranca
+                // en una ventana nueva (la memoria durable sobrevive; solo se pierde el hilo server-side).
+                if (brain.hasPendingCalls) {
+                    LogBus.log("run", "🧵 hilo con llamadas sin responder; la próxima activación arranca fresca")
+                    conversationId = ""
+                    conversationTokens = 0
+                } else {
+                    conversationId = brain.interactionId
+                    conversationTokens = brain.totalTokens
+                }
                 val grew = synchronized(goalPrompts) { goalPrompts.size > builtCount }
                 if (!grew) { summary = holder[0]; break }
                 round++

@@ -48,7 +48,8 @@ class GeminiLearning(
         val text = Json.parseToJsonElement(body).jsonObject["candidates"]!!.jsonArray[0]
             .jsonObject["content"]!!.jsonObject["parts"]!!.jsonArray
             .firstNotNullOf { it.jsonObject["text"]?.jsonPrimitive?.contentOrNull }
-        Json.parseToJsonElement(text).jsonObject
+        // Tolera ```fences``` y basura antes/después (un "}" de más reventaba el parseo estricto).
+        GeminiJson.firstJsonObject(text)
     }
 
     private fun JsonObject.str(k: String) = this[k]?.jsonPrimitive?.contentOrNull ?: ""

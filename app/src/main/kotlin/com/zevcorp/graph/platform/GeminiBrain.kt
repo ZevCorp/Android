@@ -95,6 +95,13 @@ class GeminiBrain(
 
     /** Id de la última interacción (el hilo de conversación server-side para continuar después). */
     val interactionId get() = previousId
+    /**
+     * ¿El hilo quedó con function_calls SIN responder? (tarea cortada a mitad: error/500/Stop/maxTurns).
+     * Un hilo así está ENVENENADO: reanudarlo hace que el servidor exija responder esas llamadas
+     * colgadas y CUALQUIER tarea futura falle con 400 "Each Function Response must be matched to a
+     * Function Call by name". La plataforma lo usa para NO reanudar un hilo en ese estado.
+     */
+    val hasPendingCalls: Boolean get() = pending.isNotEmpty()
     /** Tamaño del contexto del hilo (tokens de la última interacción); gobierna la rotación de ventana. */
     var totalTokens = 0
         private set
