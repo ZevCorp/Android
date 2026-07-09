@@ -24,6 +24,7 @@ import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.Release
+import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.platform.UsageU
 import graph.core.domain.LearnedTool
@@ -39,6 +40,7 @@ class MainActivity : Activity(), UserChannel {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main)
 
     private lateinit var logView: TextView
+    private lateinit var bugView: TextView
     private lateinit var mcpPanel: LinearLayout
     private lateinit var accountBody: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
@@ -321,6 +323,41 @@ class MainActivity : Activity(), UserChannel {
         root.addView(dev)
         root.gap(dp(14))
 
+        // Panel de BUGS DE UI: desajustes detectados al tocar (modo 🎓) entre el elemento que tocas por
+        // coordenada y el que el agente resolvería por su etiqueta/ID. Solo diagnóstico.
+        val bugs = card()
+        val bugsHead = row()
+        bugsHead.addView(iconChip(Icon.EYE, sizeDp = 34, tint = Palette.danger))
+        bugsHead.addView(title("Bugs de UI").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        bugsHead.addView(button("Copiar") {
+            val cm = getSystemService(android.content.ClipboardManager::class.java)
+            cm.setPrimaryClip(android.content.ClipData.newPlainText("graph-ui-bugs", UiBugBus.dump()))
+            Toast.makeText(this, "Bugs copiados", Toast.LENGTH_SHORT).show()
+        })
+        bugsHead.addView(View(this), LinearLayout.LayoutParams(dp(6), 1))
+        bugsHead.addView(button("Limpiar") { UiBugBus.clear(); refreshBugPanel() })
+        bugs.addView(bugsHead)
+        bugs.gap(dp(4))
+        bugs.addView(caption("Mantén oprimido el 🎓 y toca elementos: si el que tocas no coincide con el " +
+            "que el agente resolvería por su etiqueta/ID, se marca en ROJO y queda aquí registrado."))
+        bugs.gap(dp(8))
+        bugView = TextView(this).apply {
+            textSize = 10f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextColor(Palette.textDim)
+            setTextIsSelectable(true)
+        }
+        val bugScroll = ScrollView(this).apply {
+            addView(bugView)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(10), dp(8), dp(10), dp(8))
+            setOnTouchListener { v, _ -> v.parent.requestDisallowInterceptTouchEvent(true); false }
+        }
+        bugs.addView(bugScroll, LinearLayout.LayoutParams(-1, dp(180)))
+        root.addView(bugs)
+        root.gap(dp(14))
+
         // Panel de MCPs: lo que el asistente ha aprendido (enseñanza) + lo incorporado de fábrica
         val mcp = card()
         val mcpHead = row()
@@ -353,8 +390,22 @@ class MainActivity : Activity(), UserChannel {
                 if (atBottom) logScroll.post { logScroll.fullScroll(View.FOCUS_DOWN) }
             }
         }
+        refreshBugPanel()
+        scope.launch {
+            UiBugBus.events.collect {
+                val atBottom = bugScroll.scrollY + bugScroll.height >= bugView.height - dp(28)
+                refreshBugPanel()
+                if (atBottom) bugScroll.post { bugScroll.fullScroll(View.FOCUS_DOWN) }
+            }
+        }
         refreshMcpPanel()
         checkNow()
+    }
+
+    /** Pinta el panel de bugs de UI: los desajustes registrados, o un estado vacío amable. */
+    private fun refreshBugPanel() {
+        val n = UiBugBus.count()
+        bugView.text = if (n == 0) "Sin bugs de UI detectados 👍" else UiBugBus.dump()
     }
 
     override fun onNewIntent(intent: Intent?) {

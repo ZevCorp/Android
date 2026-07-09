@@ -49,12 +49,17 @@ class HighlightOverlay(private val service: AccessibilityService) {
     }
 
     /**
-     * Destello de DIAGNÓSTICO: ilumina en naranja, encima de todo, el recuadro del elemento que el
-     * agente resolvería al tocar (ver GraphAccessibilityService.probeResolved). `null` lo apaga. No
-     * afecta a los recuadros estáticos (aprendido/detectado): es una capa separada y momentánea.
+     * Destello de DIAGNÓSTICO: ilumina, encima de todo, el recuadro del elemento que el agente
+     * resolvería al tocar (ver GraphAccessibilityService.probeResolved). En NARANJA si coincide con lo
+     * que tocaste; en ROJO si es un bug (resolvió a un elemento distinto). `null` lo apaga. No afecta a
+     * los recuadros estáticos (aprendido/detectado): es una capa separada y momentánea.
      */
-    fun probe(rect: Rect?) {
-        view?.let { it.probeBox = rect?.let { r -> RectF(r) }; it.invalidate() }
+    fun probe(rect: Rect?, isBug: Boolean = false) {
+        view?.let {
+            it.probeBox = rect?.let { r -> RectF(r) }
+            it.probeColor = if (isBug) Palette.danger else Palette.probe
+            it.invalidate()
+        }
     }
 
     fun hide() {
@@ -72,6 +77,7 @@ class HighlightOverlay(private val service: AccessibilityService) {
         var learnedBoxes: List<RectF> = emptyList()
         var detectedBoxes: List<RectF> = emptyList()
         var probeBox: RectF? = null
+        var probeColor: Int = Palette.probe
         private val screenLoc = IntArray(2)
         private val stroke = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.STROKE; strokeWidth = 7f
@@ -89,8 +95,9 @@ class HighlightOverlay(private val service: AccessibilityService) {
             drawBoxes(canvas, detectedBoxes, Palette.accent)
             // …lo aprendido en verde, para que resalte sobre el resto…
             drawBoxes(canvas, learnedBoxes, Palette.learned)
-            // …y por ENCIMA de todo, el destello de diagnóstico (naranja) del elemento resuelto al tocar.
-            probeBox?.let { drawBoxes(canvas, listOf(it), Palette.probe) }
+            // …y por ENCIMA de todo, el destello de diagnóstico del elemento resuelto al tocar
+            // (naranja si coincide, rojo si es un bug de resolución por etiqueta/ID).
+            probeBox?.let { drawBoxes(canvas, listOf(it), probeColor) }
             canvas.restore()
         }
 

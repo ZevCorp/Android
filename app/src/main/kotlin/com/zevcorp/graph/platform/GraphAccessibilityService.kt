@@ -70,10 +70,11 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
             }
             AccessibilityEvent.TYPE_VIEW_CLICKED -> {
                 if (!isRealApp(pkg) || pkg == launcherPkg) return
-                val label = event.source?.let { labelOf(it) }?.takeIf { it.isNotBlank() } ?: return
+                val src = event.source ?: return
+                val label = labelOf(src).takeIf { it.isNotBlank() } ?: return
                 // Diagnóstico (modo visualización del 🎓): ilumina el nodo que el AGENTE resolvería para
-                // esta etiqueta con su MISMO mecanismo, para comparar con el que tocaste. Solo visual.
-                if (visualizing) probeResolved(label)
+                // esta etiqueta con su MISMO mecanismo, y detecta el bug si no es el que tocaste. Solo visual.
+                if (visualizing) probeResolved(src, label)
                 // Enseñanza pasiva: comportamiento existente, intacto.
                 if (app.passive.active) {
                     val screenNow = currentScreen()
@@ -123,20 +124,30 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
     private val probeClear = Runnable { highlighter.probe(null) }
 
     /**
-     * DIAGNÓSTICO (solo visual, modo 🎓): al tocar TÚ un elemento, ilumina en naranja el nodo que el
-     * agente TOCARÍA al llamar esa etiqueta, resuelto EXACTAMENTE como en tapLabel (findByLabel +
-     * clickableAncestor). Si por etiquetas duplicadas cae en un nodo distinto del que tocaste, verás el
-     * destello sobre el elemento equivocado — justo el caso que se quiere detectar. No modifica el
-     * mecanismo real (IDs/llamadas del modelo): solo lo re-ejecuta para leer los bounds y pintarlos.
+     * DIAGNÓSTICO (solo visual, modo 🎓): al tocar TÚ un elemento, resuelve su etiqueta EXACTAMENTE como
+     * el agente en tapLabel (findByLabel + clickableAncestor) y compara el resultado con lo que tocaste.
+     * Si coinciden, destella en NARANJA (resolución correcta). Si por etiquetas duplicadas resuelve a
+     * OTRO elemento (bounds distintos) —el agente llamaría por ID uno equivocado—, destella en ROJO y lo
+     * registra en UiBugBus (panel "Bugs de UI"). No modifica el mecanismo real: solo lo re-ejecuta.
      */
-    private fun probeResolved(label: String) {
-        val node = findByLabel(label) ?: return
-        val target = clickableAncestor(node) ?: node
-        val r = Rect().also { target.getBoundsInScreen(it) }
-        LogBus.log("learn", "🔎 prueba: tocaste \"$label\" → el agente iría a ${r.centerX()},${r.centerY()}")
-        highlighter.probe(r)
+    private fun probeResolved(source: AccessibilityNodeInfo, label: String) {
+        val resolved = findByLabel(label) ?: return
+        val resolvedTarget = clickableAncestor(resolved) ?: resolved
+        val resolvedRect = Rect().also { resolvedTarget.getBoundsInScreen(it) }
+        // Lo que TÚ tocaste, llevado a su ancestro clickable igual que hace tapLabel al ejecutar.
+        val touchedTarget = clickableAncestor(source) ?: source
+        val touchedRect = Rect().also { touchedTarget.getBoundsInScreen(it) }
+        val isBug = resolvedRect != touchedRect
+        highlighter.probe(resolvedRect, isBug)
         uiHandler.removeCallbacks(probeClear)
-        uiHandler.postDelayed(probeClear, 1200)
+        uiHandler.postDelayed(probeClear, if (isBug) 2500 else 1200)
+        if (isBug) {
+            LogBus.log("bug-ui", "❌ \"$label\": tocaste ${touchedRect.centerX()},${touchedRect.centerY()} " +
+                "pero el agente iría a ${resolvedRect.centerX()},${resolvedRect.centerY()}")
+            UiBugBus.report(currentScreen(), label, touchedRect, resolvedRect)
+        } else {
+            LogBus.log("learn", "🔎 prueba: \"$label\" resuelve correcto en ${resolvedRect.centerX()},${resolvedRect.centerY()}")
+        }
     }
 
     /** Debounce con cola: coalescea la ráfaga de eventos pero SIEMPRE ejecuta el último refresco,
