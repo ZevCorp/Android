@@ -49,9 +49,11 @@ class MainActivity : Activity(), UserChannel {
     private var voiceCallback: ((String) -> Unit)? = null
     /** Reconocedor de voz en-app (sin Activity), como el de la burbuja flotante. */
     private var recognizer: android.speech.SpeechRecognizer? = null
-    /** La barra de vidrio central; se desplaza hacia arriba cuando aparece el teclado. */
+    /** La barra de búsqueda (píldora) de la portada Miracle. */
     private var cloudBar: View? = null
-    private var imeShown = false
+    /** La cara heroica arrastrable (portada) y el botón de activar permisos: solo sin accesibilidad. */
+    private var heroFace: View? = null
+    private var accessBtn: View? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
     /** Vista actual: nube (principal), usuario (gráfica "versus") o desarrollador (todo). */
@@ -81,11 +83,8 @@ class MainActivity : Activity(), UserChannel {
             // Que lleguen los insets del teclado (IME) para subir la barra de vidrio al enfocar.
             window.setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE)
             setContentView(buildCloudScreen())
-            // Íconos claros de la barra de estado sobre el azul del cielo.
-            window.decorView.windowInsetsController?.setSystemBarsAppearance(
-                0,
-                android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS or
-                    android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS)
+            // Fondo claro (Miracle): íconos oscuros de la barra de estado/navegación.
+            applyBarIcons()
             requestPermissions(arrayOf(
                 android.Manifest.permission.RECORD_AUDIO,
                 android.Manifest.permission.POST_NOTIFICATIONS,
@@ -578,9 +577,13 @@ class MainActivity : Activity(), UserChannel {
 
     override fun onResume() {
         super.onResume()
-        // La app pasó a primer plano: en la vista principal la carita se asienta pequeña al inicio
-        // de la barra (ahí es el micrófono); en las otras vistas, arriba al centro.
-        if (mode == MODE_CLOUD) dockFaceToBar() else bubble()?.dockToApp()
+        // La app pasó a primer plano. En la portada Miracle: si la accesibilidad está activa, la
+        // carita overlay se asienta en la barra (la heroica se oculta); si no, la cara heroica
+        // arrastrable es la protagonista. En las otras vistas, la overlay va arriba al centro.
+        if (mode == MODE_CLOUD) {
+            applyHeroVisibility()
+            if (app.ui != null) dockFaceToBar()
+        } else bubble()?.dockToApp()
         // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
         // colores nuevos (blanco/negro coherente con la carita).
         if (builtWithMode != Palette.mode) { recreate(); return }
@@ -890,93 +893,217 @@ class MainActivity : Activity(), UserChannel {
         if (!heard.isNullOrBlank()) runPrompt(heard) else Toast.makeText(this, "No te escuché", Toast.LENGTH_SHORT).show()
     }
 
-    /* ---------- Vista principal: la foto de nubes ---------- */
+    /* ---------- Portada "Miracle": fondo radial, cara heroica y barra de búsqueda ---------- */
 
-    /** Pantalla principal: la foto exacta de fondo + la barra de vidrio flotante + toggle. */
+    private fun fp(w: Int, h: Int, gravity: Int = Gravity.NO_GRAVITY) =
+        android.widget.FrameLayout.LayoutParams(w, h, gravity)
+
+    /**
+     * Pantalla principal (diseño "Miracle"): fondo con degradado radial suave, streams de luz
+     * decorativos, título con halo, la CARA heroica (nuestra FaceView, con glow y sombra del diseño,
+     * arrastrable) sobre un botón para activar los permisos, y abajo la barra de búsqueda funcional.
+     */
     private fun buildCloudScreen(): View {
-        val frame = android.widget.FrameLayout(this)
-        val bg = android.widget.ImageView(this).apply {
-            setImageResource(com.zevcorp.graph.R.drawable.cloud_sky_bg)
-            scaleType = android.widget.ImageView.ScaleType.CENTER_CROP
-        }
-        frame.addView(bg, android.widget.FrameLayout.LayoutParams(-1, -1))
+        val t = miracleTheme()
+        val root = android.widget.FrameLayout(this).apply { clipChildren = false; clipToPadding = false }
 
-        val overlay = android.widget.FrameLayout(this)
-        frame.addView(overlay, android.widget.FrameLayout.LayoutParams(-1, -1))
+        // 1) Fondo radial + streams decorativos.
+        root.addView(MiracleBgView(this, t), fp(-1, -1))
+        root.addView(StreamsView(this, t), fp(-1, -1))
 
-        val bar = buildCloudBar()
+        // 2) Título "Miracle" con halo pulsante, arriba-centro.
+        val titleBlock = android.widget.FrameLayout(this).apply { clipChildren = false }
+        val halo = RadialGlowView(this, t.glow, 0.55f)
+        titleBlock.addView(halo, fp(dp(240), dp(240), Gravity.CENTER))
+        titleBlock.addView(TextView(this).apply {
+            text = "Miracle"; textSize = 26f
+            setTextColor(t.pillText)
+            typeface = android.graphics.Typeface.create("sans-serif-light", android.graphics.Typeface.NORMAL)
+            letterSpacing = 0.28f
+            gravity = Gravity.CENTER
+        }, fp(-2, -2, Gravity.CENTER))
+        val titleLp = fp(-2, dp(240), Gravity.TOP or Gravity.CENTER_HORIZONTAL)
+        root.addView(titleBlock, titleLp)
+        breathe(halo)
+
+        // 3) La cara heroica (arrastrable) y el botón de permisos, al centro.
+        val hero = buildHeroFace(t)
+        heroFace = hero
+        root.addView(hero, fp(dp(200), dp(200), Gravity.CENTER))
+
+        val access = buildAccessButton(t).apply { translationY = dp(150).toFloat() }
+        accessBtn = access
+        root.addView(access, fp(-2, -2, Gravity.CENTER))
+
+        // 4) Barra de búsqueda funcional, abajo.
+        val bar = buildCloudBar(t)
         cloudBar = bar
+        val barLp = fp(-1, -2, Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL).apply {
+            leftMargin = dp(18); rightMargin = dp(18); bottomMargin = dp(24)
+        }
+        root.addView(bar, barLp)
 
-        // Insets: separa del notch/barra de estado y, cuando aparece el teclado, sube la barra "un
-        // poco" (la mitad del alto que tapa el teclado) con una animación suave.
-        overlay.setOnApplyWindowInsetsListener { v, insets ->
-            val bars = insets.getInsets(android.view.WindowInsets.Type.systemBars())
+        // 5) Panel de Desarrollador OCULTO: área invisible arriba-derecha, triple toque.
+        root.addView(secretDevArea(), fp(dp(40), dp(40), Gravity.TOP or Gravity.END).apply {
+            topMargin = dp(8); rightMargin = dp(14)
+        })
+
+        // Insets: título bajo el notch; barra sobre la barra de navegación / teclado.
+        root.setOnApplyWindowInsetsListener { _, insets ->
+            val sys = insets.getInsets(android.view.WindowInsets.Type.systemBars())
             val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
-            v.setPadding(0, bars.top, 0, bars.bottom)
-            val overlap = (ime.bottom - bars.bottom).coerceAtLeast(0)
-            val show = overlap > dp(80)
-            if (show != imeShown) {
-                imeShown = show
-                bar.animate().cancel()
-                bar.animate().translationY(if (show) -overlap * 0.5f else 0f).setDuration(230)
-                    .withEndAction {
-                        // La carita asentada al inicio de la barra la sigue en su nueva altura.
-                        val loc = IntArray(2)
-                        bar.getLocationOnScreen(loc)
-                        bubble()?.trackBar(loc[0] + dp(12), loc[1] + bar.height / 2)
-                    }
-                    .start()
-            }
+            titleLp.topMargin = sys.top + dp(26); titleBlock.layoutParams = titleLp
+            barLp.bottomMargin = maxOf(sys.bottom, ime.bottom) + dp(18); bar.layoutParams = barLp
             insets
         }
 
-        // El panel de Desarrollador queda OCULTO para el usuario final: sin ícono ni fondo, un área
-        // reducida arriba a la derecha (misma posición que antes el toggle) que solo reacciona a un
-        // TRIPLE toque. El modo Usuario ("Versus") deja de ser alcanzable desde esta pantalla.
-        overlay.addView(secretDevArea(), android.widget.FrameLayout.LayoutParams(dp(40), dp(40),
-            Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(14) })
+        // La cara heroica y el botón de permisos solo tienen sentido SIN accesibilidad (onboarding).
+        applyHeroVisibility()
+        return root
+    }
 
-        overlay.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -2,
-            Gravity.CENTER).apply { leftMargin = dp(22); rightMargin = dp(22) })
-        return frame
+    /** Muestra la cara heroica + botón de permisos solo si la accesibilidad NO está activa. */
+    private fun applyHeroVisibility() {
+        val show = app.ui == null
+        heroFace?.visibility = if (show) View.VISIBLE else View.GONE
+        accessBtn?.visibility = if (show) View.VISIBLE else View.GONE
     }
 
     /**
-     * La barra de escritura "liquid glass", calcada del diseño (LiquidGlassDrawable: mitad superior
-     * lechosa, cuerpo transparente y luz de rebote abajo). Sin botón de micrófono: la carita
-     * flotante se asienta pequeña al INICIO de la barra (dockToBar) y hace de micrófono al tocarla.
-     * Funcional: crece hasta 3 líneas al escribir; el botón enviar (blanco) aparece solo con texto.
+     * La CARA heroica: nuestra FaceView (elemento existente) con el aura y la sombra del diseño
+     * entregado, un leve flotar, y el reflejo del suelo. Arrastrable por toda la pantalla; un toque
+     * (sin arrastre) activa el micrófono.
      */
-    private fun buildCloudBar(): View {
-        val container = android.widget.FrameLayout(this).apply {
-            background = LiquidGlassDrawable(dp(32).toFloat(), dp(2).toFloat() * 0.75f)
-            // Sombra suave bajo la píldora (el contorno sigue al alto real: cápsula hasta 3 líneas).
-            elevation = dp(10).toFloat()
+    private fun buildHeroFace(t: MiracleTheme): View {
+        val block = android.widget.FrameLayout(this).apply { clipChildren = false }
+        block.addView(RadialGlowView(this, t.glowStrong, 0.5f), fp(dp(240), dp(240), Gravity.CENTER))
+        block.addView(RadialGlowView(this, t.glowStrong, 0.32f).apply { translationY = dp(84).toFloat() },
+            fp(dp(150), dp(56), Gravity.CENTER))
+        val face = FaceView(this).apply {
+            elevation = dp(16).toFloat()
+            outlineAmbientShadowColor = t.glowStrong
+            outlineSpotShadowColor = t.glowStrong
+        }
+        block.addView(face, fp(dp(112), dp(112), Gravity.CENTER))
+        floatY(face)
+        attachDrag(block) { startVoice() }
+        return block
+    }
+
+    /** Arrastre libre: mueve la vista siguiendo el dedo; un toque limpio (sin desplazamiento) es "click". */
+    private fun attachDrag(v: View, onTap: () -> Unit) {
+        val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
+        var offX = 0f; var offY = 0f; var downX = 0f; var downY = 0f; var moved = false
+        v.setOnTouchListener { view, e ->
+            when (e.actionMasked) {
+                android.view.MotionEvent.ACTION_DOWN -> {
+                    offX = e.rawX - view.translationX; offY = e.rawY - view.translationY
+                    downX = e.rawX; downY = e.rawY; moved = false; true
+                }
+                android.view.MotionEvent.ACTION_MOVE -> {
+                    view.translationX = e.rawX - offX; view.translationY = e.rawY - offY
+                    if (kotlin.math.hypot(e.rawX - downX, e.rawY - downY) > slop) moved = true
+                    true
+                }
+                android.view.MotionEvent.ACTION_UP -> { if (!moved) onTap(); true }
+                else -> false
+            }
+        }
+    }
+
+    /** Arranca un ValueAnimator en bucle atado al ciclo de vida de la vista (se cancela al desacoplarse,
+     *  evitando fugas al recrear la Activity). */
+    private fun loopWith(v: View, anim: android.animation.ValueAnimator) {
+        anim.repeatCount = android.animation.ValueAnimator.INFINITE
+        anim.repeatMode = android.animation.ValueAnimator.REVERSE
+        anim.interpolator = android.view.animation.AccelerateDecelerateInterpolator()
+        v.addOnAttachStateChangeListener(object : View.OnAttachStateChangeListener {
+            override fun onViewAttachedToWindow(view: View) { if (!anim.isStarted) anim.start() }
+            override fun onViewDetachedFromWindow(view: View) { anim.cancel() }
+        })
+        if (v.isAttachedToWindow) anim.start()
+    }
+
+    /** Leve flotar vertical (miracle-float del diseño): ±6dp en bucle suave. */
+    private fun floatY(v: View) {
+        loopWith(v, android.animation.ValueAnimator.ofFloat(0f, -dp(6).toFloat()).apply {
+            duration = 2500
+            addUpdateListener { v.translationY = it.animatedValue as Float }
+        })
+    }
+
+    /** Halo que "respira" (miracle-pulse): escala/alpha muy sutil en bucle. */
+    private fun breathe(v: View) {
+        loopWith(v, android.animation.ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 3000
+            addUpdateListener {
+                val f = it.animatedValue as Float
+                v.scaleX = 1f + 0.05f * f; v.scaleY = 1f + 0.05f * f
+                v.alpha = 0.85f + 0.15f * f
+            }
+        })
+    }
+
+    /** Botón para activar TODOS los permisos (accesibilidad + runtime). Píldora oscura, estética limpia. */
+    private fun buildAccessButton(t: MiracleTheme): View = TextView(this).apply {
+        text = "Activar accesibilidad"
+        textSize = 14f
+        setTextColor(t.pill) // texto claro sobre píldora oscura
+        gravity = Gravity.CENTER
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        background = rounded(t.pillText, dp(26).toFloat())
+        setPadding(dp(22), dp(13), dp(22), dp(13))
+        elevation = dp(6).toFloat()
+        setOnClickListener { activateAll() }
+    }
+
+    /** Pide los permisos runtime y abre los Ajustes de Accesibilidad para encender el servicio. */
+    private fun activateAll() {
+        runCatching {
+            requestPermissions(arrayOf(
+                android.Manifest.permission.RECORD_AUDIO,
+                android.Manifest.permission.POST_NOTIFICATIONS,
+                android.Manifest.permission.CALL_PHONE,
+            ), 3)
+        }
+        startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        Toast.makeText(this, "Activa el servicio de accesibilidad de Miracle", Toast.LENGTH_LONG).show()
+    }
+
+    /**
+     * La barra de búsqueda de la portada: píldora blanca con sombra azulada del diseño, 100% funcional.
+     * Micrófono (voz) cuando está vacía; flecha de enviar cuando hay texto; Enter/enviar ejecuta.
+     */
+    private fun buildCloudBar(t: MiracleTheme): View {
+        val g = dp(44)
+        val pill = android.widget.FrameLayout(this).apply {
+            background = rounded(t.pill, dp(30).toFloat(), t.border)
+            elevation = dp(14).toFloat()
+            outlineAmbientShadowColor = t.glowStrong
+            outlineSpotShadowColor = t.glowStrong
+            clipToOutline = true
             outlineProvider = object : android.view.ViewOutlineProvider() {
                 override fun getOutline(view: View, outline: android.graphics.Outline) {
-                    val r = minOf(view.height / 2f, dp(32).toFloat())
-                    outline.setRoundRect(0, 0, view.width, view.height, r)
+                    outline.setRoundRect(0, 0, view.width, view.height, minOf(view.height / 2f, dp(30).toFloat()))
                 }
             }
-            // El padding izquierdo deja el hueco donde se asienta la carita pequeña (el "mic").
-            setPadding(dp(48), dp(17), dp(18), dp(17))
+            setPadding(dp(22), dp(4), dp(6), dp(4))
         }
 
         val bar = row()
         val input = EditText(this).apply {
             hint = "¿Qué puedo hacer hoy por ti?"
-            setHintTextColor(0xF2FFFFFF.toInt())
-            setTextColor(Color.WHITE)
-            setShadowLayer(dp(3).toFloat(), 0f, dp(1).toFloat(), 0x33203040)
+            setHintTextColor(t.placeholder)
+            setTextColor(t.pillText)
             textSize = 16f
             background = null
-            // Multilínea real: crece hasta 3 líneas y luego hace scroll interno.
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_MULTI_LINE or
                 InputType.TYPE_TEXT_FLAG_CAP_SENTENCES
+            imeOptions = android.view.inputmethod.EditorInfo.IME_ACTION_SEND
             isSingleLine = false
             maxLines = 3
             setHorizontallyScrolling(false)
-            setPadding(0, 0, 0, 0)
+            setPadding(0, dp(14), 0, dp(14))
             gravity = Gravity.CENTER_VERTICAL
         }
         fun submit() {
@@ -984,29 +1111,42 @@ class MainActivity : Activity(), UserChannel {
             if (p.isBlank()) return
             input.setText("")
             input.clearFocus()
+            (getSystemService(INPUT_METHOD_SERVICE) as android.view.inputmethod.InputMethodManager)
+                .hideSoftInputFromWindow(input.windowToken, 0)
             runPrompt(p)
         }
+        input.setOnEditorActionListener { _, action, _ ->
+            if (action == android.view.inputmethod.EditorInfo.IME_ACTION_SEND ||
+                action == android.view.inputmethod.EditorInfo.IME_ACTION_DONE) { submit(); true } else false
+        }
 
-        // Enviar (blanco), solo cuando hay texto. El micrófono ya no existe: lo reemplaza la carita.
-        val g = dp(40)
-        val send = IconView(this, Icon.SEND, tint = Color.WHITE, shadow = true).apply {
-            visibility = View.GONE; setLayerType(View.LAYER_TYPE_SOFTWARE, null); setOnClickListener { submit() }
+        // Micrófono (voz) cuando está vacía · flecha de enviar (círculo oscuro) cuando hay texto.
+        val mic = IconView(this, Icon.MIC, tint = t.pillText).apply {
+            val pad = dp(11); setPadding(pad, pad, pad, pad); setOnClickListener { startVoice() }
+        }
+        val send = IconView(this, Icon.SEND, tint = t.pill).apply {
+            val pad = dp(11); setPadding(pad, pad, pad, pad)
+            background = rounded(t.pillText, (g / 2).toFloat())
+            visibility = View.GONE; setOnClickListener { submit() }
         }
         val slot = android.widget.FrameLayout(this)
-        slot.addView(send, android.widget.FrameLayout.LayoutParams(g, g))
+        slot.addView(mic, fp(g, g))
+        slot.addView(send, fp(g, g))
 
         input.addTextChangedListener(object : android.text.TextWatcher {
             override fun beforeTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun onTextChanged(s: CharSequence?, a: Int, b: Int, c: Int) {}
             override fun afterTextChanged(s: android.text.Editable?) {
-                send.visibility = if (s.isNullOrBlank()) View.GONE else View.VISIBLE
+                val has = !s.isNullOrBlank()
+                send.visibility = if (has) View.VISIBLE else View.GONE
+                mic.visibility = if (has) View.GONE else View.VISIBLE
             }
         })
 
         bar.addView(input, LinearLayout.LayoutParams(0, -2, 1f))
         bar.addView(slot, LinearLayout.LayoutParams(g, g))
-        container.addView(bar, android.widget.FrameLayout.LayoutParams(-1, -2, Gravity.CENTER))
-        return container
+        pill.addView(bar, fp(-1, -2, Gravity.CENTER))
+        return pill
     }
 
     /** La única pantalla del modo usuario: la gráfica "versus" y una narrativa elegante. */
