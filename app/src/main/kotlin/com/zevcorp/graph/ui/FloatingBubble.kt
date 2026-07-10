@@ -65,6 +65,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var speechHide: Job? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    /** Voz de nueva generación (OpenAI); si está activa y hay key, reemplaza al TTS del sistema. */
+    private val openAiTts by lazy { com.zevcorp.graph.voice.OpenAiTts(service) }
 
     /** Esquinas superiores = zona de encaje para el MODO REUNIÓN (escucha continua con cerebro). */
     private val voiceDock by lazy {
@@ -106,9 +108,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         attachDrag(size)
         bubble.setOnClickListener {
             when {
-                // Un toque lo calla: corta el TTS y esconde el globo.
-                tts?.isSpeaking == true -> {
+                // Un toque lo calla: corta la voz (OpenAI o sistema) y esconde el globo.
+                tts?.isSpeaking == true || openAiTts.isPlaying -> {
                     tts?.stop()
+                    openAiTts.stop()
                     speechHide?.cancel()
                     speech?.visibility = View.GONE
                 }
@@ -449,6 +452,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         idleAnimator?.cancel()
         voiceDock.destroy()
         tts?.shutdown()
+        openAiTts.stop()
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
@@ -480,7 +484,12 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             bubbleText.text = text
             bubbleText.visibility = View.VISIBLE
             moveSpeechToBubble()
-            if (aloud && ttsReady) tts?.speak(text.filter { it.code in 32..0x2FFF }, TextToSpeech.QUEUE_FLUSH, null, "graph")
+            if (aloud) {
+                val clean = text.filter { it.code in 32..0x2FFF }
+                // Voz de nueva generación (OpenAI) si está elegida y hay key; si falla, TTS del sistema.
+                val spoke = runCatching { openAiTts.speak(clean) }.getOrDefault(false)
+                if (!spoke && ttsReady) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "graph")
+            }
             speechHide?.cancel()
             speechHide = launch { delay(if (aloud) 5200 else 3400); speech?.visibility = View.GONE }
         }

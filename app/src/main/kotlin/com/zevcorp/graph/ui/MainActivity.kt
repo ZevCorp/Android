@@ -188,6 +188,33 @@ class MainActivity : Activity(), UserChannel {
         }
         setup.addView(deepgramInput)
         setup.gap(dp(8))
+        val openaiInput = EditText(this).apply {
+            hint = "OpenAI API key (GPT-5.6 computer-use + voz natural)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(app.prefs.getString("openaiKey", GraphApp.DEFAULT_OPENAI_KEY))
+            setTextColor(Palette.text)
+            setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        setup.addView(openaiInput)
+        setup.gap(dp(8))
+        // SWITCH DE PROVEEDOR (un clic): cerebro de computer-use Google (Gemini) ⇄ OpenAI (GPT-5.6 Terra).
+        fun providerLabel() =
+            if (app.prefs.getString("provider", "GEMINI") == "OPENAI") "Cerebro: OpenAI GPT-5.6 Terra ⇄"
+            else "Cerebro: Google Gemini ⇄"
+        lateinit var providerBtn: TextView
+        providerBtn = button(providerLabel(), primary = true) {
+            val next = if (app.prefs.getString("provider", "GEMINI") == "OPENAI") "GEMINI" else "OPENAI"
+            app.prefs.edit().putString("provider", next).apply()
+            providerBtn.text = providerLabel()
+            log("Proveedor de computer-use → $next (aplica en la próxima ejecución)")
+        }
+        setup.addView(providerBtn)
+        setup.gap(dp(6))
+        setup.addView(caption("Cambia el cerebro que ejecuta las tareas entre Google y OpenAI. La voz natural " +
+            "y el cerebro OpenAI usan la misma OpenAI API key de arriba."))
+        setup.gap(dp(8))
         // Neo4j Aura (opcional): el grafo de conocimiento donde se proyectan aprendizajes y workflows.
         fun neoField(hintText: String, prefKey: String, password: Boolean = false) = EditText(this).apply {
             hint = hintText
@@ -209,6 +236,7 @@ class MainActivity : Activity(), UserChannel {
             app.prefs.edit()
                 .putString("apiKey", keyInput.text.toString().trim())
                 .putString("deepgramKey", deepgramInput.text.toString().trim())
+                .putString("openaiKey", openaiInput.text.toString().trim())
                 .putString("neo4jUri", neoUriInput.text.toString().trim())
                 .putString("neo4jUser", neoUserInput.text.toString().trim())
                 .putString("neo4jPass", neoPassInput.text.toString().trim())
@@ -1091,9 +1119,15 @@ class MainActivity : Activity(), UserChannel {
         setOnClickListener { openVoiceSettings() }
     }
 
-    /** Configuración de voz: elegir masculina o femenina (misma línea minimalista). Aplica al instante. */
+    /**
+     * Configuración de voz: voces NATURALES de OpenAI (nueva generación, muy humanas) o las del sistema
+     * (masculina/femenina). Aplica al instante y da una muestra hablada. Las voces de OpenAI usan la key
+     * del panel de Desarrollador; sin key, la muestra cae automáticamente a la voz del sistema.
+     */
     private fun openVoiceSettings() {
-        val current = app.prefs.getString("voiceGender", "male")
+        val engine = app.prefs.getString("voiceEngine", "openai")
+        val oaVoice = app.prefs.getString("openaiVoice", "verse")
+        val gender = app.prefs.getString("voiceGender", "male")
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(Palette.bg, dp(24).toFloat(), Palette.cardBorder)
@@ -1104,16 +1138,29 @@ class MainActivity : Activity(), UserChannel {
         body.addView(caption("Elige cómo suena Miracle."))
         body.gap(dp(16))
         lateinit var dialog: AlertDialog
-        fun choose(g: String) {
-            app.prefs.edit().putString("voiceGender", g).apply()
-            bubble()?.reapplyVoice()
-            bubble()?.speak("Hola, soy Miracle. Así sueno.")
-            dialog.dismiss()
+        fun preview() { bubble()?.reapplyVoice(); bubble()?.speak("Hola, soy Miracle. Así sueno.") }
+        fun chooseOpenAi(v: String) {
+            app.prefs.edit().putString("voiceEngine", "openai").putString("openaiVoice", v).apply()
+            preview(); dialog.dismiss()
         }
-        val isFemale = current == "female"
-        body.addView(button(if (!isFemale) "Masculina  ✓" else "Masculina", primary = !isFemale) { choose("male") })
+        fun chooseSystem(g: String) {
+            app.prefs.edit().putString("voiceEngine", "system").putString("voiceGender", g).apply()
+            preview(); dialog.dismiss()
+        }
+        fun mark(active: Boolean, label: String) = if (active) "$label  ✓" else label
+        val oa = engine == "openai"
+        // Voces naturales de nueva generación (OpenAI).
+        listOf("verse" to "Verse", "coral" to "Coral", "sage" to "Sage").forEach { (id, name) ->
+            val on = oa && oaVoice == id
+            body.addView(button(mark(on, "Natural · $name"), primary = on) { chooseOpenAi(id) })
+            body.gap(dp(10))
+        }
+        // Voces del sistema (fallback sin key).
+        body.addView(button(mark(!oa && gender != "female", "Sistema · Masculina"), primary = !oa && gender != "female") { chooseSystem("male") })
         body.gap(dp(10))
-        body.addView(button(if (isFemale) "Femenina  ✓" else "Femenina", primary = isFemale) { choose("female") })
+        body.addView(button(mark(!oa && gender == "female", "Sistema · Femenina"), primary = !oa && gender == "female") { chooseSystem("female") })
+        body.gap(dp(12))
+        body.addView(caption("Las voces Natural usan tu key de OpenAI (panel de Desarrollador). Sin key, suena la del sistema."))
         dialog = AlertDialog.Builder(this).setView(body).create()
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.show()

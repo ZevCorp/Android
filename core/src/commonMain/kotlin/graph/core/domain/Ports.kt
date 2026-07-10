@@ -94,6 +94,23 @@ interface Brain {
     fun inform(message: String)
 }
 
+/**
+ * Cerebro con HILO DE CONVERSACIÓN persistente en el servidor del proveedor (Gemini
+ * `previous_interaction_id`, OpenAI `previous_response_id`). El composition root reanuda el hilo entre
+ * activaciones y decide si persistirlo según su estado. Cualquier proveedor de computer-use debe
+ * implementar esto para ser intercambiable sin tocar el motor.
+ */
+interface ThreadedBrain : Brain {
+    /** Id del hilo de conversación server-side (para continuar en la próxima activación). */
+    val interactionId: String
+    /** ¿Quedaron function_calls SIN responder? Un hilo así está envenenado y no debe reanudarse. */
+    val hasPendingCalls: Boolean
+    /** Tamaño del contexto del hilo (tokens de la última interacción); gobierna la rotación de ventana. */
+    val totalTokens: Int
+    /** Reanuda un hilo existente antes de begin(). */
+    fun resume(id: String)
+}
+
 /* ---------- Canales hacia el usuario ---------- */
 
 /** Voz/narración del asistente (TTS + globo de diálogo). Solo se usa para lo importante. */

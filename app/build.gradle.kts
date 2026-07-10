@@ -14,6 +14,9 @@ fun cfg(name: String, env: String) = props[name] ?: System.getenv(env) ?: ""
 // modificables desde la UI (las prefs las sobrescriben).
 val defaultApiKey = cfg("apiKey", "GRAPH_API_KEY")
 val defaultDeepgramKey = cfg("deepgramKey", "GRAPH_DEEPGRAM_KEY")
+// Key de OpenAI (GPT-5.6 computer-use + voz): incrustada para que el switch de proveedor funcione
+// recién instalado; se sobrescribe desde el panel de Desarrollador (prefs).
+val defaultOpenAiKey = cfg("openaiKey", "GRAPH_OPENAI_KEY")
 // Grafo de conocimiento Neo4j Aura: credenciales de CONEXIÓN A LA BD (no las de la API de gestión)
 // incrustadas para todos los usuarios. Su alcance es solo leer/escribir esa base — nunca gestionar
 // instancias. Se sobrescriben desde la UI si el usuario pone las suyas.
@@ -32,6 +35,7 @@ android {
         versionName = "0.37"
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
         buildConfigField("String", "DEFAULT_DEEPGRAM_KEY", "\"$defaultDeepgramKey\"")
+        buildConfigField("String", "DEFAULT_OPENAI_KEY", "\"$defaultOpenAiKey\"")
         buildConfigField("String", "DEFAULT_NEO4J_URI", "\"$defaultNeo4jUri\"")
         buildConfigField("String", "DEFAULT_NEO4J_USER", "\"$defaultNeo4jUser\"")
         buildConfigField("String", "DEFAULT_NEO4J_PASS", "\"$defaultNeo4jPass\"")

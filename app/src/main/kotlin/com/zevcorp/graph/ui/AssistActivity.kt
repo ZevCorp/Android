@@ -44,6 +44,7 @@ class AssistActivity : Activity() {
     private var transcriber: Transcriber? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
+    private val openAiTts by lazy { com.zevcorp.graph.voice.OpenAiTts(this) }
 
     private lateinit var sheet: LinearLayout
     private lateinit var convo: LinearLayout
@@ -300,7 +301,11 @@ class AssistActivity : Activity() {
     private fun setStatus(text: String) { status.text = text; status.visibility = if (text.isBlank()) View.GONE else View.VISIBLE }
 
     private fun speak(text: String) {
-        if (ttsReady) tts?.speak(text.filter { it.code in 32..0x2FFF }, TextToSpeech.QUEUE_FLUSH, null, "assist")
+        val clean = text.filter { it.code in 32..0x2FFF }
+        scope.launch {
+            val spoke = runCatching { openAiTts.speak(clean) }.getOrDefault(false)
+            if (!spoke && ttsReady) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "assist")
+        }
     }
 
     private fun dismiss() {
@@ -311,6 +316,7 @@ class AssistActivity : Activity() {
     override fun onDestroy() {
         transcriber?.stop()
         tts?.shutdown()
+        openAiTts.stop()
         scope.cancel()
         super.onDestroy()
     }

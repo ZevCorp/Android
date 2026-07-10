@@ -16,6 +16,7 @@ import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.GeminiClickDoctor
 import com.zevcorp.graph.platform.MemoryDistiller
+import com.zevcorp.graph.platform.OpenAiBrain
 import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.MemoryStore
 import com.zevcorp.graph.platform.SupabaseAuth
@@ -38,6 +39,7 @@ import graph.core.application.WorkflowRunner
 import graph.core.domain.ExecutionMode
 import graph.core.domain.Mcp
 import graph.core.domain.Phone
+import graph.core.domain.ThreadedBrain
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import graph.core.domain.Workflow
@@ -57,6 +59,9 @@ import kotlinx.coroutines.launch
  */
 data class PendingVoice(val kind: String, val app: String, val question: String, val task: String, val at: Long)
 
+/** Proveedor del cerebro de computer-use, conmutable desde el panel de Desarrollador. */
+enum class Provider { GEMINI, OPENAI }
+
 /** Composition root: une el núcleo (motor mixto + MCP) con los adaptadores Android. */
 class GraphApp : Application() {
 
@@ -73,6 +78,21 @@ class GraphApp : Application() {
             .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
     }
     private val model = { prefs.getString("model", "gemini-3.5-flash") ?: "gemini-3.5-flash" }
+
+    /**
+     * PROVEEDOR DE COMPUTER-USE (Gemini vs OpenAI), conmutable con un clic desde el panel de
+     * Desarrollador. Solo afecta al CEREBRO de ejecución; el análisis de video y los distiladores
+     * auxiliares siguen en Gemini (OpenAI no ingiere video). La key y el modelo de OpenAI son propios.
+     */
+    private val provider = {
+        runCatching { Provider.valueOf(prefs.getString("provider", Provider.GEMINI.name)!!) }
+            .getOrDefault(Provider.GEMINI)
+    }
+    private val openAiKey = {
+        (prefs.getString("openaiKey", DEFAULT_OPENAI_KEY)?.ifBlank { DEFAULT_OPENAI_KEY } ?: DEFAULT_OPENAI_KEY)
+            .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
+    }
+    private val openAiModel = { prefs.getString("openaiModel", "gpt-5.6-terra") ?: "gpt-5.6-terra" }
 
     private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
 
@@ -268,11 +288,18 @@ class GraphApp : Application() {
      */
     private val subconsciousExecution = false
 
-    private fun newBrain(mcp: Mcp) = GeminiBrain(apiKey, model, mcp.tools, listApps = {
-        packageManager.getInstalledApplications(0)
-            .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
-            .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
-    }, memory = { memories.promptBlock() })
+    private fun newBrain(mcp: Mcp): ThreadedBrain {
+        val listApps = {
+            packageManager.getInstalledApplications(0)
+                .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+                .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
+        }
+        val mem = { memories.promptBlock() }
+        return when (provider()) {
+            Provider.OPENAI -> OpenAiBrain(openAiKey, openAiModel, mcp.tools, listApps, mem)
+            Provider.GEMINI -> GeminiBrain(apiKey, model, mcp.tools, listApps, memory = mem)
+        }
+    }
 
     private val anticipation by lazy { Anticipation(apiKey, model) }
 
@@ -295,7 +322,7 @@ class GraphApp : Application() {
      * system prompt: el servidor ya lo tiene) para que haya continuidad entre activaciones; si no,
      * arranca un hilo fresco. Devuelve ambos para poder guardar el id/tokens del hilo al terminar.
      */
-    private fun newSession(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, GeminiBrain> {
+    private fun newSession(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, ThreadedBrain> {
         // El runner de workflows: los steps subconscientes salen por MCP (clic por árbol de UI) y los
         // conscientes por un motor acotado a ese step; el switch de vía se señala igual que siempre.
         // Solo se cablea si la vía subconsciente está activa.
@@ -627,5 +654,6 @@ class GraphApp : Application() {
         /** Keys por defecto, incrustadas al compilar. Modificables desde la UI (prefs las sobrescriben). */
         const val DEFAULT_API_KEY = BuildConfig.DEFAULT_API_KEY
         const val DEFAULT_DEEPGRAM_KEY = BuildConfig.DEFAULT_DEEPGRAM_KEY
+        const val DEFAULT_OPENAI_KEY = BuildConfig.DEFAULT_OPENAI_KEY
     }
 }
