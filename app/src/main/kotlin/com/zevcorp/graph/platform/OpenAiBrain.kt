@@ -269,6 +269,31 @@ class OpenAiBrain(
         var speech: String? = null
         var text = ""
 
+        // Mapea UNA acción de computer-use (click/type/keypress/scroll/drag/wait…) a un AgentAction.
+        fun addAction(a: JsonObject) {
+            when (a.ostr("type")) {
+                "click", "double_click", "left_click" -> actions += AgentAction.Tap(px(a, "x", sx), px(a, "y", sy))
+                "type" -> actions += AgentAction.Type(px(a, "x", sx), px(a, "y", sy), a.ostr("text"))
+                "keypress", "key" -> {
+                    val keys = (a["keys"] as? JsonArray)?.mapNotNull { it.oprim()?.contentOrNull }
+                        ?: listOfNotNull(a.ostr("key").ifBlank { null })
+                    actions += AgentAction.Key(mapKey(keys))
+                }
+                "scroll" -> {
+                    val dy = (a["scroll_y"] ?: a["scrollY"] ?: a["delta_y"]).oprim()?.intOrNull ?: 1
+                    actions += AgentAction.Scroll(dy >= 0)
+                }
+                "drag", "swipe" -> {
+                    val path = (a["path"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
+                    val p0 = path.firstOrNull() ?: JsonObject(emptyMap())
+                    val p1 = path.lastOrNull() ?: p0
+                    actions += AgentAction.Swipe(px(p0, "x", sx), px(p0, "y", sy), px(p1, "x", sx), px(p1, "y", sy), 400)
+                }
+                "wait" -> actions += AgentAction.Wait(((a["ms"].oprim()?.intOrNull) ?: 1000).toLong())
+                "move", "screenshot" -> {} // move no aplica en móvil; el screenshot ya viaja en cada output
+            }
+        }
+
         for (item in items.map { it.jsonObject }) {
             when (item.ostr("type")) {
                 "message" -> text += extractMessage(item)
@@ -277,27 +302,11 @@ class OpenAiBrain(
                     val id = item.ostr("call_id").ifBlank { item.ostr("id") }.ifBlank { "call_${calls.size}" }
                     val safety = (item["pending_safety_checks"] as? JsonArray) ?: JsonArray(emptyList())
                     calls += Call(id, "computer", safety, isComputer = true)
-                    val a = (item["action"] as? JsonObject) ?: JsonObject(emptyMap())
-                    when (a.ostr("type")) {
-                        "click", "double_click" -> actions += AgentAction.Tap(px(a, "x", sx), px(a, "y", sy))
-                        "type" -> actions += AgentAction.Type(px(a, "x", sx), px(a, "y", sy), a.ostr("text"))
-                        "keypress" -> {
-                            val keys = (a["keys"] as? JsonArray)?.mapNotNull { it.oprim()?.contentOrNull } ?: emptyList()
-                            actions += AgentAction.Key(mapKey(keys))
-                        }
-                        "scroll" -> {
-                            val dy = (a["scroll_y"] ?: a["scrollY"]).oprim()?.intOrNull ?: 1
-                            actions += AgentAction.Scroll(dy >= 0)
-                        }
-                        "drag" -> {
-                            val path = (a["path"] as? JsonArray)?.mapNotNull { it as? JsonObject }.orEmpty()
-                            val p0 = path.firstOrNull() ?: JsonObject(emptyMap())
-                            val p1 = path.lastOrNull() ?: p0
-                            actions += AgentAction.Swipe(px(p0, "x", sx), px(p0, "y", sy), px(p1, "x", sx), px(p1, "y", sy), 400)
-                        }
-                        "wait" -> actions += AgentAction.Wait(((a["ms"].oprim()?.intOrNull) ?: 1000).toLong())
-                        "move", "screenshot" -> {} // move no aplica en móvil; el screenshot ya viaja en cada output
-                    }
+                    // GPT-5.6 devuelve las acciones en un ARRAY `actions` (plural), y puede traer varias
+                    // en un mismo computer_call; toleramos también el `action` singular por compatibilidad.
+                    val acts = (item["actions"] as? JsonArray)?.mapNotNull { it as? JsonObject }
+                        ?: listOfNotNull(item["action"] as? JsonObject)
+                    acts.forEach { addAction(it) }
                 }
                 "function_call" -> {
                     val name = item.ostr("name")
