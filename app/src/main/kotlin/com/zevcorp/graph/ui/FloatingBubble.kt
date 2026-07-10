@@ -762,10 +762,24 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
     }
 
-    /** Doble toque: escucha por voz y ejecuta lo pedido, sin abrir el menú. */
+    /**
+     * Doble toque: escucha por voz y ejecuta lo pedido, sin abrir el menú. Antes de escuchar, la
+     * carita vuelve siempre al centro superior (igual que al abrir la app), sin importar en qué
+     * rincón de la pantalla estuviera paseando o anclada.
+     */
     private fun activateMic() {
         if (app.ui == null) { toast("Activa el servicio de accesibilidad de Ü"); return }
+        centerTop()
         recognize { heard -> if (heard != null) runPrompt(heard) else toast("No te escuché") }
+    }
+
+    /** Lleva la carita al centro superior desde cualquier posición (paseando, en una esquina, encogida). */
+    private fun centerTop() {
+        wanderJob?.cancel()
+        idleJob?.cancel()
+        animateScale(1f, idleGrow)
+        val m = service.resources.displayMetrics
+        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 380, interp = idleGrow)
     }
 
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */
