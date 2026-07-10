@@ -400,6 +400,14 @@ class OpenAiBrain(
         algo visual, un screenshot. Ubícate con el texto (home, cajón de apps, una app, notificaciones…) y
         decide. Para tocar un elemento concreto, usa computer-use (click/type con coordenadas del screenshot).
 
+        ENTORNO REAL: esto es un TELÉFONO Android físico con PANTALLA TÁCTIL — no una computadora de
+        escritorio ni un navegador. No hay teclado físico ni mouse, así que NINGÚN atajo de teclado
+        (Ctrl+A, Ctrl+C, Ctrl+V, Cmd+A, "seleccionar todo" con teclas, etc.) existe ni hace nada aquí:
+        NUNCA los intentes. Para seleccionar texto, mantén presionado (long-press) sobre él y arrastra los
+        controladores que aparecen, o toca "Seleccionar todo"/"Copiar"/"Pegar" en el menú contextual que
+        sale al hacer long-press. Los únicos keypress válidos en este dispositivo son ENTER (confirmar o
+        enviar un campo) y BACK (volver atrás); cualquier otra tecla o combinación no hace nada.
+
         DOS formas de actuar, elige la más directa:
         1) HERRAMIENTAS (function-calling, sin imagen): gestos de navegación y ACCIONES DEL SISTEMA por
            Intent/API — abrir apps, alarmas, timers, llamar, SMS, correo, calendario, buscar en web, mapas,
