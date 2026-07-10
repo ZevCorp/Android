@@ -259,6 +259,8 @@ class OpenAiBrain(
         val shot = shotSize(state.screenshotPng)
         val sx = if (shot != null && shot.first > 0) state.width.toDouble() / shot.first else 1.0
         val sy = if (shot != null && shot.second > 0) state.height.toDouble() / shot.second else 1.0
+        if (shot != null) LogBus.log("openai",
+            "coords: screenshot ${shot.first}x${shot.second} · pantalla ${state.width}x${state.height} · escala ${"%.3f".format(sx)}x${"%.3f".format(sy)}")
         fun px(a: JsonObject, key: String, scale: Double) =
             a[key].oprim()?.let { (it.intOrNull ?: it.contentOrNull?.toDoubleOrNull()?.toInt()) }?.let { (it * scale).toInt() } ?: -1
 
@@ -409,8 +411,15 @@ class OpenAiBrain(
         CÓMO HABLAS: eres un compañero, no un manual. Respuestas CORTAS (1-2 frases), naturales, en el
         idioma del usuario. NUNCA enumeres tus herramientas ni uses términos técnicos.
         $memoryBlock
-        Cuando el objetivo esté completo, responde SOLO con texto (sin llamar funciones).
-        En las capturas puede aparecer una carita blanca flotante (Ü): IGNÓRALA, nunca la toques.
+        PERSISTENCIA: no te rindas tras una sola acción. Si tras tocar algo la pantalla no cambió como
+        esperabas, MIRA de nuevo (otro screenshot) y prueba otra vía; solo termina cuando el objetivo esté
+        cumplido de verdad o sea genuinamente imposible. Cuando el objetivo esté completo, responde SOLO
+        con texto (sin llamar funciones).
+        TU PROPIO CHROME (ignóralo SIEMPRE): sobre cualquier app pueden aparecer elementos de Ü que NO son
+        parte de la app y que debes IGNORAR por completo — nunca los toques y NUNCA concluyas por ellos que
+        la app está "bloqueada", "cargando" o inaccesible: (1) una carita blanca flotante, (2) una píldora
+        roja de "detener", (3) una notificación o banner "Ü está ejecutando". La app SÍ está disponible;
+        opera sobre ella normalmente.
 
         $stateBlock
     """.trimIndent()
