@@ -77,6 +77,12 @@ class OpenAiBrain(
     private val tools: List<McpTool>,
     private val listApps: () -> String,
     private val memory: () -> String = { "" },
+    /**
+     * Esfuerzo de razonamiento (reasoning.effort): none/minimal/low/medium/high/xhigh. El default de la
+     * API es "medium"; para computer-use (tool-use + decisiones multi-paso) la doc recomienda "low", que
+     * optimiza velocidad y coste sin bajar de tier. Es la palanca de LATENCIA por turno.
+     */
+    private val effort: () -> String = { "low" },
 ) : ThreadedBrain {
 
     private val mcpNames = tools.map { it.name }.toSet()
@@ -204,6 +210,8 @@ class OpenAiBrain(
             "input" to JsonArray(input),
             "tools" to JsonArray(toolDecls),
             "truncation" to ojs("auto"),
+            // Latencia por turno: "low" es lo recomendado para computer-use (tool-use multi-paso).
+            "reasoning" to ojo("effort" to ojs(effort())),
         )
         if (previousId.isNotBlank()) fields += "previous_response_id" to ojs(previousId)
 
@@ -215,7 +223,7 @@ class OpenAiBrain(
             Json.encodeToString(JsonObject.serializer(), JsonObject(fields.toMap())).toByteArray(),
         )
         val ms = android.os.SystemClock.elapsedRealtime() - t0
-        LogBus.log("openai", "respuesta → HTTP ${res.code} · ${ms}ms · envié ${kb}KB de pantalla · recibí ${res.body.length}B")
+        LogBus.log("openai", "respuesta → HTTP ${res.code} · ${ms}ms · effort ${effort()} · envié ${kb}KB de pantalla · recibí ${res.body.length}B")
         if (res.code >= 300) {
             // Si el hilo previo ya no existe/expiró (aún no hicimos nada este turno), abre ventana nueva y reintenta.
             if (startId.isNotBlank() && previousId == startId) {

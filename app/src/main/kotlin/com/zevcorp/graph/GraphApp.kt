@@ -93,6 +93,9 @@ class GraphApp : Application() {
             .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
     }
     private val openAiModel = { prefs.getString("openaiModel", "gpt-5.6-terra") ?: "gpt-5.6-terra" }
+    // Esfuerzo de razonamiento del cerebro OpenAI: "low" acelera cada turno (recomendado para
+    // computer-use). Tunable desde prefs: minimal (más rápido) … xhigh (más lento y minucioso).
+    private val openAiEffort = { prefs.getString("openaiEffort", "low") ?: "low" }
 
     private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
 
@@ -296,7 +299,7 @@ class GraphApp : Application() {
         }
         val mem = { memories.promptBlock() }
         return when (provider()) {
-            Provider.OPENAI -> OpenAiBrain(openAiKey, openAiModel, mcp.tools, listApps, mem)
+            Provider.OPENAI -> OpenAiBrain(openAiKey, openAiModel, mcp.tools, listApps, mem, openAiEffort)
             Provider.GEMINI -> GeminiBrain(apiKey, model, mcp.tools, listApps, memory = mem)
         }
     }

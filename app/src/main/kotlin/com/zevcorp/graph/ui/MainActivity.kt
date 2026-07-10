@@ -1160,7 +1160,27 @@ class MainActivity : Activity(), UserChannel {
         body.addView(button(mark(!openai, "Gemini 3.5 Flash — Google"), primary = !openai) { chooseGemini() })
         body.gap(dp(12))
         body.addView(caption("Sol/Terra/Luna requieren tu OpenAI API key en la configuración."))
-        dialog = AlertDialog.Builder(this).setView(body).create()
+        // Velocidad de razonamiento (solo OpenAI): menor esfuerzo = menos latencia por turno.
+        body.gap(dp(14))
+        val efforts = listOf(
+            "minimal" to "Mínimo (más rápido)", "low" to "Bajo (recomendado)",
+            "medium" to "Medio", "high" to "Alto (más preciso)")
+        lateinit var effortBtn: TextView
+        fun effortLabel() = "Razonamiento: " +
+            (efforts.firstOrNull { it.first == app.prefs.getString("openaiEffort", "low") }?.second ?: "Bajo (recomendado)")
+        effortBtn = button(effortLabel()) {
+            val cur = app.prefs.getString("openaiEffort", "low")
+            val idx = efforts.indexOfFirst { it.first == cur }.let { if (it < 0) 1 else it }
+            val next = efforts[(idx + 1) % efforts.size].first
+            app.prefs.edit().putString("openaiEffort", next).apply()
+            effortBtn.text = effortLabel()
+            log("Razonamiento OpenAI → $next (aplica en la próxima ejecución)")
+        }
+        body.addView(effortBtn)
+        body.gap(dp(6))
+        body.addView(caption("Menos razonamiento = respuestas más rápidas por paso; más = más preciso pero lento."))
+        val scroller = ScrollView(this).apply { addView(body) }
+        dialog = AlertDialog.Builder(this).setView(scroller).create()
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.show()
     }
