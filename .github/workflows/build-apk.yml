@@ -1,0 +1,49 @@
+name: Build APK
+
+# Compila el APK release (firmado con la clave compartida del repo) y lo publica como artefacto
+# descargable. Se dispara a mano (workflow_dispatch) o en cada push a main que toque código.
+#
+# La OpenAI API key (y las demás) se hornean desde SECRETS del repo, nunca desde git. Configúralos en
+# Settings → Secrets and variables → Actions:  OPENAI_KEY, GEMINI_KEY, DEEPGRAM_KEY (todos opcionales;
+# lo que falte se puede escribir dentro de la app). Sin OPENAI_KEY, el switch a OpenAI sigue disponible
+# introduciendo la key en el panel de Desarrollador.
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [ main ]
+    paths-ignore:
+      - '**.md'
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Bake API keys (desde secrets, fuera de git)
+        run: |
+          {
+            echo "openaiKey=${{ secrets.OPENAI_KEY }}"
+            echo "apiKey=${{ secrets.GEMINI_KEY }}"
+            echo "deepgramKey=${{ secrets.DEEPGRAM_KEY }}"
+          } > apikey.properties
+
+      - name: Build release APK
+        run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: miracle-release-apk
+          path: app/build/outputs/apk/release/*.apk
+          if-no-files-found: error
