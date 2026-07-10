@@ -199,21 +199,14 @@ class MainActivity : Activity(), UserChannel {
         }
         setup.addView(openaiInput)
         setup.gap(dp(8))
-        // SWITCH DE PROVEEDOR (un clic): cerebro de computer-use Google (Gemini) ⇄ OpenAI (GPT-5.6 Terra).
-        fun providerLabel() =
-            if (app.prefs.getString("provider", "GEMINI") == "OPENAI") "Cerebro: OpenAI GPT-5.6 Terra ⇄"
-            else "Cerebro: Google Gemini ⇄"
-        lateinit var providerBtn: TextView
-        providerBtn = button(providerLabel(), primary = true) {
-            val next = if (app.prefs.getString("provider", "GEMINI") == "OPENAI") "GEMINI" else "OPENAI"
-            app.prefs.edit().putString("provider", next).apply()
-            providerBtn.text = providerLabel()
-            log("Proveedor de computer-use → $next (aplica en la próxima ejecución)")
-        }
-        setup.addView(providerBtn)
+        // SELECTOR DE MODELO (un clic): elige el cerebro de computer-use — Sol/Terra/Luna (OpenAI
+        // GPT-5.6) o Gemini 3.5 Flash (Google). Aplica en la próxima ejecución.
+        lateinit var modelBtn: TextView
+        modelBtn = button(modelLabel(), primary = true) { openModelChooser { modelBtn.text = modelLabel() } }
+        setup.addView(modelBtn)
         setup.gap(dp(6))
-        setup.addView(caption("Cambia el cerebro que ejecuta las tareas entre Google y OpenAI. La voz natural " +
-            "y el cerebro OpenAI usan la misma OpenAI API key de arriba."))
+        setup.addView(caption("Elige qué cerebro ejecuta las tareas. Sol/Terra/Luna usan tu OpenAI API key; " +
+            "Gemini usa la key de Google. La voz natural también usa la OpenAI API key."))
         setup.gap(dp(8))
         // Neo4j Aura (opcional): el grafo de conocimiento donde se proyectan aprendizajes y workflows.
         fun neoField(hintText: String, prefKey: String, password: Boolean = false) = EditText(this).apply {
@@ -1117,6 +1110,59 @@ class MainActivity : Activity(), UserChannel {
         elevation = dp(4).toFloat()
         setPadding(dp(16), dp(8), dp(16), dp(8))
         setOnClickListener { openVoiceSettings() }
+    }
+
+    /** Etiqueta del botón de modelo según lo elegido (proveedor + nivel GPT-5.6). */
+    private fun modelLabel(): String =
+        if (app.prefs.getString("provider", "GEMINI") == "OPENAI")
+            "Modelo: " + when (app.prefs.getString("openaiModel", "gpt-5.6-terra")) {
+                "gpt-5.6-sol" -> "Sol ☀️"
+                "gpt-5.6-luna" -> "Luna 🌙"
+                else -> "Terra 🌍"
+            } + " (GPT-5.6)  ⚙"
+        else "Modelo: Gemini 3.5 Flash  ⚙"
+
+    /**
+     * Selector de MODELO del cerebro de computer-use. Sol/Terra/Luna conmutan el proveedor a OpenAI
+     * (GPT-5.6) y fijan el nivel; Gemini 3.5 Flash vuelve a Google. Aplica en la próxima ejecución.
+     */
+    private fun openModelChooser(onChange: () -> Unit) {
+        val openai = app.prefs.getString("provider", "GEMINI") == "OPENAI"
+        val oaModel = app.prefs.getString("openaiModel", "gpt-5.6-terra")
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(Palette.bg, dp(24).toFloat(), Palette.cardBorder)
+            setPadding(dp(22), dp(20), dp(22), dp(18))
+        }
+        body.addView(title("Modelo de IA", 18f))
+        body.gap(dp(4))
+        body.addView(caption("Elige qué cerebro ejecuta las tareas."))
+        body.gap(dp(16))
+        lateinit var dialog: AlertDialog
+        fun chooseOpenAi(m: String) {
+            app.prefs.edit().putString("provider", "OPENAI").putString("openaiModel", m).apply()
+            onChange(); log("Modelo → OpenAI $m (aplica en la próxima ejecución)"); dialog.dismiss()
+        }
+        fun chooseGemini() {
+            app.prefs.edit().putString("provider", "GEMINI").putString("model", "gemini-3.5-flash").apply()
+            onChange(); log("Modelo → Gemini 3.5 Flash (aplica en la próxima ejecución)"); dialog.dismiss()
+        }
+        fun mark(active: Boolean, label: String) = if (active) "$label  ✓" else label
+        listOf(
+            Triple("gpt-5.6-sol", "Sol ☀️", "el más potente, mejor computer-use"),
+            Triple("gpt-5.6-terra", "Terra 🌍", "generalista equilibrado"),
+            Triple("gpt-5.6-luna", "Luna 🌙", "rápido y económico"),
+        ).forEach { (id, name, desc) ->
+            val on = openai && oaModel == id
+            body.addView(button(mark(on, "$name — $desc"), primary = on) { chooseOpenAi(id) })
+            body.gap(dp(10))
+        }
+        body.addView(button(mark(!openai, "Gemini 3.5 Flash — Google"), primary = !openai) { chooseGemini() })
+        body.gap(dp(12))
+        body.addView(caption("Sol/Terra/Luna requieren tu OpenAI API key en la configuración."))
+        dialog = AlertDialog.Builder(this).setView(body).create()
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.show()
     }
 
     /**
