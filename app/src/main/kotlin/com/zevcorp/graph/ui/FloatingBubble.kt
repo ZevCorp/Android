@@ -10,6 +10,8 @@ import android.view.animation.OvershootInterpolator
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
+import android.media.AudioAttributes
+import android.media.SoundPool
 import android.os.Bundle
 import android.speech.RecognitionListener
 import android.speech.RecognizerIntent
@@ -78,6 +80,40 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             returnToCorner = { left -> scope.launch { snapTo(cornerX(left), service.dp(6)) } })
     }
 
+    /* ---------- Feedback sonoro: un tick breve para toques rápidos, un carrillón para activar el
+     * micrófono — igual de cuidado que el háptico de una app premium, nunca intrusivo. ---------- */
+
+    private val soundPool by lazy {
+        SoundPool.Builder()
+            .setMaxStreams(2)
+            .setAudioAttributes(
+                AudioAttributes.Builder()
+                    .setUsage(AudioAttributes.USAGE_ASSISTANCE_SONIFICATION)
+                    .setContentType(AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                    .build()
+            )
+            .build()
+    }
+    private var tickSoundId = 0
+    private var chimeSoundId = 0
+    @Volatile private var soundsReady = false
+
+    private fun loadSounds() {
+        soundPool.setOnLoadCompleteListener { _, _, status -> if (status == 0) soundsReady = true }
+        tickSoundId = soundPool.load(service, com.zevcorp.graph.R.raw.tick, 1)
+        chimeSoundId = soundPool.load(service, com.zevcorp.graph.R.raw.mic_chime, 1)
+    }
+
+    /** Toques rápidos y de un solo paso: abrir/cerrar el menú, silenciar, detener — un tick discreto. */
+    private fun playTick() {
+        if (soundsReady) soundPool.play(tickSoundId, 0.45f, 0.45f, 0, 0, 1f)
+    }
+
+    /** Activar el micrófono (doble toque, o un toque cuando ya está anclada en la barra) — un carrillón cuidado. */
+    private fun playListenChime() {
+        if (soundsReady) soundPool.play(chimeSoundId, 0.65f, 0.65f, 0, 0, 1f)
+    }
+
     /** Sin sombra en modo transparencia: si no, aunque no haya relleno, queda una figura visible detrás. */
     private fun faceElevation() = if (Palette.faceTransparent) 0f else 30f
 
@@ -90,6 +126,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     val voiceBusy get() = voiceDock.docked || voiceDock.listening
 
     fun show() {
+        loadSounds()
         tts = TextToSpeech(service) { status ->
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale.getDefault()
@@ -110,17 +147,18 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             when {
                 // Un toque lo calla: corta la voz (OpenAI o sistema) y esconde el globo.
                 tts?.isSpeaking == true || openAiTts.isPlaying -> {
+                    playTick()
                     tts?.stop()
                     openAiTts.stop()
                     speechHide?.cancel()
                     speech?.visibility = View.GONE
                 }
                 // Escucha en vivo de la ejecución: el toque a la burbuja la apaga.
-                execLive -> stopExecLive()
+                execLive -> { playTick(); stopExecLive() }
                 // Durante la escucha por esquina: el toque termina la grabación y procesa.
-                voiceDock.listening -> voiceDock.stopNow()
+                voiceDock.listening -> { playTick(); voiceDock.stopNow() }
                 // Pequeña al inicio de la barra de la app: UN toque = sube grande y es el micrófono.
-                appDocked && atBar -> flyUpAndListen()
+                appDocked && atBar -> { playListenChime(); flyUpAndListen() }
                 // Estado normal: gestos por número de toques (1 menú · 2 micrófono · 3 tema).
                 else -> onBubbleTap()
             }
@@ -453,6 +491,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         voiceDock.destroy()
         tts?.shutdown()
         openAiTts.stop()
+        soundPool.release()
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
@@ -754,9 +793,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             tapCount = 0
             when (n) {
                 1 -> if (panel == null) {
-                    if (android.os.SystemClock.uptimeMillis() - outsideCloseAt > 350) openPanel()
-                } else closePanel()
-                2 -> activateMic()
+                    if (android.os.SystemClock.uptimeMillis() - outsideCloseAt > 350) { playTick(); openPanel() }
+                } else { playTick(); closePanel() }
+                2 -> { playListenChime(); activateMic() }
                 else -> cycleTheme()
             }
         }
