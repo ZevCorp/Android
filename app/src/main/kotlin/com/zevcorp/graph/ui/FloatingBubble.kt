@@ -399,8 +399,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
-        stopButton?.let { runCatching { wm.removeView(it) } }
-        execMic?.let { runCatching { wm.removeView(it) } }
+        stopBar?.let { runCatching { wm.removeView(it) } }
     }
 
     /* ---------- Voz y narración (globo de diálogo + TTS) ---------- */
@@ -488,24 +487,34 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
     }
 
-    private var stopButton: View? = null
+    private var stopBar: View? = null
     private var execStatusText: TextView? = null
+    private var execMicButton: View? = null
 
     /**
-     * STATUSBAR de ejecución arriba-centro (fondo negro): muestra en vivo la VÍA por la que va el
-     * asistente — consciente (computer-use, mirando la pantalla) o subconsciente (MCP, por árbol de
-     * UI) — y un toque en cualquier parte detiene. Ventana propia y tocable.
+     * Interruptor temporal: la píldora de ejecución no distingue "consciente"/"subconsciente" en el
+     * texto (queda fijo en "ejecutando…"). Mismo criterio que GraphApp.subconsciousExecution: poner
+     * en `true` cuando se reactive la vía subconsciente.
+     */
+    private val showExecutionVia = false
+
+    /**
+     * "NOTCH" de ejecución, arriba-centro: una píldora negra (detener, toca en cualquier parte) junto
+     * a un círculo negro con un micrófono (interrumpir por voz), separados por un espacio pequeño —
+     * misma estética redondeada/negra que el notch del teléfono. Ventana propia y tocable; el círculo
+     * del micrófono nace oculto y `showExecutionMic` lo muestra/oculta sin recrear la ventana.
      */
     fun showStop(on: Boolean) {
         scope.launch {
             if (!on) {
-                stopButton?.let { runCatching { wm.removeView(it) } }
-                stopButton = null
+                stopBar?.let { runCatching { wm.removeView(it) } }
+                stopBar = null
                 execStatusText = null
+                execMicButton = null
                 return@launch
             }
-            if (stopButton != null) return@launch
-            val bar = service.row().apply {
+            if (stopBar != null) return@launch
+            val pill = service.row().apply {
                 gravity = Gravity.CENTER_VERTICAL
                 background = rounded(Color.BLACK, service.dp(22).toFloat())
                 setPadding(service.dp(14), service.dp(7), service.dp(16), service.dp(7))
@@ -520,17 +529,35 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 addView(execStatusText)
                 setOnClickListener { app.stopExecution(); toast("Detenido") }
             }
+            val micD = service.dp(40)
+            val mic = IconView(service, Icon.MIC, tint = Color.WHITE).apply {
+                val pad = service.dp(10)
+                setPadding(pad, pad, pad, pad)
+                background = rounded(Color.BLACK, (micD / 2).toFloat())
+                elevation = 22f
+                visibility = View.GONE // solo se muestra mientras hay una respuesta en curso
+                setOnClickListener { startExecVoice(this) }
+            }
+            execMicButton = mic
+
+            val outer = service.row()
+            outer.addView(pill)
+            outer.addView(View(service), LinearLayout.LayoutParams(service.dp(10), 1)) // espacio pequeño
+            outer.addView(mic, LinearLayout.LayoutParams(micD, micD))
+
             val params = overlayParams(-2, -2, focusable = false).apply {
                 gravity = Gravity.TOP or Gravity.CENTER_HORIZONTAL
                 y = service.dp(8)
             }
-            runCatching { wm.addView(bar, params) }
-            stopButton = bar
+            runCatching { wm.addView(outer, params) }
+            stopBar = outer
         }
     }
 
-    /** Actualiza la vía mostrada en la statusbar (cada acción del motor la reporta). */
+    /** Actualiza la vía mostrada en la píldora (cada acción del motor la reporta). Sin efecto mientras
+     *  `showExecutionVia` esté en false: el texto queda fijo en "ejecutando…". */
     fun execStatus(subconscious: Boolean) {
+        if (!showExecutionVia) return
         scope.launch {
             execStatusText?.text = if (subconscious) "🧩 subconsciente" else "👁 consciente"
         }
@@ -831,41 +858,19 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private fun toast(message: String) =
         Toast.makeText(service, message, Toast.LENGTH_LONG).show()
 
-    /* ---------- Mensaje-sobre-mensaje: micrófono casi invisible durante la ejecución ---------- */
+    /* ---------- Mensaje-sobre-mensaje: micrófono junto al "notch" durante la ejecución ---------- */
 
-    private var execMic: View? = null
     private var execTranscriber: Transcriber? = null
 
     /**
-     * Micrófono STICKY y muy transparente (casi invisible) abajo mientras el asistente ejecuta:
-     * puedes decirle algo más y se reinterpreta junto con lo anterior (no se encola). Tocarlo empieza
-     * a escuchar; al terminar, el texto va a augmentExecution y el motor se reencamina.
+     * Muestra/oculta el círculo de micrófono que vive junto a la píldora de ejecución (creado, oculto,
+     * en `showStop`). Tocarlo empieza a escuchar; al terminar, el texto va a `augmentExecution` y el
+     * motor se reencamina — se puede interrumpir en cualquier momento mientras el asistente ejecuta.
      */
     fun showExecutionMic(on: Boolean) {
         scope.launch {
-            if (!on) {
-                execTranscriber?.stop()
-                execMic?.let { runCatching { wm.removeView(it) } }
-                execMic = null
-                return@launch
-            }
-            if (execMic != null) return@launch
-            val c = service
-            val d = c.dp(54)
-            val mic = IconView(c, Icon.MIC, tint = Palette.bg).apply {
-                val pad = c.dp(14)
-                setPadding(pad, pad, pad, pad)
-                background = rounded(Palette.accent, (d / 2).toFloat())
-                elevation = 26f
-                alpha = 0.16f // casi invisible; sube al tocar
-                setOnClickListener { startExecVoice(this) }
-            }
-            val p = overlayParams(d, d, focusable = false).apply {
-                gravity = Gravity.BOTTOM or Gravity.CENTER_HORIZONTAL
-                y = c.dp(96)
-            }
-            runCatching { wm.addView(mic, p) }
-            execMic = mic
+            if (!on) execTranscriber?.stop()
+            execMicButton?.visibility = if (on) View.VISIBLE else View.GONE
         }
     }
 
@@ -873,14 +878,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         if (execTranscriber != null) { execTranscriber?.stop(); return } // ya escuchando → corta
         val t = defaultTranscriber(service)
         execTranscriber = t
-        mic.animate().alpha(0.95f).scaleX(1.1f).scaleY(1.1f).setDuration(150).start()
+        mic.animate().scaleX(1.15f).scaleY(1.15f).setDuration(150).start()
         MicService.start(service)
         toast("Dime, lo sumo a lo que estoy haciendo…")
         scope.launch {
             val text = withContext(Dispatchers.IO) { runCatching { t.listen() }.getOrElse { "" } }
             MicService.stop(service)
             execTranscriber = null
-            mic.animate().alpha(0.16f).scaleX(1f).scaleY(1f).setDuration(400).start()
+            mic.animate().scaleX(1f).scaleY(1f).setDuration(400).start()
             if (text.isNotBlank()) app.augmentExecution(text)
         }
     }
