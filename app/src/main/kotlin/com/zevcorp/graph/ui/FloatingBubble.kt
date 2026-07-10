@@ -92,6 +92,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             if (status == TextToSpeech.SUCCESS) {
                 tts?.language = Locale.getDefault()
                 ttsReady = true
+                applyVoice() // voz más humana + género elegido en la configuración
             }
         }
         val size = service.dp(82)
@@ -297,6 +298,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     /** La app (MainActivity) pasó a primer plano SIN barra (vistas versus/desarrollador): la burbuja
      * se posiciona al centro superior a tamaño completo, sin encogerse ni pasear mientras dure. */
     fun dockToApp() {
+        bubble.visibility = View.VISIBLE
         if (appDocked && !atBar) return
         rememberHome()
         appDocked = true
@@ -370,6 +372,57 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         // Si hay una ejecución en curso, no pelear con flyTo: el motor gobierna la posición.
         if (!app.executing && preAppDockX >= 0) snapTo(preAppDockX, preAppDockY, dur = 320)
         scheduleIdleShrink()
+    }
+
+    /**
+     * En la PORTADA (MainActivity, pantalla Miracle) la cara protagonista es la in-app (grande, al
+     * centro, arrastrable). Mientras esa pantalla está en primer plano, la burbuja overlay se OCULTA
+     * para no duplicar caras ni asentarse en la barra. Al salir (ejecución, otra app) reaparece.
+     */
+    fun setHiddenForApp(hidden: Boolean) {
+        scope.launch {
+            if (hidden) {
+                appDocked = false; atBar = false
+                wanderJob?.cancel(); idleJob?.cancel(); dragAnimator?.cancel()
+                bubble.visibility = View.GONE
+            } else if (bubble.visibility != View.VISIBLE) {
+                shrunk = false
+                bubble.scaleX = 1f; bubble.scaleY = 1f
+                bubble.visibility = View.VISIBLE
+                scheduleIdleShrink()
+            }
+        }
+    }
+
+    /* ---------- Voz (TTS): elegir una voz más humana y su género desde la configuración ---------- */
+
+    /**
+     * Selecciona la mejor voz disponible del idioma actual (galería del motor TTS del sistema) y aplica
+     * el género elegido en la configuración. Para que la diferencia hombre/mujer se oiga en cualquier
+     * dispositivo (el género no es un atributo fiable del motor), se combina: voz distinta cuando hay
+     * varias + un tono (pitch) más grave para la masculina y más agudo para la femenina.
+     */
+    fun reapplyVoice() { scope.launch { applyVoice() } }
+
+    private fun applyVoice() {
+        val t = tts ?: return
+        if (!ttsReady) return
+        val male = app.prefs.getString("voiceGender", "male") != "female"
+        val lang = Locale.getDefault().language
+        val cands = runCatching {
+            (t.voices ?: emptySet()).filter {
+                it.locale.language == lang &&
+                    it.features?.contains(TextToSpeech.Engine.KEY_FEATURE_NOT_INSTALLED) != true
+            }.sortedByDescending { it.quality }
+        }.getOrDefault(emptyList())
+        val base = when {
+            cands.isEmpty() -> null
+            male -> cands.first()                       // masculina: la mejor voz
+            else -> cands.getOrNull(1) ?: cands.first() // femenina: otra voz si la hay
+        }
+        base?.let { runCatching { t.voice = it } }
+        runCatching { t.setPitch(if (male) 0.9f else 1.12f) }
+        runCatching { t.setSpeechRate(1.0f) }
     }
 
     /** Animación de encaje hacia un punto (esquinas, regreso tras ejecutar, paseo en reposo). */

@@ -581,8 +581,9 @@ class MainActivity : Activity(), UserChannel {
         // carita overlay se asienta en la barra (la heroica se oculta); si no, la cara heroica
         // arrastrable es la protagonista. En las otras vistas, la overlay va arriba al centro.
         if (mode == MODE_CLOUD) {
+            // La cara overlay se oculta aquí: en la portada manda la cara heroica in-app.
             applyHeroVisibility()
-            if (app.ui != null) dockFaceToBar()
+            bubble()?.setHiddenForApp(true)
         } else bubble()?.dockToApp()
         // Si el tema cambió desde la burbuja mientras esto estaba en segundo plano, recrear con los
         // colores nuevos (blanco/negro coherente con la carita).
@@ -598,9 +599,9 @@ class MainActivity : Activity(), UserChannel {
 
     override fun onPause() {
         super.onPause()
-        // La app pasó a segundo plano (incluye moveTaskToBack al ejecutar algo): la carita
-        // regresa a donde estaba y reanuda su reposo normal.
-        bubble()?.undockFromApp()
+        // La app pasó a segundo plano (incluye moveTaskToBack al ejecutar algo): la carita overlay
+        // reaparece (estaba oculta en la portada) y/o regresa a donde estaba y reanuda su reposo.
+        bubble()?.let { if (mode == MODE_CLOUD) it.setHiddenForApp(false) else it.undockFromApp() }
     }
 
     /** Íconos de la barra de estado/navegación: oscuros sobre fondo claro, claros sobre fondo oscuro. */
@@ -943,16 +944,23 @@ class MainActivity : Activity(), UserChannel {
         }
         root.addView(bar, barLp)
 
-        // 5) Panel de Desarrollador OCULTO: área invisible arriba-derecha, triple toque.
-        root.addView(secretDevArea(), fp(dp(40), dp(40), Gravity.TOP or Gravity.END).apply {
-            topMargin = dp(8); rightMargin = dp(14)
-        })
+        // 5) Botón minimalista de configuración de VOZ, arriba-izquierda.
+        val voiceChip = buildVoiceChip(t)
+        val voiceLp = fp(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = dp(10); leftMargin = dp(16) }
+        root.addView(voiceChip, voiceLp)
 
-        // Insets: título bajo el notch; barra sobre la barra de navegación / teclado.
+        // 6) Panel de Desarrollador OCULTO: área invisible arriba-derecha, triple toque.
+        val devArea = secretDevArea()
+        val devLp = fp(dp(40), dp(40), Gravity.TOP or Gravity.END).apply { topMargin = dp(8); rightMargin = dp(14) }
+        root.addView(devArea, devLp)
+
+        // Insets: chips superiores bajo el notch; título centrado; barra sobre la navegación / teclado.
         root.setOnApplyWindowInsetsListener { _, insets ->
             val sys = insets.getInsets(android.view.WindowInsets.Type.systemBars())
             val ime = insets.getInsets(android.view.WindowInsets.Type.ime())
             titleLp.topMargin = sys.top + dp(26); titleBlock.layoutParams = titleLp
+            voiceLp.topMargin = sys.top + dp(10); voiceChip.layoutParams = voiceLp
+            devLp.topMargin = sys.top + dp(8); devArea.layoutParams = devLp
             barLp.bottomMargin = maxOf(sys.bottom, ime.bottom) + dp(18); bar.layoutParams = barLp
             insets
         }
@@ -962,11 +970,13 @@ class MainActivity : Activity(), UserChannel {
         return root
     }
 
-    /** Muestra la cara heroica + botón de permisos solo si la accesibilidad NO está activa. */
+    /**
+     * La cara heroica es SIEMPRE la protagonista de la portada: grande y al centro (nunca pequeña en
+     * la barra). El botón de permisos solo aparece si la accesibilidad aún no está activa.
+     */
     private fun applyHeroVisibility() {
-        val show = app.ui == null
-        heroFace?.visibility = if (show) View.VISIBLE else View.GONE
-        accessBtn?.visibility = if (show) View.VISIBLE else View.GONE
+        heroFace?.visibility = View.VISIBLE
+        accessBtn?.visibility = if (app.ui == null) View.VISIBLE else View.GONE
     }
 
     /**
@@ -986,8 +996,19 @@ class MainActivity : Activity(), UserChannel {
         }
         block.addView(face, fp(dp(112), dp(112), Gravity.CENTER))
         floatY(face)
-        attachDrag(block) { startVoice() }
+        attachDrag(block) { heroListen(face) }
         return block
+    }
+
+    /** Toque en la cara heroica: CRECE (feedback de que está escuchando) y activa el micrófono. */
+    private fun heroListen(face: View) {
+        face.animate().scaleX(1.18f).scaleY(1.18f).setDuration(180)
+            .setInterpolator(android.view.animation.OvershootInterpolator(2.2f)).start()
+        recognize { heard ->
+            face.animate().scaleX(1f).scaleY(1f).setDuration(320).start()
+            if (!heard.isNullOrBlank()) runPrompt(heard)
+            else Toast.makeText(this, "No te escuché", Toast.LENGTH_SHORT).show()
+        }
     }
 
     /** Arrastre libre: mueve la vista siguiendo el dedo; un toque limpio (sin desplazamiento) es "click". */
@@ -1055,6 +1076,47 @@ class MainActivity : Activity(), UserChannel {
         setPadding(dp(22), dp(13), dp(22), dp(13))
         elevation = dp(6).toFloat()
         setOnClickListener { activateAll() }
+    }
+
+    /** Botón minimalista "Voz" (arriba-izquierda): misma píldora limpia que el resto de la portada. */
+    private fun buildVoiceChip(t: MiracleTheme): View = TextView(this).apply {
+        text = "Voz"
+        textSize = 13f
+        setTextColor(t.pillText)
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        background = rounded(t.pill, dp(20).toFloat(), t.border)
+        elevation = dp(4).toFloat()
+        setPadding(dp(16), dp(8), dp(16), dp(8))
+        setOnClickListener { openVoiceSettings() }
+    }
+
+    /** Configuración de voz: elegir masculina o femenina (misma línea minimalista). Aplica al instante. */
+    private fun openVoiceSettings() {
+        val current = app.prefs.getString("voiceGender", "male")
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(Palette.bg, dp(24).toFloat(), Palette.cardBorder)
+            setPadding(dp(22), dp(20), dp(22), dp(18))
+        }
+        body.addView(title("Voz", 18f))
+        body.gap(dp(4))
+        body.addView(caption("Elige cómo suena Miracle."))
+        body.gap(dp(16))
+        lateinit var dialog: AlertDialog
+        fun choose(g: String) {
+            app.prefs.edit().putString("voiceGender", g).apply()
+            bubble()?.reapplyVoice()
+            bubble()?.speak("Hola, soy Miracle. Así sueno.")
+            dialog.dismiss()
+        }
+        val isFemale = current == "female"
+        body.addView(button(if (!isFemale) "Masculina  ✓" else "Masculina", primary = !isFemale) { choose("male") })
+        body.gap(dp(10))
+        body.addView(button(if (isFemale) "Femenina  ✓" else "Femenina", primary = isFemale) { choose("female") })
+        dialog = AlertDialog.Builder(this).setView(body).create()
+        dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
+        dialog.show()
     }
 
     /** Pide los permisos runtime y abre los Ajustes de Accesibilidad para encender el servicio. */

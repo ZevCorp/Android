@@ -524,10 +524,16 @@ class GraphApp : Application() {
     private fun notifyRunning(on: Boolean) {
         val nm = getSystemService(NotificationManager::class.java)
         if (!on) { nm.cancel(2); return }
-        nm.createNotificationChannel(NotificationChannel("run", "Ejecución", NotificationManager.IMPORTANCE_HIGH))
+        // Importancia BAJA (canal nuevo para forzar la recreación en dispositivos que ya tenían el
+        // canal "run" en HIGH): sigue en la bandeja de notificaciones, pero NO aparece como heads-up
+        // superpuesto sobre la pantalla mientras ejecuta. La detención vive en la píldora negra en
+        // pantalla (showStop); la notificación es solo un recordatorio discreto.
+        nm.createNotificationChannel(NotificationChannel("run_silent", "Ejecución", NotificationManager.IMPORTANCE_LOW).apply {
+            setSound(null, null); enableVibration(false); setShowBadge(false)
+        })
         val stop = PendingIntent.getBroadcast(
             this, 0, Intent("com.zevcorp.graph.STOP").setPackage(packageName), PendingIntent.FLAG_IMMUTABLE)
-        nm.notify(2, Notification.Builder(this, "run")
+        nm.notify(2, Notification.Builder(this, "run_silent")
             .setSmallIcon(android.R.drawable.ic_media_pause)
             .setContentTitle("Ü está ejecutando")
             .setContentText("Toca para detener")
