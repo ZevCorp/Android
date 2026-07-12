@@ -9,10 +9,10 @@
 import { BrainTurn, ScreenState } from '../domain/actions';
 import { baseCatalog, catalogNames, McpTool } from '../domain/mcp';
 import { SessionState } from '../domain/session';
-import { runBrainTurn } from '../brain/openai';
+import { runProviderTurn } from '../brain/provider';
 import { MemoryStore } from '../memory/store';
 import { LearningStore, learnedToMcp, workflowToMcp } from '../learning/workflows';
-import { config } from '../config';
+import { activeKey } from '../config';
 
 export interface TurnRequest {
   userId: string;
@@ -45,7 +45,7 @@ export async function resolveTurn(
   const tools = await assembleTools(req.userId, apps, deps.learning);
   const memory = await deps.memory.forPrompt(req.userId);
 
-  const { session, turn } = await runBrainTurn({
+  const { session, turn } = await runProviderTurn({
     session: req.session,
     tools,
     mcpNames: catalogNames(tools),
@@ -53,7 +53,7 @@ export async function resolveTurn(
     apps,
     state: req.state,
     results: req.results,
-    apiKey: config.openAiApiKey,
+    apiKey: activeKey(),
   });
 
   return { session, turn };

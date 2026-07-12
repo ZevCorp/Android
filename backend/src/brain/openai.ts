@@ -16,24 +16,10 @@ import { Action, BrainTurn, ScreenState } from '../domain/actions';
 import { McpTool } from '../domain/mcp';
 import { PendingCall, SessionState } from '../domain/session';
 import { goalPrompt } from './prompt';
+import { ensureProxy } from '../net';
+import { TurnInput, TurnOutput } from './types';
 
 const OA_BASE = 'https://api.openai.com';
-
-interface TurnInput {
-  session: SessionState;
-  tools: McpTool[];
-  mcpNames: Set<string>;
-  memory: string;
-  apps: string[];
-  state: ScreenState;
-  results: string[];
-  apiKey: string;
-}
-
-export interface TurnOutput {
-  session: SessionState;
-  turn: BrainTurn;
-}
 
 /** PNG (base64 sin prefijo) → data-uri para la Responses API. */
 function dataUri(b64: string): string {
@@ -72,6 +58,7 @@ function transient(code: number): boolean {
 }
 
 async function oaHttp(url: string, apiKey: string, body: unknown): Promise<{ code: number; body: string }> {
+  await ensureProxy();
   let wait = 800;
   for (let attempt = 1; ; attempt++) {
     const res = await fetch(url, {

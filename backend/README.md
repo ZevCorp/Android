@@ -50,15 +50,39 @@ src/
 Ver `ARCHITECTURE.md` para el detalle de por qué el bucle se parte cliente/servidor y cómo se mapea
 al `core` Kotlin del app Android.
 
+## Providers (OpenAI / Gemini)
+
+El cerebro habla con distintos modelos con computer-use tras una interfaz común (`src/brain/provider.ts`).
+Se elige con la variable `PROVIDER`:
+
+- **`gemini`** (`src/brain/gemini.ts`) — API `generateContent` de Google. Como es *stateless*, el
+  historial del hilo se acarrea (sin imágenes) dentro del blob de sesión. Computer-use se declara como
+  funciones (`computer_tap/type/scroll/...` + `look`).
+- **`openai`** (`src/brain/openai.ts`) — Responses API con computer-use nativo y `previous_response_id`.
+
+El cliente Windows no cambia: sigue recibiendo el mismo `Action[]`. Cambiar de proveedor = una env var.
+
 ## Desarrollo
 
 ```bash
 npm install
 npm run typecheck          # tsc --noEmit
-npm run dev                # vercel dev (necesita la CLI de Vercel y .env.local)
+npm run local              # servidor local en http://localhost:3000 (lee .env.local, sin CLI de Vercel)
+# o, con la CLI de Vercel:
+npm run dev                # vercel dev
 ```
 
-Crea `.env.local` a partir de `.env.example` con al menos `OPENAI_API_KEY`.
+Crea `.env.local` a partir de `.env.example`. Para Gemini basta `PROVIDER=gemini` + `GEMINI_API_KEY`.
+
+Prueba rápida:
+
+```bash
+curl localhost:3000/api/health
+curl -X POST localhost:3000/api/agent/turn -H 'Content-Type: application/json' -d '{
+  "goal":"busca el clima en Madrid",
+  "state":{"screen":"explorer · Escritorio","uiContext":"App: explorer","width":1920,"height":1080,"apps":["Google Chrome"]}
+}'
+```
 
 ## Despliegue en Vercel
 

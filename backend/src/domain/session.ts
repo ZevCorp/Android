@@ -19,22 +19,43 @@ export interface PendingCall {
   internalOutput?: string;
 }
 
+/** Una llamada de función pendiente en el hilo de Gemini (que responderemos el próximo turno). */
+export interface GeminiPending {
+  name: string;
+  argsJson: string;
+  /** Output resuelto server-side (p.ej. list_apps); si está, se usa en vez del result del cliente. */
+  internalOutput?: string;
+}
+
+/** Estado propio del hilo de Gemini: como la API es stateless, acarreamos el historial en la sesión. */
+export interface GeminiState {
+  /** `contents` de la conversación (imágenes de turnos pasados eliminadas para acotar el tamaño). */
+  history: unknown[];
+  /** functionCalls del último turno del modelo a los que hay que responder. */
+  pending: GeminiPending[];
+}
+
 /** Todo lo que hay que recordar del hilo del cerebro para continuarlo el siguiente turno. */
 export interface SessionState {
+  /** Proveedor del cerebro: 'openai' | 'gemini'. Fija el formato del resto de campos. */
+  provider: string;
   goal: string;
   model: string;
   effort: string;
-  /** `previous_response_id` de la Responses API (el servidor de OpenAI guarda la conversación). */
+  /** `previous_response_id` de la Responses API (OpenAI guarda la conversación server-side). */
   previousId: string;
   /** Id con el que se reanudó un hilo previo (para reabrir ventana si expiró). */
   startId: string;
   continuationMessage: string;
   informText: string;
   pending: PendingCall[];
+  /** Estado del hilo de Gemini (solo cuando provider === 'gemini'). */
+  gemini?: GeminiState;
 }
 
-export function freshSession(goal: string, model: string, effort: string): SessionState {
+export function freshSession(provider: string, goal: string, model: string, effort: string): SessionState {
   return {
+    provider,
     goal,
     model,
     effort,
@@ -43,6 +64,7 @@ export function freshSession(goal: string, model: string, effort: string): Sessi
     continuationMessage: '',
     informText: '',
     pending: [],
+    gemini: provider === 'gemini' ? { history: [], pending: [] } : undefined,
   };
 }
 
