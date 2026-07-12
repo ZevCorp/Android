@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Cliente Windows del asistente Ü. Es un FRONTEND TONTO: lee el árbol de UI con UIA, captura la
+    pantalla, ejecuta acciones (ratón/teclado/sistema) y muestra la carita flotante. NO contiene NADA
+    de inteligencia: cada turno consulta al backend (Vercel) qué hacer. Descompilar este ejecutable no
+    revela prompts, catálogo MCP, memoria ni la key del modelo — todo eso vive en el servidor.
+  -->
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>U.WindowsClient</RootNamespace>
+    <AssemblyName>U</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UI Automation (UIA): lectura del árbol de UI de cualquier app de Windows.
+         Vienen con Microsoft.WindowsDesktop.App (UseWPF), como referencias del framework. -->
+    <Reference Include="UIAutomationClient" />
+    <Reference Include="UIAutomationTypes" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- TTS/STT integrados de Windows (paquete NuGet en .NET moderno). -->
+    <PackageReference Include="System.Speech" Version="8.0.0" />
+    <!-- Captura de pantalla (GDI) para computer-use. -->
+    <PackageReference Include="System.Drawing.Common" Version="8.0.7" />
+    <PackageReference Include="System.Text.Json" Version="8.0.4" />
+  </ItemGroup>
+
+</Project>
