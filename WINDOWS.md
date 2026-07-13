@@ -3,12 +3,18 @@
 Esta rama añade la **versión Windows** del asistente Ü, construida con la separación que el app Android
 nunca tuvo: **el cerebro (backend) vive aparte del cliente (frontend)** desde la primera línea.
 
-Dos proyectos autónomos, listos para vivir en repos separados:
+Proyectos autónomos, listos para vivir en repos separados:
 
-| Carpeta          | Qué es                          | Dónde se despliega        | Contiene la innovación |
-|------------------|---------------------------------|---------------------------|------------------------|
-| `backend/`       | El **cerebro** (TypeScript)     | **Vercel** (serverless)   | ✅ todo                |
-| `windows-client/`| El **frontend tonto** (C#/WPF)  | La PC del usuario (`.exe`)| ❌ nada                |
+| Carpeta          | Qué es                          | Dónde se despliega          | Contiene la innovación |
+|------------------|---------------------------------|-----------------------------|------------------------|
+| `backend/`       | El **cerebro** (TypeScript)     | **Vercel** (serverless)     | ✅ todo                |
+| `windows-client/`| El **frontend tonto** (C#/WPF)  | La PC del usuario (`.exe`)  | ❌ nada                |
+| `macos-client/`  | El **frontend tonto** (Swift)   | El Mac del usuario (`.app`) | ❌ nada                |
+
+> **La prueba de la separación:** el cliente macOS se añadió **sin tocar una sola línea del backend**.
+> Windows lee el árbol de UI con UIA; macOS con la Accessibility API (AXUIElement); ambos hablan el
+> mismo contrato (`backend/src/domain/actions.ts`) y reciben el mismo `Action[]`. Un tercer frontend
+> (web, Linux, otra plataforma) entra igual: implementa leer-árbol + ejecutar-acciones y ya.
 
 ## El porqué (lo que pediste)
 

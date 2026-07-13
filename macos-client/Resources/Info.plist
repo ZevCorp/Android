@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>U</string>
+    <key>CFBundleDisplayName</key>
+    <string>Ü</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.zevcorp.u.mac</string>
+    <key>CFBundleExecutable</key>
+    <string>U</string>
+    <key>CFBundlePackageType</key>
+    <string>APPL</string>
+    <key>CFBundleShortVersionString</key>
+    <string>0.1.0</string>
+    <key>CFBundleVersion</key>
+    <string>1</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>13.0</string>
+    <!-- App de agente: sin icono en el Dock, solo la carita flotante. -->
+    <key>LSUIElement</key>
+    <true/>
+    <!-- La carita debe poder flotar sobre apps en pantalla completa. -->
+    <key>NSSupportsAutomaticTermination</key>
+    <false/>
+</dict>
+</plist>
