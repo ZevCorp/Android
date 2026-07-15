@@ -62,6 +62,10 @@
                     <Button x:Name="LogsBtn" Content="📜" DockPanel.Dock="Right" Width="34" Height="30"
                             Margin="6,0,0,0" Click="OnOpenLogs" Background="#22FFFFFF" Foreground="White"
                             BorderThickness="0" FontSize="11" ToolTip="Registro (para diagnosticar errores)"/>
+                    <Button x:Name="WorkflowsBtn" Content="🧭" DockPanel.Dock="Right" Width="34" Height="30"
+                            Margin="6,0,0,0" Click="OnOpenWorkflows" Background="#22FFFFFF" Foreground="White"
+                            BorderThickness="0" FontSize="13"
+                            ToolTip="Workflows: enseñar/ejecutar contra Graph (SAP GUI / UIA) + autofill"/>
                     <Button x:Name="VideosBtn" Content="🎞 Videos" DockPanel.Dock="Right" Width="76" Height="30"
                             Margin="6,0,0,0" Click="OnOpenVideos" Background="#22FFFFFF" Foreground="White"
                             BorderThickness="0" FontSize="11"/>

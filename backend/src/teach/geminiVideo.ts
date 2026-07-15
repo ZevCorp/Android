@@ -109,6 +109,16 @@ Responde SOLO JSON:
 {"summary": "...", "items": [{"app": "HIS - Admisiones", "note": "..."}], "questions": ["..."]}
 `.trim();
 
+/**
+ * Gemini devuelve 429/5xx ("This model is currently overloaded") cuando está saturado, y Google los
+ * documenta como temporales. Sin reintento, un bache de demanda tira toda la enseñanza y el video que
+ * el médico ya grabó y subió se pierde. Un 5xx significa que Gemini no llegó a generar nada, así que
+ * repetir el mismo POST no duplica ningún efecto.
+ */
+function isTransient(status: number): boolean {
+  return status === 429 || status >= 500;
+}
+
 /** El video ya está ACTIVE: pídele a Gemini el conocimiento del sistema. */
 export async function processVideo(fileUri: string, model: string): Promise<VideoTeachResult> {
   const req = {
@@ -121,14 +131,27 @@ export async function processVideo(fileUri: string, model: string): Promise<Vide
     generationConfig: { responseMimeType: 'application/json' },
   };
 
-  const res = await fetch(`${BASE}/v1beta/models/${model}:generateContent`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.geminiApiKey },
-    body: JSON.stringify(req),
-  });
-  if (!res.ok) {
-    const body = await res.text().catch(() => '');
-    throw new Error(`generateContent HTTP ${res.status}: ${body.slice(0, 200)}`);
+  // Backoff exponencial 0.8s → 6.4s, igual que la versión Android (GeminiHttp.withRetry).
+  let res: Response | null = null;
+  for (let attempt = 0; attempt < 5; attempt++) {
+    if (attempt > 0) await new Promise((r) => setTimeout(r, 800 * 2 ** (attempt - 1)));
+
+    res = await fetch(`${BASE}/v1beta/models/${model}:generateContent`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-goog-api-key': config.geminiApiKey },
+      body: JSON.stringify(req),
+    });
+    if (res.ok) break;
+    if (!isTransient(res.status)) {
+      const body = await res.text().catch(() => '');
+      throw new Error(`generateContent HTTP ${res.status}: ${body.slice(0, 200)}`);
+    }
+  }
+  if (!res || !res.ok) {
+    const body = res ? await res.text().catch(() => '') : '';
+    throw new Error(
+      `generateContent HTTP ${res?.status} tras 5 intentos (sigue saturado): ${body.slice(0, 200)}`,
+    );
   }
 
   const body = (await res.json()) as {
