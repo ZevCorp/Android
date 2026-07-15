@@ -301,6 +301,15 @@ public sealed class TeachSession : IAsyncDisposable
         {"summary": "...", "items": [{"app": "HIS - Admisiones", "note": "..."}], "questions": ["..."]}
         """;
 
+    /// <summary>
+    /// Gemini devuelve 429/5xx ("This model is currently overloaded") cuando está saturado — Google los
+    /// documenta como temporales. Sin reintento, un bache de demanda tira toda la enseñanza y el video
+    /// del médico se pierde después de haberlo subido. Backoff exponencial 0.8s → 8s, igual que hace la
+    /// versión Android (GeminiHttp.withRetry).
+    /// </summary>
+    private static bool IsTransient(System.Net.HttpStatusCode s) =>
+        (int)s == 429 || (int)s >= 500;
+
     private async Task<TeachResult> GenerateAsync(string fileUri, CancellationToken ct)
     {
         var reqBody = new
@@ -319,15 +328,38 @@ public sealed class TeachSession : IAsyncDisposable
             },
             generationConfig = new { responseMimeType = "application/json" },
         };
+        string payload = JsonSerializer.Serialize(reqBody);
 
-        using var req = new HttpRequestMessage(HttpMethod.Post, $"{GeminiBase}/v1beta/models/{_geminiModel}:generateContent");
-        req.Headers.Add("x-goog-api-key", _geminiApiKey);
-        req.Content = new StringContent(JsonSerializer.Serialize(reqBody), Encoding.UTF8, "application/json");
+        string body = "";
+        System.Net.HttpStatusCode status = 0;
+        // 5 intentos: 0.8s, 1.6s, 3.2s, 6.4s. Un 5xx significa que Gemini no llegó a generar nada, así
+        // que reintentar el mismo POST no duplica ningún efecto.
+        for (int attempt = 0; attempt < 5; attempt++)
+        {
+            if (attempt > 0)
+            {
+                int waitMs = (int)(800 * Math.Pow(2, attempt - 1));
+                StatusChanged?.Invoke(this, $"Gemini saturado ({(int)status}); reintentando en {waitMs / 1000.0:0.#}s…");
+                LogBus.Log("teach", $"generateContent HTTP {(int)status}, reintento {attempt}/4 en {waitMs}ms");
+                await Task.Delay(waitMs, ct);
+            }
 
-        using var res = await _http.SendAsync(req, ct);
-        string body = await res.Content.ReadAsStringAsync(ct);
-        if (!res.IsSuccessStatusCode)
-            throw new InvalidOperationException($"Gemini generateContent HTTP {(int)res.StatusCode}: {body}");
+            using var req = new HttpRequestMessage(HttpMethod.Post, $"{GeminiBase}/v1beta/models/{_geminiModel}:generateContent");
+            req.Headers.Add("x-goog-api-key", _geminiApiKey);
+            req.Content = new StringContent(payload, Encoding.UTF8, "application/json");
+
+            using var res = await _http.SendAsync(req, ct);
+            body = await res.Content.ReadAsStringAsync(ct);
+            status = res.StatusCode;
+
+            if (res.IsSuccessStatusCode) break;
+            if (!IsTransient(status))
+                throw new InvalidOperationException($"Gemini generateContent HTTP {(int)status}: {body}");
+        }
+
+        if (!((int)status >= 200 && (int)status < 300))
+            throw new InvalidOperationException(
+                $"Gemini generateContent HTTP {(int)status} tras 5 intentos (sigue saturado): {body}");
 
         using var doc = JsonDocument.Parse(body);
         string text = doc.RootElement
