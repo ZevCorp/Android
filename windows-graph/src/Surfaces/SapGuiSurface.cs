@@ -1,5 +1,6 @@
 using System.Reflection;
 using System.Text;
+using System.Windows.Threading;
 
 namespace U.Graph.Surfaces;
 
@@ -27,12 +28,30 @@ public sealed class SapGuiSurface : IUiSurface
 
     public event EventHandler<ObservedStep>? StepObserved;
 
+    /// <summary>
+    /// Diagnóstico del enganche de eventos: qué modo quedó activo (COM-evento o sondeo) y, si es
+    /// COM-evento, qué nombres/DISPIDs se encontraron. Es la única forma de confirmar contra un SAP
+    /// real que la introspección calzó — ver <see cref="SapComEvents"/>.
+    /// </summary>
+    public event EventHandler<string>? Diagnostic;
+
     /// <summary>Tipos de GuiComponent con los que un humano interactúa. El resto es decorado.</summary>
     private static readonly HashSet<string> Interactive = new(StringComparer.OrdinalIgnoreCase)
     {
         "GuiTextField", "GuiCTextField", "GuiPasswordField", "GuiComboBox",
         "GuiCheckBox", "GuiRadioButton", "GuiButton", "GuiOkCodeField",
     };
+
+    // ── Estado de observación (hilo STA dedicado, ver StartObserving) ───────────
+    private readonly object _obsGate = new();
+    private volatile bool _observing;
+    private Thread? _pumpThread;
+    private Dispatcher? _pumpDispatcher;
+    private readonly ManualResetEventSlim _ready = new(false);
+    private string? _startupError;
+    private SapComEvents? _comEvents;
+    private DispatcherTimer? _pollTimer;
+    private Dictionary<string, string?> _lastSnapshot = new();
 
     // ── Disponibilidad ───────────────────────────────────────────────────────
 
@@ -372,32 +391,172 @@ public sealed class SapGuiSurface : IUiSurface
     // ── Observación ──────────────────────────────────────────────────────────
 
     /// <summary>
-    /// PENDIENTE, y con tres restricciones ya verificadas contra la spec oficial que condicionan cómo
-    /// se implementará:
+    /// Graba sobre SAP GUI. Tres restricciones verificadas contra la spec oficial (ver
+    /// INVESTIGACION-SAPGUI-UIA.md) que esto respeta:
     ///
     /// 1. <c>Change</c> NO es un evento por pulsación: se dispara por lotes en el round-trip al
-    ///    servidor. La granularidad máxima de grabación es el viaje al servidor, no la tecla.
-    ///
-    /// 2. <c>Hit</c> NO es un evento de clic — es hover, y solo existe bajo elementVisualizationMode.
-    ///    Sirve para un selector interactivo, no para grabar.
-    ///
+    ///    servidor. La granularidad máxima de grabación ES el viaje al servidor, no la tecla — por
+    ///    eso se publica un STEP por CAMPO CUYO VALOR cambió entre dos eventos, no por tecla.
+    /// 2. <c>Hit</c> NO es un evento de clic (es hover) — no se usa para grabar.
     /// 3. El parámetro de servidor <c>sapgui/user_scripting_disable_recording</c> apaga TODOS los
-    ///    eventos de scripting, no solo el grabador nativo de SAP. Un Basis puede activarlo sin
-    ///    avisar: la ejecución sigue funcionando y la grabación deja de recibir nada. Cuando se
-    ///    implemente hay que detectarlo y decirlo, porque es indistinguible de un bug nuestro.
+    ///    eventos de scripting sin avisar. Si el enganche COM se hizo pero nunca publica nada
+    ///    mientras el operador sí interactúa, esa es la causa más probable — es indistinguible de un
+    ///    bug nuestro salvo por este comentario.
     ///
-    /// Además el COM de SAP exige STA con bomba de mensajes, incompatible con el hilo de UIA. Son
-    /// hilos separados, no uno.
+    /// LÍMITE HEREDADO DE LA API DE SAP, no de esta implementación: un clic en un botón que NO cambia
+    /// ningún valor de campo (p.ej. "Grabar" cuando ya se llenó todo) no se puede distinguir de "nada
+    /// pasó" ni por eventos COM ni por sondeo — SAP no expone qué control tuvo el foco al disparar el
+    /// round-trip. Graph puede inferirlo en el post-procesamiento por el contexto del video adjunto
+    /// (ver WorkflowTeachSession), no aquí.
     ///
-    /// Mientras tanto la superficie SIRVE para leer campos, ejecutar planes y hacer autofill.
+    /// El COM de SAP exige un hilo STA con bomba de mensajes, incompatible con el hilo de UIA — por
+    /// eso esto arranca un hilo <see cref="Thread"/> dedicado con <see cref="Dispatcher.Run"/> en vez
+    /// de compartir el hilo del llamador. Si el enganche de eventos COM falla por cualquier motivo
+    /// (introspección no verificada contra un SAP real — ver <see cref="SapComEvents"/>), cae SOLO a
+    /// sondeo en vez de lanzar: la grabación sigue funcionando, con la limitación de arriba.
     /// </summary>
-    public void StartObserving() =>
-        throw new NotSupportedException(
-            "La grabación sobre SAP GUI aún no está implementada: requiere hilo STA propio con bomba " +
-            "de mensajes y depende de que sapgui/user_scripting_disable_recording esté desactivado. " +
-            "Lectura, ejecución y autofill sí funcionan.");
+    public void StartObserving()
+    {
+        lock (_obsGate)
+        {
+            if (_observing) return;
+            _ready.Reset();
+            _startupError = null;
 
-    public void StopObserving() { }
+            _pumpThread = new Thread(PumpMain) { IsBackground = true, Name = "SapGuiEvents" };
+            _pumpThread.SetApartmentState(ApartmentState.STA);
+            _pumpThread.Start();
+
+            if (!_ready.Wait(TimeSpan.FromSeconds(8)))
+                _startupError ??= "el hilo de observación de SAP no arrancó a tiempo";
+
+            if (_startupError != null)
+            {
+                string error = _startupError;
+                // No dejar el hilo huérfano corriendo Dispatcher.Run(): si arranca tarde, igual hay
+                // que pararlo, o un reintento del operador acumularía un hilo STA por cada intento.
+                try { _pumpDispatcher?.InvokeShutdown(); } catch { }
+                try { _pumpThread?.Join(TimeSpan.FromSeconds(2)); } catch { }
+                _pumpThread = null;
+                _pumpDispatcher = null;
+                throw new GraphException($"No se pudo iniciar la observación de SAP GUI: {error}");
+            }
+
+            _observing = true;
+        }
+    }
+
+    /// <summary>Cuerpo del hilo STA dedicado: resuelve la sesión EN este hilo (nunca hereda un proxy COM de otro) y bombea mensajes.</summary>
+    private void PumpMain()
+    {
+        try
+        {
+            _pumpDispatcher = Dispatcher.CurrentDispatcher;
+
+            dynamic? session;
+            try { session = Session(); }
+            catch (Exception e)
+            {
+                _startupError = $"no se pudo resolver la sesión SAP en el hilo de observación: {e.Message}";
+                _ready.Set();
+                return;
+            }
+
+            if (session == null)
+            {
+                _startupError = "no hay ninguna sesión de SAP GUI abierta al iniciar la observación";
+                _ready.Set();
+                return;
+            }
+
+            _comEvents = new SapComEvents(session);
+            _comEvents.Diagnostic += (_, msg) => Diagnostic?.Invoke(this, $"[com] {msg}");
+            _comEvents.Raised += (_, __) => PublishChangedFields();
+
+            if (_comEvents.TryHook(out string reason))
+            {
+                Diagnostic?.Invoke(this, "observando por eventos COM de SAP GUI (Change/StartRequest/…).");
+            }
+            else
+            {
+                Diagnostic?.Invoke(this,
+                    $"eventos COM no disponibles ({reason}); cae a sondeo (no detecta clics sin cambio de valor).");
+                _lastSnapshot = SafeReadFields().ToDictionary(f => f.Selector, f => f.CurrentValue);
+                _pollTimer = new DispatcherTimer(DispatcherPriority.Background) { Interval = TimeSpan.FromMilliseconds(500) };
+                _pollTimer.Tick += (_, __) => PublishChangedFields();
+                _pollTimer.Start();
+            }
+
+            _ready.Set();
+            Dispatcher.Run(); // bombea hasta que StopObserving llame InvokeShutdown()
+        }
+        catch (Exception e)
+        {
+            _startupError = $"fallo iniciando observación SAP: {e.Message}";
+            _ready.Set();
+        }
+    }
+
+    /// <summary>
+    /// Publica un ObservedStep por cada campo cuyo valor cambió desde la última lectura. Es el mismo
+    /// mecanismo tanto si lo dispara un evento COM real como el sondeo: en ambos casos la fuente de
+    /// verdad es releer el área de usuario completa, porque ni Change ni el sondeo traen "qué cambió".
+    /// </summary>
+    private void PublishChangedFields()
+    {
+        var current = SafeReadFields();
+        foreach (DetectedField field in current)
+        {
+            _lastSnapshot.TryGetValue(field.Selector, out string? prev);
+            if (prev == field.CurrentValue) continue;
+
+            StepObserved?.Invoke(this, new ObservedStep(
+                ActionType: field.ActionType,
+                Selector: field.Selector,
+                Label: field.Label,
+                ControlType: field.ControlType,
+                Value: field.CurrentValue,
+                AllowedOptions: field.AllowedOptions,
+                SelectedValue: field.ActionType == "select" ? field.CurrentValue : null,
+                SelectedLabel: field.ActionType == "select" ? field.CurrentValue : null,
+                SurfaceSection: null,
+                AlternativeTargets: Array.Empty<string>()));
+        }
+        _lastSnapshot = current.ToDictionary(f => f.Selector, f => f.CurrentValue);
+    }
+
+    private IReadOnlyList<DetectedField> SafeReadFields()
+    {
+        try { return ReadFields(); } catch { return Array.Empty<DetectedField>(); }
+    }
+
+    public void StopObserving()
+    {
+        lock (_obsGate)
+        {
+            if (!_observing) return;
+
+            try
+            {
+                _pumpDispatcher?.Invoke(() =>
+                {
+                    _pollTimer?.Stop();
+                    _pollTimer = null;
+                    _comEvents?.Unhook();
+                });
+            }
+            catch { /* la sesión SAP o el dispatcher pudieron morir antes que nosotros */ }
+
+            _pumpDispatcher?.InvokeShutdown();
+            _pumpThread?.Join(TimeSpan.FromSeconds(5));
+
+            _comEvents?.Dispose();
+            _comEvents = null;
+            _pumpDispatcher = null;
+            _pumpThread = null;
+            _observing = false;
+        }
+    }
 
     // ── Utilidades ───────────────────────────────────────────────────────────
 

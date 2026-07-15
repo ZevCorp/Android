@@ -1,5 +1,6 @@
 using System.Windows;
 using System.Windows.Input;
+using U.Graph;
 using U.WindowsClient.Agent;
 using U.WindowsClient.Backend;
 using U.WindowsClient.Diagnostics;
@@ -24,12 +25,14 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
     private readonly UiaReader _uia = new();
     private readonly VoiceIO _voice = new();
     private readonly VideoLibrary _videoLibrary = new();
+    private readonly GraphConfig _graphConfig = GraphConfig.Load();
     private Updater? _updater;
     private AgentLoop _loop = null!;
     private BackendClient? _backend;
     private CancellationTokenSource? _cts;
     private VideoLibraryWindow? _videoWindow;
     private LogWindow? _logWindow;
+    private WorkflowLibraryWindow? _workflowWindow;
     private TeachSession? _teachSession;
     private bool _teaching;
 
@@ -284,6 +287,16 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
 
         _videoWindow.Show();
         _videoWindow.Activate();
+    }
+
+    private void OnOpenWorkflows(object sender, RoutedEventArgs e)
+    {
+        if (_workflowWindow == null || !_workflowWindow.IsLoaded)
+            _workflowWindow = new WorkflowLibraryWindow(_graphConfig, _backend!, _videoLibrary,
+                _config.UserId, _config.GeminiApiKey ?? "", _config.GeminiModel);
+
+        _workflowWindow.Show();
+        _workflowWindow.Activate();
     }
 
     private void OnOpenLogs(object sender, RoutedEventArgs e)
