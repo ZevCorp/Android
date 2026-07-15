@@ -46,4 +46,6 @@ Get-ChildItem $releaseDir -Include "releases.win.json", "*.nupkg" -Recurse |
     ForEach-Object { "  - $($_.Name)  ($([math]::Round($_.Length / 1MB, 1)) MB)" }
 Write-Host ""
 Write-Host "Para un cliente NUEVO (primera instalación), mandale:" -ForegroundColor Green
-Write-Host "  $releaseDir\U-Setup.exe"
+# El nombre lo decide vpk y lleva el canal dentro: con el canal "win" por defecto sale
+# U-win-Setup.exe, no U-Setup.exe.
+Write-Host "  $releaseDir\U-win-Setup.exe"

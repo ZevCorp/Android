@@ -54,7 +54,6 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
 
         BackendUrl.Text = _config.BackendUrl;
         ClientToken.Text = _config.ClientToken ?? "";
-        GeminiApiKey.Text = _config.GeminiApiKey ?? "";
         SetMuted(_config.Muted); // si lo silenciaron en una sesión anterior, sigue mudo
 
         var mcp = new LocalMcp(_uia);
@@ -174,16 +173,15 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
     }
 
     /// <summary>
-    /// ANTES esto llamaba a `_ = _teachSession.StartAsync()` sin esperar ni capturar la excepción: si
-    /// GeminiApiKey estaba vacía, StartAsync lanzaba de inmediato pero el error se perdía en el aire
-    /// (fire-and-forget) — no quedaba grabación, y el usuario recién se enteraba minutos después con
-    /// un "No hay grabación para procesar" que no explicaba nada. Ahora se espera de verdad y, si
-    /// falla, el botón vuelve a su estado normal y el error queda visible (estado + LogBus).
+    /// Se espera de verdad y se capturan los errores: si arrancar la grabación falla (p.ej. la
+    /// librería nativa no carga), el botón vuelve a su estado normal y el error queda visible en el
+    /// estado y en el LogBus. Cuando esto era `_ = StartAsync()` (fire-and-forget), la excepción se
+    /// perdía en el aire y el usuario solo se enteraba minutos después, al detener, con un "no hay
+    /// grabación para procesar" que no explicaba nada.
     /// </summary>
     private async Task StartTeachingAsync()
     {
-        _teachSession = new TeachSession(_backend!, _videoLibrary, _config.UserId,
-            _config.GeminiApiKey ?? "", _config.GeminiModel);
+        _teachSession = new TeachSession(_backend!, _videoLibrary, _config.UserId);
         _teachSession.StatusChanged += (_, msg) => SetStatus(msg);
 
         try
@@ -299,7 +297,6 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
     {
         _config.BackendUrl = BackendUrl.Text.Trim();
         _config.ClientToken = string.IsNullOrWhiteSpace(ClientToken.Text) ? null : ClientToken.Text.Trim();
-        _config.GeminiApiKey = string.IsNullOrWhiteSpace(GeminiApiKey.Text) ? null : GeminiApiKey.Text.Trim();
         _config.Save();
         // Recablea el cliente con la nueva URL/token.
         var mcp = new LocalMcp(_uia);
