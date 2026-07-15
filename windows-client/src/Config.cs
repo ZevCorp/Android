@@ -25,6 +25,22 @@ public sealed class Config
     public string UserId { get; set; } = "anon";
 
     /// <summary>
+    /// Asistente mudo (botón 🔇 de la carita). Se persiste a propósito: quien lo silencia suele estar
+    /// en una consulta o una reunión, y que volviera a hablar solo por reiniciar Ü sería justo el
+    /// problema que el botón viene a resolver.
+    /// </summary>
+    public bool Muted { get; set; }
+
+    /// <summary>
+    /// De dónde baja la carita sus propias actualizaciones (ver <see cref="Update.Updater"/> y
+    /// RELEASING-WINDOWS.md). Es el bucket PÚBLICO `windows` de Supabase — público a propósito: el
+    /// updater tiene que poder leerlo sin credenciales, igual que el bucket `apks` de Android. Aquí solo
+    /// viajan binarios del cliente, que no contienen secretos del cerebro.
+    /// </summary>
+    public string UpdateFeedUrl { get; set; } =
+        "https://zyvfamlhlmztliexvmej.supabase.co/storage/v1/object/public/windows";
+
+    /// <summary>
     /// Key de Gemini usada SOLO por la enseñanza por video (ver comentario de clase). NUNCA
     /// hardcodear una key real acá: GitHub la detecta como secreto y bloquea el push (ya pasó). Para
     /// desarrollo/pruebas, fijala con la variable de entorno GEMINI_API_KEY (no queda en el repo); en

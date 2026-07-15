@@ -2,11 +2,36 @@ using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Threading;
 using U.WindowsClient.Diagnostics;
+using Velopack;
 
 namespace U.WindowsClient;
 
 public partial class App : Application
 {
+    /// <summary>
+    /// Entry point manual (ver StartupObject en WindowsClient.csproj). Existe por Velopack: cuando el
+    /// updater instala o desinstala una versión relanza este mismo .exe con argumentos de hook y espera
+    /// que el proceso los atienda y termine. <c>VelopackApp.Run()</c> hace eso y NO retorna en ese caso
+    /// — por eso corre antes de levantar WPF, o cada actualización abriría una carita fantasma.
+    /// </summary>
+    [STAThread]
+    private static void Main(string[] args)
+    {
+        try
+        {
+            VelopackApp.Build().Run();
+
+            var app = new App();
+            app.InitializeComponent();
+            app.Run();
+        }
+        catch (Exception ex)
+        {
+            LogBus.Log("fatal", ex.ToString());
+            MessageBox.Show($"Ü no pudo arrancar: {ex.Message}", "Ü", MessageBoxButton.OK, MessageBoxImage.Error);
+        }
+    }
+
     protected override void OnStartup(StartupEventArgs e)
     {
         base.OnStartup(e);

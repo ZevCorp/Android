@@ -81,6 +81,55 @@ public sealed class TeachSession : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// Tira a la basura la grabación en curso y empieza una nueva, sin subir ni procesar nada.
+    ///
+    /// Existe porque equivocarse enseñando (meterse en la plataforma que no era, hacer un paso al
+    /// revés) era irreversible: la única salida era detener, y detener SUBE el video a Gemini y manda
+    /// sus notas al MemoryStore del backend. Es decir, el error quedaba aprendido — justo lo contrario
+    /// de lo que el médico quería. Reiniciar corta eso antes de que salga nada de la máquina.
+    /// </summary>
+    public async Task RestartAsync(CancellationToken ct = default)
+    {
+        await DiscardAsync();
+        await StartAsync(ct);
+    }
+
+    /// <summary>
+    /// Detiene la grabación en curso, si la hay, y borra su mp4. No sube ni procesa nada: lo grabado
+    /// hasta aquí desaparece.
+    /// </summary>
+    private async Task DiscardAsync()
+    {
+        if (_recorder != null)
+        {
+            try
+            {
+                // Hay que esperar el Stop aunque el video se vaya a la basura: hasta que no llega
+                // OnRecordingComplete, el mp4 sigue abierto y el File.Delete de abajo fallaría.
+                await _recorder.StopAsync();
+            }
+            catch (Exception ex)
+            {
+                // Da igual por qué falló al detener; el archivo se descarta igual.
+                LogBus.Log("teach", $"fallo al detener la grabación que se iba a descartar: {ex.Message}");
+            }
+            finally
+            {
+                await _recorder.DisposeAsync();
+                _recorder = null;
+            }
+        }
+
+        if (_recordingPath != null && !_library.Delete(_recordingPath))
+            LogBus.Log("teach", $"no se pudo borrar la grabación descartada, quedará en 🎞 Videos: {_recordingPath}");
+        else if (_recordingPath != null)
+            LogBus.Log("teach", $"grabación descartada: {_recordingPath}");
+
+        _recordingPath = null;
+        _recorderError = null;
+    }
+
     /// <summary>Detiene la grabación. El mp4 queda finalizado en disco, listo para procesar.</summary>
     public async Task StopAsync()
     {

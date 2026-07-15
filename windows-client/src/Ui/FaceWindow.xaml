@@ -34,10 +34,21 @@
                 <TextBlock x:Name="Bubble" Text="" Foreground="#CCFFFFFF" FontSize="12"
                            Margin="0,10,0,0" TextWrapping="Wrap" MaxHeight="60"/>
 
+                <!-- Pastilla de actualización: oculta salvo que ya haya una versión descargada y lista.
+                     Si el usuario la ignora, se aplica sola al cerrar (ver Updater.ApplyOnExit). -->
+                <Button x:Name="UpdateBtn" Content="⬇ Nueva versión lista — reiniciar" Height="28"
+                        Margin="0,10,0,0" Click="OnApplyUpdate" Background="#553B82F6" Foreground="White"
+                        BorderThickness="0" FontSize="11" Visibility="Collapsed"
+                        ToolTip="Se instalará sola al cerrar Ü si prefieres seguir trabajando"/>
+
                 <!-- Entrada de texto + micrófono -->
                 <DockPanel Margin="0,12,0,0" LastChildFill="True">
                     <Button x:Name="MicBtn" Content="🎤" DockPanel.Dock="Right" Width="34" Height="30"
                             Margin="6,0,0,0" Click="OnMic" Background="#22FFFFFF" Foreground="White" BorderThickness="0"/>
+                    <!-- Siempre visible: callarlo tiene que estar a un clic, sin importar qué esté pasando. -->
+                    <Button x:Name="MuteBtn" Content="🔊" DockPanel.Dock="Right" Width="34" Height="30"
+                            Margin="6,0,0,0" Click="OnToggleMute" Background="#22FFFFFF" Foreground="White"
+                            BorderThickness="0" ToolTip="Callar a Ü ahora mismo"/>
                     <Button x:Name="StopBtn" Content="⏹" DockPanel.Dock="Right" Width="34" Height="30"
                             Margin="6,0,0,0" Click="OnStop" Background="#55FF3B30" Foreground="White" BorderThickness="0"
                             Visibility="Collapsed"/>
@@ -54,6 +65,12 @@
                     <Button x:Name="VideosBtn" Content="🎞 Videos" DockPanel.Dock="Right" Width="76" Height="30"
                             Margin="6,0,0,0" Click="OnOpenVideos" Background="#22FFFFFF" Foreground="White"
                             BorderThickness="0" FontSize="11"/>
+                    <!-- Solo visible mientras se graba: descarta lo grabado y vuelve a empezar, sin que el
+                         error llegue nunca a Gemini ni al cerebro. Ver TeachSession.RestartAsync. -->
+                    <Button x:Name="RestartTeachBtn" Content="🔄" DockPanel.Dock="Right" Width="34" Height="30"
+                            Margin="6,0,0,0" Click="OnRestartTeach" Background="#22FFFFFF" Foreground="White"
+                            BorderThickness="0" FontSize="11" Visibility="Collapsed"
+                            ToolTip="Me equivoqué: descartar esta grabación y empezar de nuevo"/>
                     <Button x:Name="TeachBtn" Content="🎓 Enseñar" Height="30" Click="OnToggleTeach"
                             Background="#22FFFFFF" Foreground="White" BorderThickness="0" FontSize="11"/>
                 </DockPanel>
@@ -71,6 +88,9 @@
                                  ToolTip="Gemini API key (solo para 🎓 Enseñar)"/>
                         <Button Content="Guardar" Height="26" Margin="0,6,0,0" Click="OnSaveConfig"
                                 Background="#33FFFFFF" Foreground="White" BorderThickness="0"/>
+                        <!-- Para soporte: saber qué versión tiene el cliente delante sin pedirle nada. -->
+                        <TextBlock x:Name="VersionText" Text="" Foreground="#66FFFFFF" FontSize="10"
+                                   Margin="0,6,0,0"/>
                     </StackPanel>
                 </Expander>
             </StackPanel>

@@ -116,12 +116,12 @@ Framework-dependent (más liviano; requiere .NET Desktop Runtime 8 en el PC del 
 dotnet publish windows-client\WindowsClient.csproj -c Release -r win-x64 --self-contained false -o out\assistant
 ```
 Queda `out\assistant\U.exe` **junto a sus DLLs** (incluida `ScreenRecorderLib.dll`) — no se puede mover
-`U.exe` solo, tiene que viajar toda la carpeta. Para distribuir, comprimí la carpeta:
-```powershell
-Compress-Archive -Path out\assistant -DestinationPath out\U.zip -Force
-```
-El usuario descomprime y ejecuta `U.exe` desde adentro de la carpeta. Pruébalo suelto: doble clic →
-aparece la carita → escribe algo → probá también 🎓 Enseñar antes de dar por bueno el build.
+`U.exe` solo, tiene que viajar toda la carpeta. Pruébalo suelto: doble clic → aparece la carita →
+escribe algo → probá también 🎓 Enseñar antes de dar por bueno el build.
+
+> **Para distribuir no uses esta carpeta ni un zip a mano**: corré
+> `windows-client\scripts\publish-release.ps1 -Version X.Y.Z`, que hace este mismo `publish` y además
+> arma el instalador y el paquete de auto-update. Ver [`RELEASING-WINDOWS.md`](RELEASING-WINDOWS.md).
 
 **Firma de código** (Fase 0.3): sin certificado, Windows SmartScreen avisará al ejecutar `U.exe` la
 primera vez ("Más información → Ejecutar de todas formas"). En Windows 11 con **Control Inteligente
@@ -143,7 +143,10 @@ pantalla la primera vez.
 
 ## Fase 6 — Poner en manos del usuario
 
-1. Entrega `U.exe` (web, correo, tu canal de distribución) — es un único archivo, self-contained.
+1. Entrega **`U-Setup.exe`** (web, correo, tu canal de distribución), que sale de
+   `windows-client\scripts\publish-release.ps1` — ver [`RELEASING-WINDOWS.md`](RELEASING-WINDOWS.md).
+   Instala en `%LocalAppData%\U` sin pedir admin, y es la **única** vez que el usuario instala algo: a
+   partir de ahí la carita se actualiza sola.
 2. El usuario lo ejecuta (si no firmaste: "Más información → Ejecutar de todas formas").
 3. Primera apertura: aparece la **carita flotante**.
    - **Permisos**: para controlar el PC, la carita usa envío de teclado/ratón y lectura de UI (UIA);
@@ -170,10 +173,10 @@ pantalla la primera vez.
 | Cambia… | Qué haces | Qué ve el usuario |
 |---|---|---|
 | **El cerebro** (prompts, MCP, provider, modelo) | cambias env vars o pusheas `backend/` → Vercel redespliega | Efecto inmediato en la siguiente orden. **Nada que reinstalar.** |
-| **La carita** (`windows-client/`) | recompilas (Fase 3) y redistribuyes `U.exe` | El usuario reemplaza el `.exe`. No hay auto-update todavía. |
+| **La carita** (`windows-client/`) | `publish-release.ps1` + subir 3 archivos al bucket (ver [`RELEASING-WINDOWS.md`](RELEASING-WINDOWS.md)) | Se descarga sola; una pastilla ofrece reiniciar, o se aplica al cerrar. **Nada que reinstalar.** |
 
-El grueso de la evolución (el cerebro) llega **sin tocar al usuario**. Cambios en la carita requieren
-entregar un `U.exe` nuevo.
+Nada obliga al usuario a reinstalar: el cerebro llega al instante y la carita se auto-actualiza
+(Velopack). Lo único que se entrega a mano es el `U-Setup.exe` de la **primera** instalación.
 
 ---
 

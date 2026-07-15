@@ -12,10 +12,10 @@ Proyectos autónomos, listos para vivir en repos separados:
 | `windows-graph/` | Grabar/ejecutar workflows contra Graph (SAP GUI / UIA), en pausa | Compila dentro de `U.exe` | ❌ nada |
 | `macos-client/`  | El **frontend tonto** (Swift)   | El Mac del usuario (`.app`) | ❌ nada                |
 
-**`U.exe` es la app instalable, sin caparazón alrededor.** Se publica self-contained
-(`dotnet publish ... -p:PublishSingleFile=true`) y eso es lo que se entrega al usuario: doble clic →
-aparece la carita flotante. No hay webapp embebida — se retiró el caparazón Electron
-(`windows-shell/`) que la cargaba.
+**`U.exe` es la app instalable, sin caparazón alrededor.** Se entrega como `U-Setup.exe` (Velopack):
+el usuario instala **una vez** en `%LocalAppData%\U`, sin admin, y a partir de ahí **la carita se
+actualiza sola** — ver [`RELEASING-WINDOWS.md`](RELEASING-WINDOWS.md). No hay webapp embebida: se
+retiró el caparazón Electron (`windows-shell/`) que la cargaba.
 
 > **La prueba de la separación:** el cliente macOS se añadió **sin tocar una sola línea del backend**.
 > Windows lee el árbol de UI con UIA; macOS con la Accessibility API (AXUIElement); ambos hablan el
