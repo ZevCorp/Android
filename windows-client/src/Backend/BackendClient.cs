@@ -44,4 +44,16 @@ public sealed class BackendClient
             throw new InvalidOperationException(parsed.Error ?? $"backend HTTP {(int)res.StatusCode}");
         return parsed;
     }
+
+    /// <summary>POST genérico hacia cualquier endpoint del backend que devuelva JSON tipado.</summary>
+    public async Task<T?> PostAsync<T>(string path, object req, CancellationToken ct) where T : class
+    {
+        var body = JsonSerializer.Serialize(req, Json);
+        using var content = new StringContent(body, Encoding.UTF8, "application/json");
+        using var res = await _http.PostAsync($"{_baseUrl}{path}", content, ct);
+        var text = await res.Content.ReadAsStringAsync(ct);
+        if (!res.IsSuccessStatusCode)
+            throw new InvalidOperationException($"backend HTTP {(int)res.StatusCode}: {text}");
+        return JsonSerializer.Deserialize<T>(text, Json);
+    }
 }

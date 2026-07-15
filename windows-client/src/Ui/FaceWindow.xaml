@@ -2,10 +2,10 @@
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         Title="Ü"
-        Width="320" Height="220"
+        Width="320"
         WindowStyle="None" AllowsTransparency="True" Background="Transparent"
         Topmost="True" ShowInTaskbar="False"
-        ResizeMode="NoResize" SizeToContent="Manual">
+        ResizeMode="NoResize" SizeToContent="Height">
 
     <!-- Carita flotante: overlay permanente, arrastrable, siempre encima. Es TODO el frontend visible.
          No decide nada; solo muestra el estado y recoge lo que el usuario pide. -->
@@ -46,6 +46,18 @@
                              KeyDown="OnInputKey"/>
                 </DockPanel>
 
+                <!-- Enseñanza activa: graba pantalla+voz para que Ü aprenda a usar una app. -->
+                <DockPanel Margin="0,8,0,0" LastChildFill="True">
+                    <Button x:Name="LogsBtn" Content="📜" DockPanel.Dock="Right" Width="34" Height="30"
+                            Margin="6,0,0,0" Click="OnOpenLogs" Background="#22FFFFFF" Foreground="White"
+                            BorderThickness="0" FontSize="11" ToolTip="Registro (para diagnosticar errores)"/>
+                    <Button x:Name="VideosBtn" Content="🎞 Videos" DockPanel.Dock="Right" Width="76" Height="30"
+                            Margin="6,0,0,0" Click="OnOpenVideos" Background="#22FFFFFF" Foreground="White"
+                            BorderThickness="0" FontSize="11"/>
+                    <Button x:Name="TeachBtn" Content="🎓 Enseñar" Height="30" Click="OnToggleTeach"
+                            Background="#22FFFFFF" Foreground="White" BorderThickness="0" FontSize="11"/>
+                </DockPanel>
+
                 <!-- Ajustes mínimos: dónde vive el cerebro -->
                 <Expander Header="Backend" Foreground="#88FFFFFF" FontSize="11" Margin="0,10,0,0">
                     <StackPanel Margin="0,6,0,0">
@@ -53,6 +65,10 @@
                                  BorderThickness="0" Padding="6,0" VerticalContentAlignment="Center"/>
                         <TextBox x:Name="ClientToken" Height="26" Margin="0,6,0,0" Background="#22FFFFFF"
                                  Foreground="White" BorderThickness="0" Padding="6,0" VerticalContentAlignment="Center"/>
+                        <!-- Solo la usa la enseñanza por video (habla directo con Gemini, ver Config.cs). -->
+                        <TextBox x:Name="GeminiApiKey" Height="26" Margin="0,6,0,0" Background="#22FFFFFF"
+                                 Foreground="White" BorderThickness="0" Padding="6,0" VerticalContentAlignment="Center"
+                                 ToolTip="Gemini API key (solo para 🎓 Enseñar)"/>
                         <Button Content="Guardar" Height="26" Margin="0,6,0,0" Click="OnSaveConfig"
                                 Background="#33FFFFFF" Foreground="White" BorderThickness="0"/>
                     </StackPanel>

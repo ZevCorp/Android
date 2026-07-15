@@ -8,9 +8,7 @@ Piezas y dónde vive cada una:
 | Pieza | Carpeta | Dónde corre en producción |
 |---|---|---|
 | Cerebro (backend) | `backend/` | **Vercel** (tú lo despliegas) |
-| Webapp de clientes | *(repo de terceros)* | **Vercel** (ya desplegada: `miracle-web-umber.vercel.app`) |
-| Asistente / carita (WPF) | `windows-client/` | Se compila a `U.exe` y se empaqueta dentro del instalador |
-| Caparazón Windows | `windows-shell/` | Se compila a `Miracle Setup.exe` (lo instala el usuario) |
+| Asistente / carita (WPF) | `windows-client/` | Se compila a `U.exe` — **es lo que se entrega al usuario**, sin instalador ni webapp embebida |
 | Cliente macOS (opcional) | `macos-client/` | `U.app` en el Mac del usuario |
 
 ---
@@ -26,6 +24,12 @@ Piezas y dónde vive cada una:
 4. **Runtime de .NET**: decide si el `U.exe` es *framework-dependent* (pesa poco, el usuario necesita
    el .NET Desktop Runtime 8) o *self-contained* (pesa ~150 MB, no necesita nada). Para poner en manos
    de un usuario **recomiendo self-contained** (Fase 3).
+5. **Visual C++ Redistributable**: la enseñanza por video (🎓) usa `ScreenRecorderLib`, un ensamblado
+   nativo C++ que depende del runtime de Visual C++. Si la máquina del usuario no lo tiene, 🎓 falla
+   con `"No se puede encontrar el módulo especificado"` al cargar `ScreenRecorderLib.dll` — el resto
+   del asistente funciona normal, solo 🎓 se rompe. Instalar antes de entregar:
+   https://aka.ms/vs/17/release/vc_redist.x64.exe (Microsoft, oficial). No hay forma de embeberlo en
+   el `.exe`; es un instalable aparte que corre una sola vez por máquina.
 
 ---
 
@@ -72,15 +76,6 @@ curl https://<tu-backend>.vercel.app/api/health
 
 ---
 
-## Fase 2 — Verificar la webapp de clientes
-
-El caparazón carga la webapp por URL; su producción es responsabilidad de su repo.
-1. Confirma su URL de producción (por defecto el caparazón usa `https://miracle-web-umber.vercel.app`).
-2. Ábrela en un navegador: debe cargar, permitir login (Supabase) y funcionar.
-3. Si la URL real es otra, la fijarás en Fase 4.2.
-
----
-
 ## Fase 3 — Compilar el asistente (la carita, `U.exe`)
 
 En una máquina **Windows 10/11 con .NET 8 SDK**.
@@ -90,50 +85,51 @@ Edita `windows-client/src/Config.cs`:
 ```csharp
 public string BackendUrl { get; set; } = "https://<tu-backend>.vercel.app";  // el link de la Fase 1.3
 public string? ClientToken { get; set; } = "<el CLIENT_TOKEN de la Fase 1.2>"; // si activaste auth
+public string? GeminiApiKey { get; set; } = "<tu key de Gemini>"; // solo para 🎓 Enseñar, ver abajo
 ```
 Así al instalar, la carita ya apunta a producción sin que el usuario toque nada.
 
+**Sobre `GeminiApiKey` (léelo antes de fijarla en el código):** la enseñanza por video (🎓, grabar
+pantalla → Gemini → aprender) habla DIRECTO con Gemini desde el cliente, sin pasar por el backend
+— el mp4 no cabe en el límite de payload de Vercel ni en su límite de duración. Eso significa que
+esta key **viaja embebida en el `.exe` que se instala en la máquina de cada usuario** y es
+extraíble descompilando el binario, a diferencia de `GEMINI_API_KEY` del backend (Fase 1.2), que
+nunca sale del servidor. Antes de fijarla aquí:
+- Usa una key **distinta** de la del backend, restringida solo a la Gemini API (Google Cloud
+  Console → Credentials → API restrictions).
+- Pon un límite de gasto/cuota bajo en esa key específica — un usuario que la extraiga solo puede
+  gastar hasta ese tope.
+- Si preferís no distribuir ninguna key en el `.exe`, dejá `GeminiApiKey` vacía: el botón 🎓
+  seguirá deshabilitado (pide configurarla) sin bloquear el resto del asistente.
+
 ### 3.2 Publicar
-Framework-dependent (liviano; requiere .NET Desktop Runtime 8 en el PC del usuario):
+
+**NO uses `-p:PublishSingleFile=true`.** `ScreenRecorderLib` (enseñanza por video, 🎓) es un ensamblado
+mixto C++/CLI, y `PublishSingleFile` no soporta ensamblados mixtos — el `.exe` arranca pero
+`ScreenRecorderLib.dll` no carga (`System.BadImageFormatException`) en cuanto tocás 🎓. Publicá
+carpeta completa (self-contained, sin dependencias para el usuario, pero varios archivos en vez de uno):
+```powershell
+dotnet publish windows-client\WindowsClient.csproj -c Release -r win-x64 --self-contained true -o out\assistant
+```
+Framework-dependent (más liviano; requiere .NET Desktop Runtime 8 en el PC del usuario):
 ```powershell
 dotnet publish windows-client\WindowsClient.csproj -c Release -r win-x64 --self-contained false -o out\assistant
 ```
-**Recomendado — self-contained (sin dependencias para el usuario):**
+Queda `out\assistant\U.exe` **junto a sus DLLs** (incluida `ScreenRecorderLib.dll`) — no se puede mover
+`U.exe` solo, tiene que viajar toda la carpeta. Para distribuir, comprimí la carpeta:
 ```powershell
-dotnet publish windows-client\WindowsClient.csproj -c Release -r win-x64 --self-contained true -p:PublishSingleFile=true -o out\assistant
+Compress-Archive -Path out\assistant -DestinationPath out\U.zip -Force
 ```
-Debe quedar `out\assistant\U.exe`. Pruébalo suelto: doble clic → aparece la carita → escribe algo.
+El usuario descomprime y ejecuta `U.exe` desde adentro de la carpeta. Pruébalo suelto: doble clic →
+aparece la carita → escribe algo → probá también 🎓 Enseñar antes de dar por bueno el build.
 
----
-
-## Fase 4 — Compilar el instalador Windows (caparazón Electron)
-
-En Windows con **Node 18+** (y el .NET SDK de la Fase 3).
-
-### 4.1 Empaquetar el asistente dentro del caparazón
-```powershell
-cd windows-shell
-powershell -ExecutionPolicy Bypass -File scripts\prepare-assistant.ps1
-```
-(Si en la Fase 3 usaste self-contained, edita el script para usar los mismos flags, o copia a mano tu
-`out\assistant\*` a `windows-shell\resources\assistant\`.)
-
-### 4.2 Fijar la URL de la webapp (si no es la de por defecto)
-Edita `windows-shell/config.js` → `webappUrl: 'https://<tu-webapp>.vercel.app'`.
-
-### 4.3 Icono (opcional pero recomendado)
-Coloca `windows-shell/assets/icon.ico` (256×256).
-
-### 4.4 Generar el instalador
-```powershell
-npm install
-npm run dist        # → windows-shell\dist\Miracle Setup 0.1.0.exe
-```
-Este `.exe` es lo que entregas al usuario. Contiene el caparazón + `U.exe`.
-
-**Firma de código** (Fase 0.3): con certificado, configura en `package.json → build.win`
-(`certificateFile`/`certificatePassword` o firma con `signtool` post-build). Sin firma, funciona pero
-SmartScreen avisa.
+**Firma de código** (Fase 0.3): sin certificado, Windows SmartScreen avisará al ejecutar `U.exe` la
+primera vez ("Más información → Ejecutar de todas formas"). En Windows 11 con **Control Inteligente
+de Aplicaciones** activo, el bloqueo es más agresivo — puede impedir la ejecución directamente en vez
+de solo avisar (Seguridad de Windows → Protección contra virus y amenazas → Historial de protección
+para permitirlo caso por caso). Con certificado (OV/EV), fírmalo con
+`signtool sign /f cert.pfx /p <pass> /t http://timestamp.digicert.com out\assistant\U.exe` — esto
+resuelve ambos avisos para una distribución real.
 
 ---
 
@@ -147,11 +143,9 @@ pantalla la primera vez.
 
 ## Fase 6 — Poner en manos del usuario
 
-1. Entrega `Miracle Setup 0.1.0.exe` (web, correo, tu canal de distribución).
-2. El usuario ejecuta el instalador (si no firmaste: "Más información → Ejecutar de todas formas").
-3. Primera apertura:
-   - Ve la **webapp** completa y hace login (Supabase).
-   - Pulsa el **botón "Ü"** (abajo a la derecha) → aparece la **carita flotante**.
+1. Entrega `U.exe` (web, correo, tu canal de distribución) — es un único archivo, self-contained.
+2. El usuario lo ejecuta (si no firmaste: "Más información → Ejecutar de todas formas").
+3. Primera apertura: aparece la **carita flotante**.
    - **Permisos**: para controlar el PC, la carita usa envío de teclado/ratón y lectura de UI (UIA);
      en Windows no requiere permiso extra para apps normales. Para controlar apps que corren **como
      administrador**, la carita debe ejecutarse elevada (ver nota al final).
@@ -165,8 +159,8 @@ pantalla la primera vez.
 2. Backend suelto: un turno con curl devuelve `actions` (ver `backend/README.md`).
 3. `U.exe` suelto → carita aparece, apunta al backend de producción, ejecuta una orden simple
    (p.ej. *"abre el navegador y busca gatos"*).
-4. Instalador en una **máquina limpia** (sin .NET si fuiste self-contained): instala, abre, webapp
-   carga, login funciona, botón Ü lanza la carita, la carita controla el PC.
+4. `U.exe` en una **máquina limpia** (sin .NET si fuiste self-contained): abre, apunta al backend
+   correcto, controla el PC.
 5. Prueba el flujo de actualización (Fase 8).
 
 ---
@@ -175,12 +169,11 @@ pantalla la primera vez.
 
 | Cambia… | Qué haces | Qué ve el usuario |
 |---|---|---|
-| **La webapp** | push a su repo → Vercel redespliega solo | Al reabrir/`Ctrl+R`, ya ve lo nuevo. **Nada que reinstalar.** |
 | **El cerebro** (prompts, MCP, provider, modelo) | cambias env vars o pusheas `backend/` → Vercel redespliega | Efecto inmediato en la siguiente orden. **Nada que reinstalar.** |
-| **La carita o el caparazón** | recompilas (Fases 3–4) y republicas el instalador | Reinstala, o auto-update si configuraste `electron-updater` (ver `windows-shell/README.md`). |
+| **La carita** (`windows-client/`) | recompilas (Fase 3) y redistribuyes `U.exe` | El usuario reemplaza el `.exe`. No hay auto-update todavía. |
 
-El grueso de la evolución (webapp + cerebro) llega **sin tocar al usuario**. Solo cambios de la app
-nativa requieren un nuevo instalador.
+El grueso de la evolución (el cerebro) llega **sin tocar al usuario**. Cambios en la carita requieren
+entregar un `U.exe` nuevo.
 
 ---
 

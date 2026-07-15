@@ -6,3 +6,9 @@ local.properties
 .kotlin/
 apikey.properties
 *.apk
+
+# .NET (windows-client, windows-graph)
+bin/
+obj/
+# Salida de `dotnet publish` que documenta PRODUCTION.md: U.exe self-contained pesa ~150 MB.
+out/

@@ -17,6 +17,9 @@
     <RootNamespace>U.WindowsClient</RootNamespace>
     <AssemblyName>U</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- ScreenRecorderLib requiere plataforma específica, no AnyCPU. Platform es propiedad MSBuild
+         (distinta de RuntimeIdentifier de .NET 5+). -->
+    <Platform>x64</Platform>
   </PropertyGroup>
 
   <ItemGroup>
@@ -27,11 +30,24 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Workflows de Graph (grabar y ejecutar sobre SAP GUI / UIA). Módulo AISLADO: vive en su propio
+         proyecto, habla solo con el backend Graph y no conoce el cerebro de este cliente. Se referencia
+         aquí para que viaje dentro de U.exe, no porque el asistente dependa de él. -->
+    <ProjectReference Include="..\windows-graph\GraphWorkflows.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
     <!-- TTS/STT integrados de Windows (paquete NuGet en .NET moderno). -->
     <PackageReference Include="System.Speech" Version="8.0.0" />
     <!-- Captura de pantalla (GDI) para computer-use. -->
     <PackageReference Include="System.Drawing.Common" Version="8.0.7" />
-    <PackageReference Include="System.Text.Json" Version="8.0.4" />
+    <!-- 8.0.5 y no 8.0.4: la 8.0.4 arrastra GHSA-8g4q-xg66-9fp4 (severidad alta) y esto se instala en
+         la máquina de un cliente. -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- Grabación de pantalla + micrófono → mp4 H.264+AAC. ScreenRecorderLib: MIT license,
+         mantenida activamente (v6.6.0, nov 2025). Produce mp4 con fast-start (streamable),
+         soporta mezcla de audio de entrada (mic) + salida (sistema). -->
+    <PackageReference Include="ScreenRecorderLib" Version="6.6.0" />
   </ItemGroup>
 
 </Project>

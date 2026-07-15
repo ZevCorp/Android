@@ -1,0 +1,38 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <!--
+    Módulo AISLADO: grabación y ejecución de workflows contra el backend Graph (/api/v1).
+
+    Vive aparte del asistente Ü a propósito. No conoce el cerebro de U.exe, ni su backend de Vercel,
+    ni su contrato /api/agent/turn: habla SOLO con Graph. windows-client lo referencia y lo compila
+    dentro de U.exe, pero puede desarrollarse, probarse y romperse sin tocar el resto de la app.
+
+    Dos superficies de lectura/ejecución, mismo contrato hacia Graph:
+      - UIA (cualquier app de Windows)  → System.Windows.Automation
+      - SAP GUI Scripting (SAP)         → COM por enlace tardío (ver SapGuiSurface)
+
+    El enlace tardío al COM de SAP es deliberado: este proyecto DEBE compilar en máquinas sin SAP GUI
+    instalado (CI, el portátil de un dev). La ausencia de SAP se detecta en runtime y se reporta.
+  -->
+
+  <PropertyGroup>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <UseWPF>true</UseWPF>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <RootNamespace>U.Graph</RootNamespace>
+    <AssemblyName>U.Graph</AssemblyName>
+    <!-- Enlace tardío al COM de SAP GUI: sin esto, `dynamic` sobre COM no compila. -->
+    <AllowUnsafeBlocks>false</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- UIA (System.Windows.Automation) llega con Microsoft.WindowsDesktop.App vía UseWPF; declararlo
+         con <Reference> además provoca MSB3245/MSB3243 al chocar con el del framework. -->
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+    <!-- Requerido por el compilador para resolver `dynamic` sobre objetos COM de SAP GUI. -->
+    <PackageReference Include="Microsoft.CSharp" Version="4.7.0" />
+  </ItemGroup>
+
+</Project>

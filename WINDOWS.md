@@ -9,14 +9,13 @@ Proyectos autónomos, listos para vivir en repos separados:
 |------------------|---------------------------------|-----------------------------|------------------------|
 | `backend/`       | El **cerebro** (TypeScript)     | **Vercel** (serverless)     | ✅ todo                |
 | `windows-client/`| El **frontend tonto** (C#/WPF)  | La PC del usuario (`.exe`)  | ❌ nada                |
+| `windows-graph/` | Grabar/ejecutar workflows contra Graph (SAP GUI / UIA), en pausa | Compila dentro de `U.exe` | ❌ nada |
 | `macos-client/`  | El **frontend tonto** (Swift)   | El Mac del usuario (`.app`) | ❌ nada                |
-| `windows-shell/` | **Caparazón** (Electron) que embebe la webapp Next.js y lanza la carita | Instalador Windows (NSIS) | ❌ nada |
 
-**El caparazón Windows** (`windows-shell/`) embebe la webapp de clientes (Next.js, desplegada en
-Vercel) cargando su URL — reutilización del 100%, sin reescribir nada — y le inyecta un botón "Ü" que
-solo existe en el desktop; al pulsarlo lanza el asistente WPF (`windows-client/U.exe`, la carita
-flotante). Actualizar el repo de la webapp → Vercel redespliega → la app instalada muestra los cambios
-al reabrir. Ver `windows-shell/README.md`.
+**`U.exe` es la app instalable, sin caparazón alrededor.** Se publica self-contained
+(`dotnet publish ... -p:PublishSingleFile=true`) y eso es lo que se entrega al usuario: doble clic →
+aparece la carita flotante. No hay webapp embebida — se retiró el caparazón Electron
+(`windows-shell/`) que la cargaba.
 
 > **La prueba de la separación:** el cliente macOS se añadió **sin tocar una sola línea del backend**.
 > Windows lee el árbol de UI con UIA; macOS con la Accessibility API (AXUIElement); ambos hablan el

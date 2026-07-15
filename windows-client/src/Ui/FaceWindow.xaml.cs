@@ -2,8 +2,10 @@ using System.Windows;
 using System.Windows.Input;
 using U.WindowsClient.Agent;
 using U.WindowsClient.Backend;
+using U.WindowsClient.Diagnostics;
 using U.WindowsClient.Mcp;
 using U.WindowsClient.SystemApi;
+using U.WindowsClient.Teach;
 using U.WindowsClient.Uia;
 using U.WindowsClient.Voice;
 
@@ -20,8 +22,14 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
     private Config _config = Config.Load();
     private readonly UiaReader _uia = new();
     private readonly VoiceIO _voice = new();
+    private readonly VideoLibrary _videoLibrary = new();
     private AgentLoop _loop = null!;
+    private BackendClient? _backend;
     private CancellationTokenSource? _cts;
+    private VideoLibraryWindow? _videoWindow;
+    private LogWindow? _logWindow;
+    private TeachSession? _teachSession;
+    private bool _teaching;
 
     // Para resolver preguntas del asistente desde la caja de texto.
     private TaskCompletionSource<string>? _pendingAnswer;
@@ -34,19 +42,30 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
 
     private void OnLoaded(object? sender, RoutedEventArgs e)
     {
-        // Esquina inferior derecha por defecto.
+        // Esquina inferior derecha por defecto. El panel crece hacia arriba (ver OnSizeChanged) cuando
+        // se abre un Expander (p.ej. "Backend"): sin esto, ResizeMode="NoResize" con altura fija
+        // recortaba el contenido expandido y quedaba invisible.
         var wa = SystemParameters.WorkArea;
         Left = wa.Right - Width - 24;
-        Top = wa.Bottom - Height - 24;
+        Top = wa.Bottom - ActualHeight - 24;
+        SizeChanged += OnSizeChanged;
 
         BackendUrl.Text = _config.BackendUrl;
         ClientToken.Text = _config.ClientToken ?? "";
+        GeminiApiKey.Text = _config.GeminiApiKey ?? "";
 
         var mcp = new LocalMcp(_uia);
-        var backend = new BackendClient(_config);
-        _loop = new AgentLoop(backend, _uia, mcp, this, this, InstalledApps.List);
+        _backend = new BackendClient(_config);
+        _loop = new AgentLoop(_backend, _uia, mcp, this, this, InstalledApps.List);
 
         Header.MouseLeftButtonDown += (_, ev) => { if (ev.ButtonState == MouseButtonState.Pressed) DragMove(); };
+    }
+
+    /// <summary>Mantiene fija la esquina inferior derecha: si la ventana crece (Expander abierto), crece hacia arriba.</summary>
+    private void OnSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        var wa = SystemParameters.WorkArea;
+        Top = wa.Bottom - ActualHeight - 24;
     }
 
     // --- Entrada del usuario ---
@@ -84,14 +103,105 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
         StopBtn.Visibility = Visibility.Collapsed;
     }
 
+    // --- Enseñanza activa (grabar pantalla+voz) ---
+
+    private async void OnToggleTeach(object sender, RoutedEventArgs e)
+    {
+        if (_teaching) await StopTeachingAsync();
+        else await StartTeachingAsync();
+    }
+
+    /// <summary>
+    /// ANTES esto llamaba a `_ = _teachSession.StartAsync()` sin esperar ni capturar la excepción: si
+    /// GeminiApiKey estaba vacía, StartAsync lanzaba de inmediato pero el error se perdía en el aire
+    /// (fire-and-forget) — no quedaba grabación, y el usuario recién se enteraba minutos después con
+    /// un "No hay grabación para procesar" que no explicaba nada. Ahora se espera de verdad y, si
+    /// falla, el botón vuelve a su estado normal y el error queda visible (estado + LogBus).
+    /// </summary>
+    private async Task StartTeachingAsync()
+    {
+        _teachSession = new TeachSession(_backend!, _videoLibrary, _config.UserId,
+            _config.GeminiApiKey ?? "", _config.GeminiModel);
+        _teachSession.StatusChanged += (_, msg) => SetStatus(msg);
+
+        try
+        {
+            await _teachSession.StartAsync();
+        }
+        catch (Exception ex)
+        {
+            LogBus.Log("teach", $"no se pudo iniciar la enseñanza: {ex}");
+            SetStatus($"No se pudo iniciar la grabación: {ex.Message}");
+            await _teachSession.DisposeAsync();
+            _teachSession = null;
+            return;
+        }
+
+        _teaching = true;
+        TeachBtn.Content = "⏸ Enseñar";
+        TeachBtn.Background = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(255, 59, 48)); // rojo, como StopBtn
+    }
+
+    private async Task StopTeachingAsync()
+    {
+        _teaching = false;
+        TeachBtn.Content = "🎓 Enseñar";
+        TeachBtn.Background = new System.Windows.Media.SolidColorBrush(
+            System.Windows.Media.Color.FromRgb(34, 34, 34)); // gris normal
+        SetStatus("Procesando video grabado…");
+
+        if (_teachSession != null)
+        {
+            try
+            {
+                await _teachSession.StopAsync();
+                string summary = await _teachSession.ProcessAsync();
+                // ProcessAsync ya llama a SetStatus con el resumen.
+                Speak($"He aprendido: {summary}");
+            }
+            catch (Exception ex)
+            {
+                SetStatus($"Error en enseñanza: {ex.Message}");
+            }
+            finally
+            {
+                await _teachSession.DisposeAsync();
+                _teachSession = null;
+            }
+        }
+    }
+
+    private void OnOpenVideos(object sender, RoutedEventArgs e)
+    {
+        if (_videoWindow == null || !_videoWindow.IsLoaded)
+            _videoWindow = new VideoLibraryWindow(_videoLibrary);
+        else
+            _videoWindow.Reload();
+
+        _videoWindow.Show();
+        _videoWindow.Activate();
+    }
+
+    private void OnOpenLogs(object sender, RoutedEventArgs e)
+    {
+        if (_logWindow == null || !_logWindow.IsLoaded)
+            _logWindow = new LogWindow();
+
+        _logWindow.Show();
+        _logWindow.Activate();
+    }
+
     private void OnSaveConfig(object sender, RoutedEventArgs e)
     {
         _config.BackendUrl = BackendUrl.Text.Trim();
         _config.ClientToken = string.IsNullOrWhiteSpace(ClientToken.Text) ? null : ClientToken.Text.Trim();
+        _config.GeminiApiKey = string.IsNullOrWhiteSpace(GeminiApiKey.Text) ? null : GeminiApiKey.Text.Trim();
         _config.Save();
         // Recablea el cliente con la nueva URL/token.
         var mcp = new LocalMcp(_uia);
-        _loop = new AgentLoop(new BackendClient(_config), _uia, mcp, this, this, InstalledApps.List);
+        _backend = new BackendClient(_config);
+        _loop = new AgentLoop(_backend, _uia, mcp, this, this, InstalledApps.List);
         SetStatus("Backend guardado");
     }
 
