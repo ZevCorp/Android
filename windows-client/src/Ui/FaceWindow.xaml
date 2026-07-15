@@ -65,10 +65,6 @@
                                  BorderThickness="0" Padding="6,0" VerticalContentAlignment="Center"/>
                         <TextBox x:Name="ClientToken" Height="26" Margin="0,6,0,0" Background="#22FFFFFF"
                                  Foreground="White" BorderThickness="0" Padding="6,0" VerticalContentAlignment="Center"/>
-                        <!-- Solo la usa la enseñanza por video (habla directo con Gemini, ver Config.cs). -->
-                        <TextBox x:Name="GeminiApiKey" Height="26" Margin="0,6,0,0" Background="#22FFFFFF"
-                                 Foreground="White" BorderThickness="0" Padding="6,0" VerticalContentAlignment="Center"
-                                 ToolTip="Gemini API key (solo para 🎓 Enseñar)"/>
                         <Button Content="Guardar" Height="26" Margin="0,6,0,0" Click="OnSaveConfig"
                                 Background="#33FFFFFF" Foreground="White" BorderThickness="0"/>
                     </StackPanel>

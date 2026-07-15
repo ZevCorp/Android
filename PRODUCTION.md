@@ -50,8 +50,21 @@ El código está en `backend/` dentro de este repo.
 | `GEMINI_MODEL` | `gemini-3.5-flash` | recomendado |
 | `SESSION_SECRET` | una cadena aleatoria larga (p.ej. `openssl rand -hex 32`) | **sí** (sin ella la firma de sesión usa un default inseguro) |
 | `CLIENT_TOKEN` | un token secreto (p.ej. `openssl rand -hex 24`) | recomendado (ver 1.4) |
+| `SUPABASE_URL` | `https://<tu-proyecto>.supabase.co` | solo para archivar los videos de 🎓 |
+| `SUPABASE_SERVICE_ROLE_KEY` | la `service_role` key (Supabase → Settings → API) | solo para archivar los videos de 🎓 |
+| `SUPABASE_VIDEO_BUCKET` | `teach-videos` (default si se omite) | no |
 
 > Si algún día cambias a OpenAI: `PROVIDER=openai`, `OPENAI_API_KEY=…`, opcional `OPENAI_MODEL`, `EFFORT=low`.
+
+**`GEMINI_API_KEY` la usa también la enseñanza por video (🎓).** El cliente NO tiene ninguna key: el
+backend firma las subidas y llama al modelo. Por eso un usuario nuevo no configura nada — instala y
+🎓 funciona.
+
+**Las dos variables de Supabase** son solo para archivar los mp4 que graban los usuarios en el bucket
+privado `teach-videos`, y así poder verlos desde el dashboard. Si faltan, 🎓 sigue funcionando
+igual (el video se procesa y se guarda en el disco del usuario) — solo perdemos el archivo central;
+el backend lo reporta en `archiveError` y queda en el registro del cliente. La `service_role` key
+salta RLS y da acceso total al proyecto: va **solo** en Vercel, nunca en el cliente ni en el repo.
 
 ### 1.3 Desplegar
 - CLI: `vercel deploy --prod`. O push a la rama conectada.
@@ -85,22 +98,10 @@ Edita `windows-client/src/Config.cs`:
 ```csharp
 public string BackendUrl { get; set; } = "https://<tu-backend>.vercel.app";  // el link de la Fase 1.3
 public string? ClientToken { get; set; } = "<el CLIENT_TOKEN de la Fase 1.2>"; // si activaste auth
-public string? GeminiApiKey { get; set; } = "<tu key de Gemini>"; // solo para 🎓 Enseñar, ver abajo
 ```
-Así al instalar, la carita ya apunta a producción sin que el usuario toque nada.
-
-**Sobre `GeminiApiKey` (léelo antes de fijarla en el código):** la enseñanza por video (🎓, grabar
-pantalla → Gemini → aprender) habla DIRECTO con Gemini desde el cliente, sin pasar por el backend
-— el mp4 no cabe en el límite de payload de Vercel ni en su límite de duración. Eso significa que
-esta key **viaja embebida en el `.exe` que se instala en la máquina de cada usuario** y es
-extraíble descompilando el binario, a diferencia de `GEMINI_API_KEY` del backend (Fase 1.2), que
-nunca sale del servidor. Antes de fijarla aquí:
-- Usa una key **distinta** de la del backend, restringida solo a la Gemini API (Google Cloud
-  Console → Credentials → API restrictions).
-- Pon un límite de gasto/cuota bajo en esa key específica — un usuario que la extraiga solo puede
-  gastar hasta ese tope.
-- Si preferís no distribuir ninguna key en el `.exe`, dejá `GeminiApiKey` vacía: el botón 🎓
-  seguirá deshabilitado (pide configurarla) sin bloquear el resto del asistente.
+Así al instalar, la carita ya apunta a producción sin que el usuario toque nada. **No hay ninguna key
+de modelo que fijar acá**: la enseñanza por video (🎓) pasa por el backend, que es quien tiene la key
+(Fase 1.2). Un usuario nuevo instala y 🎓 funciona sin configurar nada.
 
 ### 3.2 Publicar
 

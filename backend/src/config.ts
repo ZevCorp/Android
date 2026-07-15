@@ -22,7 +22,24 @@ export const config = {
   sessionSecret: process.env.SESSION_SECRET || '',
   /** Token opcional para autenticar clientes (Bearer). Si está vacío, la API es abierta (dev). */
   clientToken: process.env.CLIENT_TOKEN || '',
+
+  // --- Supabase Storage (archivo de los videos de enseñanza, bucket privado `teach-videos`) ---
+  /** URL del proyecto, p.ej. https://xxxx.supabase.co */
+  supabaseUrl: (process.env.SUPABASE_URL || '').replace(/\/+$/, ''),
+  /**
+   * service_role key. Solo se usa para FIRMAR URLs de subida de corta duración que se le entregan al
+   * cliente; la key jamás sale del servidor. Si falta, la enseñanza por video sigue funcionando pero
+   * el mp4 no se archiva (ver videoStorage.ts).
+   */
+  supabaseServiceKey: process.env.SUPABASE_SERVICE_ROLE_KEY || '',
+  /** Bucket donde se archivan los mp4. Privado: son grabaciones de pantalla de sistemas clínicos. */
+  supabaseVideoBucket: process.env.SUPABASE_VIDEO_BUCKET || 'teach-videos',
 };
+
+/** ¿Está configurado el archivo de videos en Supabase Storage? */
+export function videoArchiveEnabled(): boolean {
+  return Boolean(config.supabaseUrl && config.supabaseServiceKey);
+}
 
 /** Modelo activo según el provider. */
 export function activeModel(): string {
