@@ -12,15 +12,39 @@ namespace U.WindowsClient.Voice;
 public sealed class VoiceIO : IDisposable
 {
     private readonly SpeechSynthesizer _tts = new();
+    private bool _muted;
 
     public VoiceIO()
     {
         try { _tts.SelectVoiceByHints(VoiceGender.Female, VoiceAge.Adult); } catch { }
     }
 
+    /// <summary>
+    /// Mudo: <see cref="Speak"/> no emite nada. Ponerlo en true CORTA EN SECO lo que esté diciendo —
+    /// mutear a un asistente que ya arrancó una frase larga y esperar a que la termine no es mutear.
+    ///
+    /// Solo silencia el audio: el texto se sigue viendo en la carita, porque el usuario quiere dejar de
+    /// oírlo, no dejar de enterarse.
+    /// </summary>
+    public bool Muted
+    {
+        get => _muted;
+        set
+        {
+            _muted = value;
+            if (value) Silence();
+        }
+    }
+
+    /// <summary>Calla lo que esté diciendo ahora mismo, sin cambiar <see cref="Muted"/>.</summary>
+    public void Silence()
+    {
+        try { _tts.SpeakAsyncCancelAll(); } catch { }
+    }
+
     public void Speak(string text)
     {
-        if (string.IsNullOrWhiteSpace(text)) return;
+        if (_muted || string.IsNullOrWhiteSpace(text)) return;
         try { _tts.SpeakAsyncCancelAll(); _tts.SpeakAsync(text); } catch { }
     }
 

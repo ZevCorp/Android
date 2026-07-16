@@ -17,10 +17,23 @@
     <RootNamespace>U.WindowsClient</RootNamespace>
     <AssemblyName>U</AssemblyName>
     <ApplicationManifest>app.manifest</ApplicationManifest>
+    <!-- Velopack (auto-update) exige que VelopackApp.Build().Run() sea lo PRIMERO del proceso, antes de
+         levantar WPF: cuando el updater relanza el .exe con sus hooks, el proceso debe atenderlos y
+         salir sin abrir ventana. WPF genera su propio Main a partir de App.xaml, así que se apunta el
+         StartupObject al Main manual de App.xaml.cs y App.xaml pasa de ApplicationDefinition a Page
+         (abajo) para que no se generen dos entry points. -->
+    <StartupObject>U.WindowsClient.App</StartupObject>
     <!-- ScreenRecorderLib requiere plataforma específica, no AnyCPU. Platform es propiedad MSBuild
          (distinta de RuntimeIdentifier de .NET 5+). -->
     <Platform>x64</Platform>
   </PropertyGroup>
+
+  <ItemGroup>
+    <!-- Ver StartupObject arriba: App.xaml se compila como Page para que el SDK no genere un Main que
+         competiría con el nuestro. InitializeComponent() sigue existiendo y StartupUri sigue funcionando. -->
+    <ApplicationDefinition Remove="App.xaml" />
+    <Page Include="App.xaml" />
+  </ItemGroup>
 
   <ItemGroup>
     <!-- UI Automation (UIA): lectura del árbol de UI de cualquier app de Windows.
@@ -48,6 +61,10 @@
          mantenida activamente (v6.6.0, nov 2025). Produce mp4 con fast-start (streamable),
          soporta mezcla de audio de entrada (mic) + salida (sistema). -->
     <PackageReference Include="ScreenRecorderLib" Version="6.6.0" />
+    <!-- Auto-update (ver src/Update/Updater.cs y RELEASING-WINDOWS.md). Velopack empaqueta la CARPETA
+         publicada tal cual, así que convive con ScreenRecorderLib (ensamblado mixto C++/CLI) sin
+         necesitar PublishSingleFile, que es justo lo que este proyecto no puede usar. -->
+    <PackageReference Include="Velopack" Version="1.2.0" />
   </ItemGroup>
 
 </Project>

@@ -35,6 +35,7 @@ src/
   Backend/BackendClient.cs ← POST /api/agent/turn
   Agent/AgentLoop.cs       ← el bucle del cliente (gemelo de ExecutionEngine, cerebro remoto)
   Voice/VoiceIO.cs
+  Update/Updater.cs        ← auto-update (Velopack); ver ../RELEASING-WINDOWS.md
   Ui/FaceWindow.xaml(.cs)  ← la carita flotante
 ```
 

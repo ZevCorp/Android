@@ -50,8 +50,26 @@ El código está en `backend/` dentro de este repo.
 | `GEMINI_MODEL` | `gemini-3.5-flash` | recomendado |
 | `SESSION_SECRET` | una cadena aleatoria larga (p.ej. `openssl rand -hex 32`) | **sí** (sin ella la firma de sesión usa un default inseguro) |
 | `CLIENT_TOKEN` | un token secreto (p.ej. `openssl rand -hex 24`) | recomendado (ver 1.4) |
+| `SUPABASE_URL` | `https://<tu-proyecto>.supabase.co` | solo para archivar los videos de 🎓 |
+| `SUPABASE_SERVICE_ROLE_KEY` | la `service_role` key (Supabase → Settings → API) | solo para archivar los videos de 🎓 |
+| `SUPABASE_VIDEO_BUCKET` | `teach-videos` (default si se omite) | no |
 
 > Si algún día cambias a OpenAI: `PROVIDER=openai`, `OPENAI_API_KEY=…`, opcional `OPENAI_MODEL`, `EFFORT=low`.
+
+**`GEMINI_API_KEY` la usa también la enseñanza por video (🎓).** El cliente NO tiene ninguna key: el
+backend firma las subidas y llama al modelo. Por eso un usuario nuevo no configura nada — instala y
+🎓 funciona.
+
+> **La enseñanza por video SIEMPRE usa Gemini**, aunque el cerebro corra con `PROVIDER=openai` (es
+> quien entiende video). O sea: si estás en OpenAI, `GEMINI_API_KEY` **sigue siendo obligatoria** o
+> 🎓 devuelve 500 explicando que falta. `GEMINI_MODEL` es el modelo que usa 🎓; `OPENAI_MODEL` no
+> lo afecta.
+
+**Las dos variables de Supabase** son solo para archivar los mp4 que graban los usuarios en el bucket
+privado `teach-videos`, y así poder verlos desde el dashboard. Si faltan, 🎓 sigue funcionando
+igual (el video se procesa y se guarda en el disco del usuario) — solo perdemos el archivo central;
+el backend lo reporta en `archiveError` y queda en el registro del cliente. La `service_role` key
+salta RLS y da acceso total al proyecto: va **solo** en Vercel, nunca en el cliente ni en el repo.
 
 ### 1.3 Desplegar
 - CLI: `vercel deploy --prod`. O push a la rama conectada.
@@ -85,22 +103,10 @@ Edita `windows-client/src/Config.cs`:
 ```csharp
 public string BackendUrl { get; set; } = "https://<tu-backend>.vercel.app";  // el link de la Fase 1.3
 public string? ClientToken { get; set; } = "<el CLIENT_TOKEN de la Fase 1.2>"; // si activaste auth
-public string? GeminiApiKey { get; set; } = "<tu key de Gemini>"; // solo para 🎓 Enseñar, ver abajo
 ```
-Así al instalar, la carita ya apunta a producción sin que el usuario toque nada.
-
-**Sobre `GeminiApiKey` (léelo antes de fijarla en el código):** la enseñanza por video (🎓, grabar
-pantalla → Gemini → aprender) habla DIRECTO con Gemini desde el cliente, sin pasar por el backend
-— el mp4 no cabe en el límite de payload de Vercel ni en su límite de duración. Eso significa que
-esta key **viaja embebida en el `.exe` que se instala en la máquina de cada usuario** y es
-extraíble descompilando el binario, a diferencia de `GEMINI_API_KEY` del backend (Fase 1.2), que
-nunca sale del servidor. Antes de fijarla aquí:
-- Usa una key **distinta** de la del backend, restringida solo a la Gemini API (Google Cloud
-  Console → Credentials → API restrictions).
-- Pon un límite de gasto/cuota bajo en esa key específica — un usuario que la extraiga solo puede
-  gastar hasta ese tope.
-- Si preferís no distribuir ninguna key en el `.exe`, dejá `GeminiApiKey` vacía: el botón 🎓
-  seguirá deshabilitado (pide configurarla) sin bloquear el resto del asistente.
+Así al instalar, la carita ya apunta a producción sin que el usuario toque nada. **No hay ninguna key
+de modelo que fijar acá**: la enseñanza por video (🎓) pasa por el backend, que es quien tiene la key
+(Fase 1.2). Un usuario nuevo instala y 🎓 funciona sin configurar nada.
 
 ### 3.2 Publicar
 
@@ -116,12 +122,12 @@ Framework-dependent (más liviano; requiere .NET Desktop Runtime 8 en el PC del 
 dotnet publish windows-client\WindowsClient.csproj -c Release -r win-x64 --self-contained false -o out\assistant
 ```
 Queda `out\assistant\U.exe` **junto a sus DLLs** (incluida `ScreenRecorderLib.dll`) — no se puede mover
-`U.exe` solo, tiene que viajar toda la carpeta. Para distribuir, comprimí la carpeta:
-```powershell
-Compress-Archive -Path out\assistant -DestinationPath out\U.zip -Force
-```
-El usuario descomprime y ejecuta `U.exe` desde adentro de la carpeta. Pruébalo suelto: doble clic →
-aparece la carita → escribe algo → probá también 🎓 Enseñar antes de dar por bueno el build.
+`U.exe` solo, tiene que viajar toda la carpeta. Pruébalo suelto: doble clic → aparece la carita →
+escribe algo → probá también 🎓 Enseñar antes de dar por bueno el build.
+
+> **Para distribuir no uses esta carpeta ni un zip a mano**: corré
+> `windows-client\scripts\publish-release.ps1 -Version X.Y.Z`, que hace este mismo `publish` y además
+> arma el instalador y el paquete de auto-update. Ver [`RELEASING-WINDOWS.md`](RELEASING-WINDOWS.md).
 
 **Firma de código** (Fase 0.3): sin certificado, Windows SmartScreen avisará al ejecutar `U.exe` la
 primera vez ("Más información → Ejecutar de todas formas"). En Windows 11 con **Control Inteligente
@@ -143,7 +149,10 @@ pantalla la primera vez.
 
 ## Fase 6 — Poner en manos del usuario
 
-1. Entrega `U.exe` (web, correo, tu canal de distribución) — es un único archivo, self-contained.
+1. Entrega **`U-Setup.exe`** (web, correo, tu canal de distribución), que sale de
+   `windows-client\scripts\publish-release.ps1` — ver [`RELEASING-WINDOWS.md`](RELEASING-WINDOWS.md).
+   Instala en `%LocalAppData%\U` sin pedir admin, y es la **única** vez que el usuario instala algo: a
+   partir de ahí la carita se actualiza sola.
 2. El usuario lo ejecuta (si no firmaste: "Más información → Ejecutar de todas formas").
 3. Primera apertura: aparece la **carita flotante**.
    - **Permisos**: para controlar el PC, la carita usa envío de teclado/ratón y lectura de UI (UIA);
@@ -170,10 +179,10 @@ pantalla la primera vez.
 | Cambia… | Qué haces | Qué ve el usuario |
 |---|---|---|
 | **El cerebro** (prompts, MCP, provider, modelo) | cambias env vars o pusheas `backend/` → Vercel redespliega | Efecto inmediato en la siguiente orden. **Nada que reinstalar.** |
-| **La carita** (`windows-client/`) | recompilas (Fase 3) y redistribuyes `U.exe` | El usuario reemplaza el `.exe`. No hay auto-update todavía. |
+| **La carita** (`windows-client/`) | `publish-release.ps1` + subir 3 archivos al bucket (ver [`RELEASING-WINDOWS.md`](RELEASING-WINDOWS.md)) | Se descarga sola; una pastilla ofrece reiniciar, o se aplica al cerrar. **Nada que reinstalar.** |
 
-El grueso de la evolución (el cerebro) llega **sin tocar al usuario**. Cambios en la carita requieren
-entregar un `U.exe` nuevo.
+Nada obliga al usuario a reinstalar: el cerebro llega al instante y la carita se auto-actualiza
+(Velopack). Lo único que se entrega a mano es el `U-Setup.exe` de la **primera** instalación.
 
 ---
 

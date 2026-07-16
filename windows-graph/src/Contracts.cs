@@ -211,6 +211,24 @@ public sealed class PlanStep
                    .Where(s => !string.IsNullOrWhiteSpace(s))
                    .ToList();
     }
+
+    /// <summary>
+    /// Un match de autofill no trae por sí solo selector/actionType/controlType: hay que reconstruir un
+    /// PlanStep ejecutable combinando el campo detectado (de dónde tocar) con el match (qué poner). Se
+    /// usa para aplicar UN campo a la vez desde la revisión humana del autofill — nunca en lote.
+    /// </summary>
+    public static PlanStep ForAutofill(DetectedField field, FieldMatch match) => new()
+    {
+        StepOrder = field.StepOrder,
+        ActionType = field.ActionType,
+        Selector = field.Selector,
+        Label = field.Label,
+        ControlType = field.ControlType,
+        Value = match.Value,
+        SelectedValue = match.Value,
+        SelectedLabel = match.Value,
+        AllowedOptions = field.AllowedOptions,
+    };
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

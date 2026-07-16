@@ -4,9 +4,14 @@ using U.WindowsClient.Diagnostics;
 namespace U.WindowsClient.Teach;
 
 /// <summary>
-/// Captura de pantalla + micrófono a mp4 (H.264 video + AAC audio). Usa <c>ScreenRecorderLib</c>
-/// (MIT, mantenida activamente) porque Media Foundation nativo es demasiado bajo nivel (SinkWriter,
-/// topología manual, sync A/V) y ffmpeg bundleado añade ~50 MB + una zona gris de licencia.
+/// Captura de pantalla + micrófono + audio del PC a mp4 (H.264 video + AAC audio). Usa
+/// <c>ScreenRecorderLib</c> (MIT, mantenida activamente) porque Media Foundation nativo es demasiado
+/// bajo nivel (SinkWriter, topología manual, sync A/V) y ffmpeg bundleado añade ~50 MB + una zona
+/// gris de licencia.
+///
+/// LAS DOS FUENTES DE AUDIO SE PIDEN EXPLÍCITAMENTE (ver StartAsync): <c>IsAudioEnabled</c> es solo
+/// el interruptor maestro, y confiar en los defaults de la librería para el resto dejaba fuera el
+/// audio del PC.
 ///
 /// <c>Recorder.Record()</c> arranca la captura en un hilo propio de la librería y vuelve enseguida;
 /// el fin real de la grabación se conoce por el evento <c>OnRecordingComplete</c> (se dispara tras
@@ -42,6 +47,8 @@ public sealed class ScreenRecorder : IAsyncDisposable
             // Construir las opciones va DENTRO del try: SourceOptions.MainMonitor hace llamadas nativas
             // (enumeración de pantallas vía DXGI) que también pueden fallar, y antes quedaban fuera de
             // este manejo de errores.
+            LogAudioDevices();
+
             var options = new RecorderOptions
             {
                 SourceOptions = SourceOptions.MainMonitor,
@@ -52,10 +59,29 @@ public sealed class ScreenRecorder : IAsyncDisposable
                     Framerate = 30,
                     IsMp4FastStartEnabled = true, // reproductor no espera a que termine de "cerrar" el archivo
                 },
-                // Sin especificar AudioInputDevice/AudioOutputDevice, la librería usa los dispositivos
-                // predeterminados del sistema (mic + salida), que es justo lo que pide enseñar hablando
-                // mientras se usa la pantalla.
-                AudioOptions = new AudioOptions { IsAudioEnabled = true },
+                AudioOptions = new AudioOptions
+                {
+                    IsAudioEnabled = true,
+
+                    // Las dos fuentes, EXPLÍCITAS. IsAudioEnabled es solo el interruptor maestro: deja
+                    // qué se graba en manos de los defaults de la librería, y así el audio del PC no
+                    // entraba en la grabación. Enseñar necesita ambas: la voz del médico explicando
+                    // (entrada) y lo que suena en el sistema — avisos, alertas, videos (salida).
+                    IsInputDeviceEnabled = true,   // micrófono
+                    IsOutputDeviceEnabled = true,  // audio del PC (loopback de la salida)
+
+                    // Multiplicador, no porcentaje: 1.0f = 100%. Se bajan un punto porque las dos
+                    // fuentes se mezclan en una sola pista y sumar dos señales al 100% satura.
+                    InputVolume = 1.0f,
+                    OutputVolume = 0.8f,
+
+                    // El mp4 lleva una sola pista mezclada; en estéreo la voz se oye más natural.
+                    Channels = AudioChannels.Stereo,
+                    Bitrate = AudioBitrate.bitrate_128kbps,
+                },
+
+                // Sin AudioInputDevice/AudioOutputDevice: la librería usa los predeterminados de
+                // Windows, que es lo que el usuario espera (los mismos que oye y con los que habla).
             };
 
             _recorder = Recorder.CreateRecorder(options);
@@ -83,6 +109,37 @@ public sealed class ScreenRecorder : IAsyncDisposable
 
         return Task.CompletedTask;
     }
+
+    /// <summary>
+    /// Deja en el registro qué dispositivos de audio ve Windows. Sin esto, "no se grabó el audio del
+    /// PC" es indistinguible de "esta máquina no tiene dispositivo de salida activo" (pasa con
+    /// auriculares desconectados, o en escritorio remoto / máquina virtual, donde a menudo no hay
+    /// salida sobre la que hacer loopback).
+    /// </summary>
+    private static void LogAudioDevices()
+    {
+        try
+        {
+            var outputs = Recorder.GetSystemAudioDevices(AudioDeviceSource.OutputDevices);
+            var inputs = Recorder.GetSystemAudioDevices(AudioDeviceSource.InputDevices);
+
+            LogBus.Log("teach", $"audio — salidas (PC): {Describe(outputs)}");
+            LogBus.Log("teach", $"audio — entradas (mic): {Describe(inputs)}");
+
+            if (outputs.Count == 0)
+                LogBus.Log("teach", "OJO: sin dispositivo de salida, el audio del PC no se puede grabar.");
+            if (inputs.Count == 0)
+                LogBus.Log("teach", "OJO: sin micrófono, la narración del médico no se va a grabar.");
+        }
+        catch (Exception ex)
+        {
+            // Solo diagnóstico: que falle no debe impedir grabar.
+            LogBus.Log("teach", $"no se pudieron enumerar los dispositivos de audio: {ex.Message}");
+        }
+    }
+
+    private static string Describe(IReadOnlyList<AudioDevice> devices) =>
+        devices.Count == 0 ? "(ninguno)" : string.Join(", ", devices.Select(d => d.FriendlyName));
 
     /// <summary>Detiene la grabación y espera a que el mp4 quede finalizado en disco.</summary>
     public Task StopAsync()
