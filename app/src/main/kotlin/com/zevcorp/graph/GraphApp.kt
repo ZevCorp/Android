@@ -25,6 +25,7 @@ import com.zevcorp.graph.platform.UsageU
 import com.zevcorp.graph.ui.Palette
 import com.zevcorp.graph.ui.ThemeMode
 import com.zevcorp.graph.voice.IntentDistiller
+import com.zevcorp.graph.voice.VoiceMediaSession
 import com.zevcorp.graph.platform.GeminiLearning
 import com.zevcorp.graph.platform.GeminiWorkflow
 import com.zevcorp.graph.platform.GraphAccessibilityService
@@ -70,6 +71,15 @@ class GraphApp : Application() {
 
     /** La superficie del teléfono, viva mientras el servicio de accesibilidad esté activo. */
     @Volatile var ui: Phone? = null
+
+    /**
+     * Volumen PROPIO del asistente en el panel de volumen del sistema (independiente del resto de apps):
+     * publica una MediaSession con volumen remoto mientras la voz suena. Singleton compartido por la voz
+     * de OpenAI y el TTS del sistema. Detener desde el chip de medios silencia la voz en curso.
+     */
+    val voiceSession: VoiceMediaSession by lazy {
+        VoiceMediaSession(this).also { it.onStop = { bubble?.hush() } }
+    }
 
     // Sanitiza la key: un salto de línea pegado por error en el campo tumbaba TODAS las llamadas con
     // "Unexpected char 0x0a in header value" (una key nunca lleva espacios/saltos de línea válidos).

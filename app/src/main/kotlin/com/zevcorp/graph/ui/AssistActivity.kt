@@ -304,7 +304,14 @@ class AssistActivity : Activity() {
         val clean = text.filter { it.code in 32..0x2FFF }
         scope.launch {
             val spoke = runCatching { openAiTts.speak(clean) }.getOrDefault(false)
-            if (!spoke && ttsReady) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "assist")
+            if (!spoke && ttsReady) {
+                val session = com.zevcorp.graph.GraphApp.instance.voiceSession
+                session.beginSpeaking((clean.length * 75L).coerceIn(4_000L, 40_000L))
+                val params = android.os.Bundle().apply {
+                    putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, session.gain)
+                }
+                tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, params, "assist")
+            }
         }
     }
 

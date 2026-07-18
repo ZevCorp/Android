@@ -146,13 +146,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         bubble.setOnClickListener {
             when {
                 // Un toque lo calla: corta la voz (OpenAI o sistema) y esconde el globo.
-                tts?.isSpeaking == true || openAiTts.isPlaying -> {
-                    playTick()
-                    tts?.stop()
-                    openAiTts.stop()
-                    speechHide?.cancel()
-                    speech?.visibility = View.GONE
-                }
+                tts?.isSpeaking == true || openAiTts.isPlaying -> { playTick(); hush() }
                 // Escucha en vivo de la ejecución: el toque a la burbuja la apaga.
                 execLive -> { playTick(); stopExecLive() }
                 // Durante la escucha por esquina: el toque termina la grabación y procesa.
@@ -503,6 +497,15 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     override fun narrate(text: String) = showSpeech(text, false)
     override fun speak(text: String) = showSpeech(text, true)
 
+    /** Calla la voz en curso (OpenAI o TTS del sistema) y esconde el globo. También lo usa el chip de medios. */
+    fun hush() {
+        runCatching { tts?.stop() }
+        openAiTts.stop()
+        app.voiceSession.endSpeaking()
+        speechHide?.cancel()
+        speech?.visibility = View.GONE
+    }
+
     private fun showSpeech(text: String, aloud: Boolean) {
         if (text.isBlank()) return
         scope.launch {
@@ -527,7 +530,15 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 val clean = text.filter { it.code in 32..0x2FFF }
                 // Voz de nueva generación (OpenAI) si está elegida y hay key; si falla, TTS del sistema.
                 val spoke = runCatching { openAiTts.speak(clean) }.getOrDefault(false)
-                if (!spoke && ttsReady) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "graph")
+                if (!spoke && ttsReady) {
+                    // Voz del sistema: respeta la misma ganancia del asistente y publica su barra en el
+                    // panel de volumen (se desactiva sola tras un margen estimado por la longitud del texto).
+                    app.voiceSession.beginSpeaking((clean.length * 75L).coerceIn(4_000L, 40_000L))
+                    val params = android.os.Bundle().apply {
+                        putFloat(TextToSpeech.Engine.KEY_PARAM_VOLUME, app.voiceSession.gain)
+                    }
+                    tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, params, "graph")
+                }
             }
             speechHide?.cancel()
             speechHide = launch { delay(if (aloud) 5200 else 3400); speech?.visibility = View.GONE }

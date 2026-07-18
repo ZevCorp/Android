@@ -51,11 +51,22 @@ class OpenAiTts(private val context: Context) {
         return withContext(Dispatchers.Main) {
             runCatching {
                 stop()
+                val session = GraphApp.instance.voiceSession
                 val mp = MediaPlayer()
                 mp.setDataSource(f.absolutePath)
-                mp.setOnCompletionListener { it.release(); f.delete(); if (player === it) player = null }
-                mp.setOnErrorListener { p, _, _ -> runCatching { p.release() }; f.delete(); if (player === p) player = null; true }
+                mp.setOnCompletionListener {
+                    session.unbindPlayer(it); session.endSpeaking()
+                    it.release(); f.delete(); if (player === it) player = null
+                }
+                mp.setOnErrorListener { p, _, _ ->
+                    session.unbindPlayer(p); session.endSpeaking()
+                    runCatching { p.release() }; f.delete(); if (player === p) player = null; true
+                }
                 mp.prepare()
+                // Volumen propio del asistente: la sesión aplica la ganancia elegida al reproductor y
+                // publica su barra independiente en el panel de volumen del sistema.
+                session.bindPlayer(mp)
+                session.beginSpeaking()
                 mp.start()
                 player = mp
                 true
@@ -64,7 +75,13 @@ class OpenAiTts(private val context: Context) {
     }
 
     fun stop() {
-        runCatching { player?.let { if (it.isPlaying) it.stop(); it.release() } }
+        runCatching {
+            player?.let {
+                GraphApp.instance.voiceSession.unbindPlayer(it)
+                if (it.isPlaying) it.stop(); it.release()
+            }
+        }
+        if (player != null) runCatching { GraphApp.instance.voiceSession.endSpeaking() }
         player = null
     }
 
