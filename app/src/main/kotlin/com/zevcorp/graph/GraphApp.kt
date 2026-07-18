@@ -19,6 +19,7 @@ import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.OpenAiBrain
 import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.MemoryStore
+import com.zevcorp.graph.platform.RemoteConfig
 import com.zevcorp.graph.platform.SupabaseAuth
 import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.platform.UsageU
@@ -84,7 +85,7 @@ class GraphApp : Application() {
     // Sanitiza la key: un salto de línea pegado por error en el campo tumbaba TODAS las llamadas con
     // "Unexpected char 0x0a in header value" (una key nunca lleva espacios/saltos de línea válidos).
     private val apiKey = {
-        (prefs.getString("apiKey", DEFAULT_API_KEY)?.ifBlank { DEFAULT_API_KEY } ?: DEFAULT_API_KEY)
+        resolvedKey("apiKey", "remoteApiKey", DEFAULT_API_KEY)
             .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
     }
     private val model = { prefs.getString("model", "gemini-3.5-flash") ?: "gemini-3.5-flash" }
@@ -99,13 +100,23 @@ class GraphApp : Application() {
             .getOrDefault(Provider.GEMINI)
     }
     private val openAiKey = {
-        (prefs.getString("openaiKey", DEFAULT_OPENAI_KEY)?.ifBlank { DEFAULT_OPENAI_KEY } ?: DEFAULT_OPENAI_KEY)
+        resolvedKey("openaiKey", "remoteOpenaiKey", DEFAULT_OPENAI_KEY)
             .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
     }
     private val openAiModel = { prefs.getString("openaiModel", "gpt-5.6-terra") ?: "gpt-5.6-terra" }
     // Esfuerzo de razonamiento del cerebro OpenAI: "low" acelera cada turno (recomendado para
     // computer-use). Tunable desde prefs: minimal (más rápido) … xhigh (más lento y minucioso).
     private val openAiEffort = { prefs.getString("openaiEffort", "low") ?: "low" }
+
+    /**
+     * Resuelve una key en 3 niveles: lo que el usuario puso a mano en el panel de Desarrollador
+     * (SIEMPRE gana si no está vacío) > lo último que trajo [RemoteConfig] del backend > el default
+     * horneado en build (`apikey.properties`/env var, puede venir vacío si el build no las tenía).
+     */
+    fun resolvedKey(userPrefKey: String, remotePrefKey: String, buildDefault: String): String =
+        prefs.getString(userPrefKey, "")?.ifBlank { null }
+            ?: prefs.getString(remotePrefKey, "")?.ifBlank { null }
+            ?: buildDefault
 
     private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
 
@@ -617,11 +628,13 @@ class GraphApp : Application() {
         // en el APK (BuildConfig, horneadas desde apikey.properties) para que funcione recién instalado.
         KnowledgeGraph.credentials = {
             Triple(
-                prefs.getString("neo4jUri", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_URI } ?: BuildConfig.DEFAULT_NEO4J_URI,
-                prefs.getString("neo4jUser", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_USER } ?: BuildConfig.DEFAULT_NEO4J_USER,
-                prefs.getString("neo4jPass", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_PASS } ?: BuildConfig.DEFAULT_NEO4J_PASS,
+                resolvedKey("neo4jUri", "remoteNeo4jUri", BuildConfig.DEFAULT_NEO4J_URI),
+                resolvedKey("neo4jUser", "remoteNeo4jUser", BuildConfig.DEFAULT_NEO4J_USER),
+                resolvedKey("neo4jPass", "remoteNeo4jPass", BuildConfig.DEFAULT_NEO4J_PASS),
             )
         }
+        // Config remota (keys) del backend: una vez al arrancar, best-effort, nunca bloquea.
+        scope.launch(Dispatchers.IO) { RemoteConfig.refresh() }
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()
             workflows.syncFromCloud()

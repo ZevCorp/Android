@@ -27,6 +27,10 @@ Devuelve `{ session, actions[], narration, speech?, question?, text, done, needs
 
 `GET /api/health` — sonda de salud y reporte de configuración (sin secretos).
 
+`GET /api/mobile/config` (Bearer `ANDROID_CLIENT_TOKEN`) — reparto de keys para el cliente **Android**
+(cerebro on-device, a diferencia de Windows): evita que el usuario tenga que pegar sus API keys a mano.
+No participa del bucle de ejecución de arriba. Ver "Reparto de keys para Android" en `DEPLOY.md`.
+
 ## Arquitectura
 
 ```

@@ -19,6 +19,7 @@ for (const file of ['.env.local', '.env']) {
 }
 
 const { handleTurn } = await import('./src/http/handleTurn');
+const { handleMobileConfig } = await import('./src/http/handleMobileConfig');
 const { activeKey, activeModel, config } = await import('./src/config');
 
 function readBody(req: http.IncomingMessage): Promise<string> {
@@ -51,6 +52,13 @@ const server = http.createServer(async (req, res) => {
       res.statusCode = 500;
       res.end(JSON.stringify({ error: (e as Error).message }));
     }
+    return;
+  }
+
+  if (url.startsWith('/api/mobile/config') && req.method === 'GET') {
+    const result = handleMobileConfig(req.headers.authorization as string | undefined);
+    res.statusCode = result.status;
+    res.end(JSON.stringify(result.json));
     return;
   }
 

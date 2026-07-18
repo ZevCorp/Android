@@ -23,6 +23,19 @@ export const config = {
   /** Token opcional para autenticar clientes (Bearer). Si está vacío, la API es abierta (dev). */
   clientToken: process.env.CLIENT_TOKEN || '',
 
+  // --- Reparto de config para el cliente Android (ver /api/mobile/config) ---
+  // El cerebro de Android vive EN el dispositivo (a diferencia de Windows): no le manda turnos a este
+  // backend, solo viene a buscar sus keys al arrancar para no depender de que el usuario las pegue a
+  // mano ni de que el build las hornee. Reusa OPENAI_API_KEY/GEMINI_API_KEY de arriba (una sola fuente
+  // de verdad); Deepgram y Neo4j son propias de Android y opcionales — si faltan, el cliente cae a sus
+  // valores por defecto de siempre sin romperse.
+  /** Token de Android (Bearer), independiente del de Windows: alcance propio y rotable aparte. */
+  androidClientToken: process.env.ANDROID_CLIENT_TOKEN || '',
+  deepgramApiKey: process.env.DEEPGRAM_API_KEY || '',
+  neo4jUri: process.env.NEO4J_URI || '',
+  neo4jUser: process.env.NEO4J_USER || '',
+  neo4jPass: process.env.NEO4J_PASS || '',
+
   // --- Supabase Storage (archivo de los videos de enseñanza, bucket privado `teach-videos`) ---
   /** URL del proyecto, p.ej. https://xxxx.supabase.co */
   supabaseUrl: (process.env.SUPABASE_URL || '').replace(/\/+$/, ''),
