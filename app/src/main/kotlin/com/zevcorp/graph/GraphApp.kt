@@ -11,6 +11,7 @@ import com.zevcorp.graph.platform.ActiveLearning
 import com.zevcorp.graph.platform.AndroidSystemApi
 import com.zevcorp.graph.platform.Anticipation
 import com.zevcorp.graph.platform.CloudSync
+import com.zevcorp.graph.platform.InteractionRow
 import com.zevcorp.graph.platform.GeminiBrain
 import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
@@ -246,6 +247,34 @@ class GraphApp : Application() {
      */
     val auth by lazy { SupabaseAuth(prefs) }
 
+    /** Id estable por instalación: agrupa en el historial las interacciones de un mismo teléfono
+     *  aunque no haya sesión (para los usuarios anónimos, que no tienen cuenta que los identifique). */
+    val deviceId: String by lazy {
+        prefs.getString("deviceId", null) ?: java.util.UUID.randomUUID().toString().also {
+            prefs.edit().putString("deviceId", it).apply()
+        }
+    }
+
+    /**
+     * HISTORIAL DE USO (observabilidad del dueño): sube el par input→output de cada activación a la
+     * tabla central `graph_interactions`. Solo INSERT — nadie lo lee con la key pública; el dueño lo
+     * ve desde el panel de Desarrollador (Edge Function con token de admin). Fire-and-forget: nunca
+     * bloquea la ejecución ni lanza. Se omiten los pares vacíos.
+     */
+    private fun logInteraction(input: String, output: String) {
+        val i = input.trim(); val o = output.trim()
+        if (i.isBlank() || o.isBlank()) return
+        val appCtx = runCatching {
+            (ui as? GraphAccessibilityService)?.rootInActiveWindow?.packageName?.toString().orEmpty()
+        }.getOrDefault("")
+        scope.launch(Dispatchers.IO) {
+            CloudSync.pushInteraction(InteractionRow(
+                device = deviceId, email = auth.email,
+                input = i.take(8000), output = o.take(8000),
+                app = appCtx, version = BuildConfig.VERSION_NAME))
+        }
+    }
+
     /** Memoria durable: reglas/preferencias destiladas de cualquier input (local + nube POR CUENTA). */
     val memories by lazy {
         MemoryStore(filesDir, owner = { auth.userId }) { note ->
@@ -450,7 +479,7 @@ class GraphApp : Application() {
                     "memoria). Si es una orden nueva, ejecútala."
         }
         synchronized(goalPrompts) { goalPrompts.clear(); goalPrompts.add(prompt.trim()) }
-        return running {
+        val answer = running {
             var summary = ""
             var round = 0
             // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
@@ -493,6 +522,9 @@ class GraphApp : Application() {
             anticipate(surface, service, user, summary)
             summary
         }
+        // Historial de uso: registra input→respuesta para que el dueño lo vea en el panel dev.
+        logInteraction(prompt, answer)
+        return answer
     }
 
     /** Cadena de pensamiento breve al terminar → acción autónoma segura y/o aviso hablado. */

@@ -22,6 +22,8 @@ import android.widget.TextView
 import android.widget.Toast
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
+import com.zevcorp.graph.platform.InteractionView
+import com.zevcorp.graph.platform.InteractionsAdmin
 import com.zevcorp.graph.platform.KnowledgeGraph
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.UiBugBus
@@ -45,6 +47,8 @@ class MainActivity : Activity(), UserChannel {
     private var bugView: TextView? = null
     private lateinit var mcpPanel: LinearLayout
     private lateinit var workflowPanel: LinearLayout
+    private lateinit var historyPanel: LinearLayout
+    private var historySearch: EditText? = null
     private lateinit var accountBody: LinearLayout
     private var voiceCallback: ((String) -> Unit)? = null
     /** Reconocedor de voz en-app (sin Activity), como el de la burbuja flotante. */
@@ -438,6 +442,35 @@ class MainActivity : Activity(), UserChannel {
         workflowPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
         wfCard.addView(workflowPanel)
         root.addView(wfCard)
+        root.gap(dp(14))
+
+        // Panel de HISTORIAL DE USUARIOS (solo dueño): todo lo que los usuarios le piden al asistente
+        // y lo que responde, sincronizado a la nube. Se lee con tu token de admin (nadie más lo ve).
+        val hCard = card()
+        val hHead = row()
+        hHead.addView(iconChip(Icon.CLOUD, sizeDp = 34, tint = Palette.accent))
+        hHead.addView(title("Historial de usuarios").apply { setPadding(dp(8), 0, 0, 0) },
+            LinearLayout.LayoutParams(0, -2, 1f))
+        hHead.addView(button("Cargar") { refreshHistoryPanel() })
+        hCard.addView(hHead)
+        hCard.gap(dp(4))
+        hCard.addView(caption("Cada interacción (lo que el usuario pide → lo que el asistente responde) de " +
+            "TODAS las apps, sincronizada. Requiere tu token de admin; ningún usuario puede leerlo."))
+        hCard.gap(dp(10))
+        historySearch = EditText(this).apply {
+            hint = "Buscar en texto / correo / app…"
+            setHintTextColor(Palette.textDim); setTextColor(Palette.text)
+            setSingleLine(true)
+            background = rounded(Palette.bg, dp(10).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setOnEditorActionListener { _, _, _ -> refreshHistoryPanel(); true }
+        }
+        hCard.addView(historySearch)
+        hCard.gap(dp(10))
+        historyPanel = LinearLayout(this).apply { orientation = LinearLayout.VERTICAL }
+        historyPanel.addView(caption("Toca «Cargar» para traer las interacciones más recientes."))
+        hCard.addView(historyPanel)
+        root.addView(hCard)
 
         setContentView(withStaticSky(ScrollView(this).apply { addView(root) }))
         applyBarIcons() // tras setContentView: ya existe el decorView (antes daba NPE)
@@ -726,6 +759,116 @@ class MainActivity : Activity(), UserChannel {
                 log("Workflow \"${w.name}\" borrado")
                 refreshWorkflowPanel()
             }
+            .show()
+    }
+
+    /* ---------- Historial de usuarios (solo dueño): input→output de TODOS, vía token de admin ---------- */
+
+    /** Trae el historial de la nube (Edge Function con el token de admin guardado). */
+    private fun refreshHistoryPanel() {
+        val token = app.prefs.getString("adminToken", "")?.trim().orEmpty()
+        if (token.isBlank()) { promptAdminTokenThenLoad(); return }
+        val search = historySearch?.text?.toString()?.trim().orEmpty()
+        historyPanel.removeAllViews()
+        historyPanel.addView(caption("Cargando…"))
+        scope.launch {
+            val res = InteractionsAdmin.fetch(token, search)
+            historyPanel.removeAllViews()
+            val err = res.error
+            if (err != null) {
+                historyPanel.addView(caption("⚠ $err"))
+                if (err.contains("Token")) {
+                    historyPanel.gap(dp(8))
+                    historyPanel.addView(button("Cambiar token de admin") { promptAdminTokenThenLoad() })
+                }
+                return@launch
+            }
+            val rows = res.rows.orEmpty()
+            if (rows.isEmpty()) {
+                historyPanel.addView(caption(
+                    "Sin interacciones todavía" + if (search.isNotBlank()) " para «$search»." else "."))
+                return@launch
+            }
+            historyPanel.addView(caption("${rows.size} interacciones (más recientes primero):"))
+            historyPanel.gap(dp(8))
+            rows.forEach { v -> historyPanel.addView(historyRow(v)); historyPanel.gap(dp(8)) }
+        }
+    }
+
+    /** Una fila tocable del historial: quién · cuándo · app, con vista previa de input y output. */
+    private fun historyRow(v: InteractionView): View = LinearLayout(this).apply {
+        orientation = LinearLayout.VERTICAL
+        background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+        setPadding(dp(12), dp(10), dp(12), dp(10))
+        isClickable = true
+        setOnClickListener { showHistoryDetail(v) }
+        val who = v.email.ifBlank { "📱 " + v.device.take(8) }
+        val whenStr = v.created_at.replace('T', ' ').take(16)
+        addView(caption("$who · $whenStr" + if (v.app.isNotBlank()) " · ${v.app}" else ""))
+        addView(TextView(this@MainActivity).apply {
+            text = "▸ " + v.input.replace("\n", " ").take(90); textSize = 13f
+            setTextColor(Palette.text); maxLines = 2; setPadding(0, dp(4), 0, 0)
+        })
+        addView(TextView(this@MainActivity).apply {
+            text = "◂ " + v.output.replace("\n", " ").take(90); textSize = 12f
+            setTextColor(Palette.textDim); maxLines = 2; setPadding(0, dp(2), 0, 0)
+        })
+    }
+
+    /** Detalle completo de una interacción (texto seleccionable). */
+    private fun showHistoryDetail(v: InteractionView) {
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(18), dp(18), dp(18), dp(12))
+        }
+        val who = v.email.ifBlank { "Dispositivo ${v.device}" }
+        body.addView(title(who, 16f))
+        body.addView(caption(v.created_at.replace('T', ' ').take(19) +
+            (if (v.app.isNotBlank()) " · ${v.app}" else "") +
+            (if (v.version.isNotBlank()) " · v${v.version}" else "")))
+        body.gap(dp(12))
+        body.addView(caption("El usuario pidió:"))
+        body.addView(TextView(this).apply {
+            text = v.input; textSize = 14f; setTextColor(Palette.text); setTextIsSelectable(true)
+        })
+        body.gap(dp(12))
+        body.addView(caption("El asistente respondió:"))
+        body.addView(TextView(this).apply {
+            text = v.output; textSize = 14f; setTextColor(Palette.textDim); setTextIsSelectable(true)
+        })
+        AlertDialog.Builder(this)
+            .setView(ScrollView(this).apply { addView(body) })
+            .setPositiveButton("Cerrar", null)
+            .show()
+    }
+
+    /** Pide (y guarda en este teléfono) el token de admin para poder leer el historial. */
+    private fun promptAdminTokenThenLoad() {
+        val ctx = this
+        val input = EditText(ctx).apply {
+            hint = "Token de administrador"
+            setText(app.prefs.getString("adminToken", "") ?: "")
+            setHintTextColor(Palette.textDim); setTextColor(Palette.text)
+            background = rounded(Palette.bg, dp(10).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val body = LinearLayout(ctx).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(12), dp(20), dp(8))
+            addView(caption("Ingresa tu token de admin (el mismo con el que publicas versiones). Se " +
+                "guarda solo en este teléfono; ningún usuario puede leer el historial sin él."))
+            gap(dp(10)); addView(input)
+        }
+        AlertDialog.Builder(ctx)
+            .setTitle("Ver historial de usuarios")
+            .setView(ScrollView(ctx).apply { addView(body) })
+            .setPositiveButton("Cargar") { _, _ ->
+                val t = input.text.toString().trim()
+                if (t.isBlank()) return@setPositiveButton
+                app.prefs.edit().putString("adminToken", t).apply()
+                refreshHistoryPanel()
+            }
+            .setNegativeButton("Cancelar", null)
             .show()
     }
 

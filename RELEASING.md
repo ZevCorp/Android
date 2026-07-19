@@ -76,6 +76,15 @@ servidor y hace upsert de la fila con la service role. Endpoint:
   (invisibles por la API).
 - **Tabla `graph_learned_tools`** (mapa de UI, TRANSVERSAL): RLS con **lectura pública** (anon y
   autenticados) y **escritura solo autenticada** — todos se benefician, aportar pide cuenta.
+- **Tabla `graph_interactions`** (HISTORIAL de uso, observabilidad del dueño): columnas `id`,
+  `device`, `user_id` (default `auth.uid()`), `email`, `input`, `output`, `app`, `version`,
+  `created_at`. RLS: **solo INSERT** abierto (anon + autenticado) — cada app registra su par
+  input→output; **sin policy de SELECT**, así que **nadie lo lee con la key pública** (el historial de
+  un usuario es privado frente a los demás). El dueño lo consulta desde el panel de Desarrollador
+  (triple-toque arriba-derecha → tarjeta "Historial de usuarios") con el **token de admin**, que va a
+  la Edge Function **`graph-interactions`** (`verify_jwt=false`): valida el token del lado servidor y
+  responde con la service role. Cambiar el token: edita `ADMIN_TOKEN` en esa función y redespliega
+  (igual que `publish-release`).
 
 ### Token de administrador (SECRETO)
 

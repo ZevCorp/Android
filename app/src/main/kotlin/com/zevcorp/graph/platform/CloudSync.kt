@@ -4,8 +4,25 @@ import graph.core.domain.LearnedTool
 import graph.core.domain.Workflow
 import java.net.HttpURLConnection
 import java.net.URL
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
+
+/**
+ * Una interacción usuario↔asistente que se registra en la nube (tabla `graph_interactions`): el
+ * prompt del usuario (`input`) y la respuesta final del asistente (`output`), más el contexto útil
+ * (device, cuenta si hay, app en primer plano, versión). No lleva `user_id`: cuando la subida viaja
+ * con la sesión del usuario, el servidor lo llena solo con `auth.uid()`.
+ */
+@Serializable
+data class InteractionRow(
+    val device: String = "",
+    val email: String = "",
+    val input: String = "",
+    val output: String = "",
+    val app: String = "",
+    val version: String = "",
+)
 
 /**
  * Copia en la NUBE de las dos capas de conocimiento (Supabase/Postgres), con reglas distintas:
@@ -24,6 +41,7 @@ object CloudSync {
     private const val BASE = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_learned_tools"
     private const val MEMORY = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_memory"
     private const val WORKFLOWS = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_workflows"
+    private const val INTERACTIONS = "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_interactions"
     private const val KEY = "sb_publishable_qroW231Ts7UYAEgr_f5cnQ_3SrW2ZrI" // publishable (cliente)
 
     /** Token de la sesión del usuario (lo cablea GraphApp con SupabaseAuth). Null = sin sesión. */
@@ -33,6 +51,20 @@ object CloudSync {
     private val listSerializer = ListSerializer(LearnedTool.serializer())
     private val memorySerializer = ListSerializer(MemoryNote.serializer())
     private val workflowSerializer = ListSerializer(Workflow.serializer())
+    private val interactionSerializer = ListSerializer(InteractionRow.serializer())
+
+    /**
+     * Registra una interacción en el historial central (solo INSERT; nadie la lee con la key pública,
+     * el dueño la ve por la Edge Function `graph-interactions`). Si hay sesión, la subida viaja con el
+     * bearer del usuario y el servidor llena `user_id` con la cuenta; sin sesión, queda solo el device.
+     * Fire-and-forget: nunca bloquea ni lanza.
+     */
+    fun pushInteraction(row: InteractionRow) {
+        runCatching {
+            http("POST", INTERACTIONS, json.encodeToString(interactionSerializer, listOf(row)),
+                userToken(), "Prefer" to "return=minimal")
+        }.onFailure { LogBus.log("cloud", "☁ no registré la interacción: ${it.message}") }
+    }
 
     /** Sube (upsert por nombre) una herramienta a la capa compartida. Requiere sesión; nunca lanza. */
     fun push(tool: LearnedTool) {
