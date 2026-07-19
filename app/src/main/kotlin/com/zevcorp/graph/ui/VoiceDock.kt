@@ -10,6 +10,7 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.widget.TextView
 import com.zevcorp.graph.GraphApp
+import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.MeetingLog
 import com.zevcorp.graph.platform.MicService
@@ -64,6 +65,16 @@ class VoiceDock(
     private val thinkMutex = Mutex()
     /** Hasta cuándo NO abrir el micrófono (mientras Ü habla, para no transcribirse a sí mismo). */
     @Volatile private var quietUntil = 0L
+
+    /* Dictado en vivo en la app de notas. */
+    private val noteLock = Any()
+    private val noteBuffer = StringBuilder()
+    private var noteHeader = ""
+    /** El campo de nota ya está abierto y enfocado: se puede empezar a escribir. */
+    @Volatile private var noteReady = false
+    /** Paquete de la app de notas donde estamos dictando (para no escribir en otra app por error). */
+    @Volatile private var notesPkg = ""
+    private val svc get() = service as? GraphAccessibilityService
 
     /** Modo escucha permanente encendido (burbuja anclada en una esquina). */
     @Volatile var docked = false
@@ -120,9 +131,16 @@ class VoiceDock(
 
     private fun dock() {
         docked = true
+        noteReady = false; notesPkg = ""
+        synchronized(noteLock) { noteBuffer.setLength(0) }
+        val fecha = java.text.SimpleDateFormat("d MMM yyyy · HH:mm", java.util.Locale.getDefault())
+            .format(java.util.Date())
+        noteHeader = "📝 Notas de la reunión · $fecha\n\n"
         MicService.start(service)
         LogBus.log("meeting", "▶ MODO REUNIÓN en la esquina ${if (dockLeft) "izquierda" else "derecha"}")
-        narrate("Estoy en la reunión 👂 tomo notas y construyo lo que decidan")
+        narrate("Estoy en la reunión 👂 abro las notas y dicto en vivo")
+        // Abre la app de notas y deja el campo listo para escribir, EN PARALELO a la escucha.
+        app.scope.launch { setupNotes() }
         loopJob = app.scope.launch {
             try {
                 listenLoop()
@@ -135,9 +153,47 @@ class VoiceDock(
         }
     }
 
+    /**
+     * Prepara el dictado: el motor (computer-use) abre la app de NOTAS del teléfono, crea una nota
+     * nueva y enfoca su cuerpo. Se adapta a cualquier app de notas (Keep, Samsung Notes, la que haya).
+     * Al terminar, deja `noteReady` y vuelca lo que se haya acumulado durante el arranque.
+     */
+    private suspend fun setupNotes() {
+        val prompt = "Abre la aplicación de NOTAS del teléfono (Google Keep, Samsung Notes, o la que " +
+            "exista). Crea una NOTA NUEVA y toca el campo del CUERPO de la nota para dejar el cursor " +
+            "dentro, listo para escribir. NO escribas nada todavía; solo deja la nota nueva abierta y " +
+            "enfocada en el cuerpo."
+        runCatching { runTask(prompt) }
+        if (!docked) return
+        notesPkg = svc?.currentApp.orEmpty()
+        noteReady = true
+        LogBus.log("meeting", "✍️ notas listas para dictado" + if (notesPkg.isNotBlank()) " ($notesPkg)" else "")
+        withContext(Dispatchers.Main) { returnToCorner(dockLeft) }
+        flushNote()
+    }
+
+    /**
+     * DICTADO EN VIVO: vuelca al campo de la nota TODO lo acumulado (encabezado + viñetas). Reemplazar
+     * el texto completo cada vez lo hace idempotente. Solo escribe si la app de notas está en primer
+     * plano (para no meter el texto en otra app mientras se ejecuta una tarea); si no, lo deja en el
+     * buffer y se volcará al volver.
+     */
+    private fun flushNote() {
+        if (!noteReady || !docked) return
+        val s = svc ?: return
+        if (notesPkg.isNotBlank() && s.currentApp != notesPkg) return
+        val body = synchronized(noteLock) { noteBuffer.toString() }
+        if (body.isBlank()) return
+        val full = noteHeader + body
+        app.scope.launch(Dispatchers.Main) {
+            if (!s.writeNote(full)) LogBus.log("meeting", "✍️ no encontré el campo de la nota para escribir")
+        }
+    }
+
     /** Sale del modo reunión. Si hay una tarea en curso, el worker muere al acabar esta. */
     private fun undock() {
         docked = false
+        noteReady = false; notesPkg = ""
         transcriber?.stop()
         disarm()
         meeting?.persist()
@@ -159,12 +215,22 @@ class VoiceDock(
         taskWorker = app.scope.launch {
             for (task in queue) {
                 if (!docked) break
+                // Deja que las notas terminen de abrirse antes de ejecutar tareas (evita choques
+                // entre dos ejecuciones del motor al arrancar la reunión).
+                while (docked && !noteReady) delay(200)
+                if (!docked) break
                 log.taskStarted(task)
                 LogBus.log("meeting", "🔨 ejecutando: \"${task.take(120)}\"")
                 val result = runCatching { runTask(task) }
                 log.taskDone(task, result.getOrElse { it.message ?: "error" }, ok = result.isSuccess)
                 if (docked) {
                     withContext(Dispatchers.Main) { returnToCorner(dockLeft) }
+                    // La tarea navegó a otras apps: vuelve a las notas y re-escribe lo dictado.
+                    if (notesPkg.isNotBlank()) {
+                        runCatching { svc?.openApp(notesPkg) }
+                        delay(800)
+                        flushNote()
+                    }
                     delay(600) // deja aterrizar la burbuja
                 }
             }
@@ -178,7 +244,8 @@ class VoiceDock(
                 listening = true
                 withContext(Dispatchers.Main) {
                     setThinking(true)
-                    showBadge("🎧 en la reunión · ${log.notes().size} notas · sácame de la esquina para terminar")
+                    val estado = if (noteReady) "✍️ dictando" else "abriendo notas…"
+                    showBadge("🎧 en la reunión · $estado · ${log.notes().size} notas · sácame de la esquina para terminar")
                 }
                 val t = defaultTranscriber(service)
                 transcriber = t
@@ -212,6 +279,9 @@ class VoiceDock(
             if (move.notes.isNotEmpty()) {
                 log.addNotes(move.notes)
                 LogBus.log("meeting", "📝 ${move.notes.joinToString(" · ")}")
+                // Dictado en vivo: acumula las notas como viñetas y las escribe en la app de notas.
+                synchronized(noteLock) { move.notes.forEach { noteBuffer.append("• ").append(it).append('\n') } }
+                flushNote()
             }
             if (move.closing && !log.closingDone) {
                 log.closingDone = true
@@ -262,6 +332,7 @@ class VoiceDock(
 
     fun destroy() {
         docked = false
+        noteReady = false; notesPkg = ""
         transcriber?.stop()
         loopJob?.cancel()
         taskWorker?.cancel()

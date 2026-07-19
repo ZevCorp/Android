@@ -59,6 +59,9 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
     /** Última app "real" en primer plano: al cambiar, se consolida lo observado en la anterior. */
     private var foregroundApp = ""
 
+    /** Paquete de la app en primer plano ahora mismo (lo usa el dictado de notas en vivo). */
+    val currentApp: String get() = foregroundApp
+
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val pkg = event.packageName?.toString() ?: return
         when (event.eventType) {
@@ -479,6 +482,44 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
             putCharSequence(AccessibilityNodeInfo.ACTION_ARGUMENT_SET_TEXT_CHARSEQUENCE, value)
         }
         return node.performAction(AccessibilityNodeInfo.ACTION_SET_TEXT, args)
+    }
+
+    /** El campo editable objetivo para el dictado: el que tiene el foco de entrada, o si no, el
+     *  editable VISIBLE de mayor área (el cuerpo de una nota suele ser el EditText multilínea más
+     *  grande de la pantalla). Así el dictado acierta el campo correcto sin depender de la app. */
+    private fun bestEditable(): AccessibilityNodeInfo? {
+        findFocus(AccessibilityNodeInfo.FOCUS_INPUT)?.takeIf { it.isEditable && it.isVisibleToUser }?.let { return it }
+        var best: AccessibilityNodeInfo? = null
+        var bestArea = 0
+        fun walk(n: AccessibilityNodeInfo?) {
+            n ?: return
+            if (n.isEditable && n.isVisibleToUser) {
+                val r = Rect().also { n.getBoundsInScreen(it) }
+                val area = r.width() * r.height()
+                if (area > bestArea) { bestArea = area; best = n }
+            }
+            for (i in 0 until n.childCount) walk(n.getChild(i))
+        }
+        walk(rootInActiveWindow)
+        return best
+    }
+
+    /**
+     * DICTADO EN VIVO (modo reunión): escribe —reemplazando— el texto del campo de nota enfocado/más
+     * grande y deja el cursor al final para que se vea "creciendo". Reemplazar el texto completo cada
+     * vez lo hace idempotente: la nota siempre refleja EXACTAMENTE lo acumulado, aunque se pierda el
+     * foco o se vuelva de otra app. Devuelve false si no hay ningún campo editable en pantalla.
+     */
+    fun writeNote(text: String): Boolean {
+        val node = bestEditable() ?: return false
+        val ok = setText(node, text)
+        runCatching {
+            node.performAction(AccessibilityNodeInfo.ACTION_SET_SELECTION, Bundle().apply {
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_START_INT, text.length)
+                putInt(AccessibilityNodeInfo.ACTION_ARGUMENT_SELECTION_END_INT, text.length)
+            })
+        }
+        return ok
     }
 
     private suspend fun tapGesture(x: Int, y: Int) =
