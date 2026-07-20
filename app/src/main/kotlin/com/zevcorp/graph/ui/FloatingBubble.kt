@@ -186,11 +186,15 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scheduleIdleShrink()
     }
 
-    private fun scheduleIdleShrink() {
+    /**
+     * Reprograma el encogido de reposo. Por defecto ~15 s (dejó de usarla); tras SOLTARLA de un
+     * arrastre pasa un [delayMs] corto (~0.7 s) para que vuelva a pequeña casi de inmediato.
+     */
+    private fun scheduleIdleShrink(delayMs: Long = 15_000) {
         if (appDocked) return
         idleJob?.cancel()
         idleJob = scope.launch {
-            delay(15_000) // ~15 s sin usarla → se encoge para no estorbar
+            delay(delayMs)
             // Nunca se encoge con el cuadro de diálogo abierto: se mantiene grande mientras lo usas.
             if (!shrunk && panel == null) { animateScale(0.56f, idleEase); startWander() }
         }
@@ -285,6 +289,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                         val vt = tracker
                         vt?.addMovement(e); vt?.computeCurrentVelocity(1000)
                         flingToEdge(size, vt?.xVelocity ?: 0f, vt?.yVelocity ?: 0f)
+                        // Al soltarla vuelve a pequeña casi de inmediato (~0.7 s), sin esperar los 15 s.
+                        scheduleIdleShrink(700)
                     }
                     tracker?.recycle(); tracker = null
                 }
