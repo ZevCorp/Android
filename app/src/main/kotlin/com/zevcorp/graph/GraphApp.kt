@@ -19,7 +19,9 @@ import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.OpenAiBrain
 import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.MemoryStore
+import com.zevcorp.graph.platform.RemoteConfig
 import com.zevcorp.graph.platform.SupabaseAuth
+import com.zevcorp.graph.platform.Telemetry
 import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.platform.UsageU
 import com.zevcorp.graph.ui.Palette
@@ -71,28 +73,31 @@ class GraphApp : Application() {
     /** La superficie del teléfono, viva mientras el servicio de accesibilidad esté activo. */
     @Volatile var ui: Phone? = null
 
-    // Sanitiza la key: un salto de línea pegado por error en el campo tumbaba TODAS las llamadas con
-    // "Unexpected char 0x0a in header value" (una key nunca lleva espacios/saltos de línea válidos).
-    private val apiKey = {
-        (prefs.getString("apiKey", DEFAULT_API_KEY)?.ifBlank { DEFAULT_API_KEY } ?: DEFAULT_API_KEY)
-            .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
+    // Resolución de keys: lo que el usuario puso a mano manda; si no, lo DISTRIBUIDO POR EL BACKEND
+    // (graph_client_config, cacheado por RemoteConfig); de último, lo horneado al compilar. Así el
+    // usuario final instala la app y funciona sin digitar ninguna key.
+    private val apiKey = { RemoteConfig.resolve(prefs, "apiKey", "remoteGeminiKey", DEFAULT_API_KEY) }
+    private val model = {
+        prefs.getString("model", "")?.ifBlank { null }
+            ?: prefs.getString("remoteGeminiModel", "")?.ifBlank { null } ?: "gemini-3.5-flash"
     }
-    private val model = { prefs.getString("model", "gemini-3.5-flash") ?: "gemini-3.5-flash" }
 
     /**
      * PROVEEDOR DE COMPUTER-USE (Gemini vs OpenAI), conmutable con un clic desde el panel de
      * Desarrollador. Solo afecta al CEREBRO de ejecución; el análisis de video y los distiladores
      * auxiliares siguen en Gemini (OpenAI no ingiere video). La key y el modelo de OpenAI son propios.
+     * El default lo decide el backend (graph_client_config.default_provider; hoy OPENAI).
      */
     private val provider = {
-        runCatching { Provider.valueOf(prefs.getString("provider", Provider.GEMINI.name)!!) }
-            .getOrDefault(Provider.GEMINI)
+        val chosen = prefs.getString("provider", "")?.ifBlank { null }
+            ?: prefs.getString("remoteProvider", "")?.ifBlank { null } ?: Provider.OPENAI.name
+        runCatching { Provider.valueOf(chosen) }.getOrDefault(Provider.OPENAI)
     }
-    private val openAiKey = {
-        (prefs.getString("openaiKey", DEFAULT_OPENAI_KEY)?.ifBlank { DEFAULT_OPENAI_KEY } ?: DEFAULT_OPENAI_KEY)
-            .filterNot { it == '\n' || it == '\r' || it == '\t' }.trim()
+    private val openAiKey = { RemoteConfig.resolve(prefs, "openaiKey", "remoteOpenaiKey", DEFAULT_OPENAI_KEY) }
+    private val openAiModel = {
+        prefs.getString("openaiModel", "")?.ifBlank { null }
+            ?: prefs.getString("remoteOpenaiModel", "")?.ifBlank { null } ?: "gpt-5.6-terra"
     }
-    private val openAiModel = { prefs.getString("openaiModel", "gpt-5.6-terra") ?: "gpt-5.6-terra" }
     // Esfuerzo de razonamiento del cerebro OpenAI: "low" acelera cada turno (recomendado para
     // computer-use). Tunable desde prefs: minimal (más rápido) … xhigh (más lento y minucioso).
     private val openAiEffort = { prefs.getString("openaiEffort", "low") ?: "low" }
@@ -391,6 +396,16 @@ class GraphApp : Application() {
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Ü"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
+        // PRESENTACIÓN OBLIGATORIA: antes de la primera ejecución, el usuario dice su nombre (una
+        // sola vez). Con él aparece su tarjeta en el panel Android del Provider Studio.
+        if (Telemetry.userName.isBlank()) {
+            val name = bubble?.ask("¡Hola! Soy Ü 😊 Antes de empezar, ¿cómo te llamas?")?.trim().orEmpty()
+                .filterNot { it == '\n' || it == '\r' }.take(60)
+            if (name.isBlank()) return "Necesito tu nombre para poder empezar"
+            prefs.edit().putString("userName", name).apply()
+            Telemetry.ensureUser(name)
+            voice.speak("¡Mucho gusto, $name! Dame un momento…")
+        }
         // Rotación de ventana de contexto: al superar el umbral se abre un hilo nuevo (la memoria
         // durable sobrevive). Solo aplica al empezar; no interrumpe nada en curso.
         if (conversationTokens >= maxContextTokens) {
@@ -429,7 +444,10 @@ class GraphApp : Application() {
                     "memoria). Si es una orden nueva, ejecútala."
         }
         synchronized(goalPrompts) { goalPrompts.clear(); goalPrompts.add(prompt.trim()) }
-        return running {
+        // Sesión de telemetría: el prompt y TODOS los logs de su ejecución viajan al panel
+        // Android del Provider Studio, con su desenlace (ok · error · cancelled) al cerrar.
+        val telemetryId = Telemetry.promptStarted(prompt.trim(), if (user != null) "burbuja" else "app")
+        val result = try { running {
             var summary = ""
             var round = 0
             // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
@@ -471,7 +489,15 @@ class GraphApp : Application() {
             // El amigo prevenido: ¿alguna acción de certeza total que convenga hacer justo ahora?
             anticipate(surface, service, user, summary)
             summary
+        } } catch (ce: CancellationException) {
+            Telemetry.promptFinished(telemetryId, "cancelled", ce.message ?: "detenida por el usuario")
+            throw ce
+        } catch (t: Throwable) {
+            Telemetry.promptFinished(telemetryId, "error", t.message ?: "error")
+            throw t
         }
+        Telemetry.promptFinished(telemetryId, "ok", result)
+        return result
     }
 
     /** Cadena de pensamiento breve al terminar → acción autónoma segura y/o aviso hablado. */
@@ -611,6 +637,18 @@ class GraphApp : Application() {
                 prefs.getString("neo4jUser", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_USER } ?: BuildConfig.DEFAULT_NEO4J_USER,
                 prefs.getString("neo4jPass", "")?.ifBlank { BuildConfig.DEFAULT_NEO4J_PASS } ?: BuildConfig.DEFAULT_NEO4J_PASS,
             )
+        }
+        // Config distribuida por el backend (keys de OpenAI/Gemini/Deepgram + defaults) y
+        // telemetría del panel Android del Provider Studio. Al arrancar y cada ~30 min.
+        Telemetry.init(prefs, runCatching {
+            packageManager.getPackageInfo(packageName, 0).versionName ?: ""
+        }.getOrDefault(""))
+        scope.launch(Dispatchers.IO) {
+            while (true) {
+                RemoteConfig.refresh(prefs)
+                Telemetry.userName.takeIf { it.isNotBlank() }?.let { Telemetry.ensureUser(it) }
+                kotlinx.coroutines.delay(30 * 60_000L)
+            }
         }
         scope.launch(Dispatchers.IO) {
             learnedTools.syncFromCloud()

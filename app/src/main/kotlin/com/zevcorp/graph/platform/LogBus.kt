@@ -22,6 +22,9 @@ object LogBus : GraphLog {
         if (buffer.size > 600) buffer.removeFirst()
         _lines.tryEmit(line)
         Log.d("Graph", "[$tag] $message")
+        // El mismo bus alimenta la telemetría: cada línea viaja (por lotes) al panel Android del
+        // Provider Studio, correlacionada con el prompt en curso. Encolar nunca bloquea ni lanza.
+        Telemetry.enqueue(tag, message)
     }
 
     @Synchronized

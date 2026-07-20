@@ -26,8 +26,10 @@ import kotlinx.serialization.json.jsonPrimitive
 
 /** Elige el transcriptor según configuración: Deepgram nova-3 si hay key, si no el del sistema. */
 fun defaultTranscriber(context: Context): Transcriber {
-    val key = com.zevcorp.graph.GraphApp.instance.prefs
-        .getString("deepgramKey", com.zevcorp.graph.GraphApp.DEFAULT_DEEPGRAM_KEY)?.trim().orEmpty()
+    // usuario → distribuida por el backend (graph_client_config) → horneada al compilar
+    val key = com.zevcorp.graph.platform.RemoteConfig.resolve(
+        com.zevcorp.graph.GraphApp.instance.prefs,
+        "deepgramKey", "remoteDeepgramKey", com.zevcorp.graph.GraphApp.DEFAULT_DEEPGRAM_KEY)
     return if (key.isNotBlank()) DeepgramTranscriber(key) else SystemTranscriber(context)
 }
 

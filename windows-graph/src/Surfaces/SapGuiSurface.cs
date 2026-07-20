@@ -14,7 +14,8 @@ namespace U.Graph.Surfaces;
 /// ENLACE TARDÍO A PROPÓSITO: todo el COM se llama por reflexión, sin referencia a sapfewse.ocx. Así
 /// este proyecto compila en máquinas sin SAP GUI (CI, el portátil de un dev) y la ausencia de SAP es
 /// un estado que se reporta, no un fallo de build. Además sobrevive mejor a los cambios de versión:
-/// el interop de C# se ha roto entre 7.40 → 7.70 → 8.0.
+/// el interop de C# se ha roto entre 7.40 → 7.70 → 8.0. El acceso arranca por el ProgID
+/// <c>SapROTWr.SapROTWrapper</c> (ver <see cref="RotWrapperProgIds"/>).
 ///
 /// LO QUE NO CONTROLAMOS: el scripting depende de que el Basis del cliente ponga el parámetro de
 /// perfil sapgui/user_scripting en TRUE (por defecto es FALSE) y de que el SAP GUI local lo permita.
@@ -88,13 +89,32 @@ public sealed class SapGuiSurface : IUiSurface
     }
 
     /// <summary>
+    /// ProgIDs candidatos del wrapper de la Running Object Table que envía SAP GUI (saprotwr.dll).
+    /// El registrado de verdad en SAP GUI for Windows es <c>SapROTWr.SapROTWrapper</c> — verificado
+    /// contra SAP GUI 8.00 x64 (CLSID {62341062-29BC-4DCE-A87A-DC0CB19BF230}). El nombre con "C"
+    /// (<c>CSapROTWrapper</c>) es el de la CLASE C++ interna y aparece en samples antiguos, pero NO es
+    /// un ProgID COM registrado: pedirlo devuelve null y hace que todo parezca "SAP no instalado". Se
+    /// prueban ambos por robustez entre versiones, el correcto primero.
+    /// </summary>
+    private static readonly string[] RotWrapperProgIds =
+    {
+        "SapROTWr.SapROTWrapper",   // el registrado de verdad (probado contra 8.00 x64)
+        "SapROTWr.CSapROTWrapper",  // nombre histórico/de clase C++, por si alguna versión lo registra
+    };
+
+    /// <summary>
     /// El motor de scripting, por la Running Object Table. Es el camino estándar desde .NET:
-    /// SapROTWr.CSapROTWrapper → GetROTEntry("SAPGUI") → GetScriptingEngine.
+    /// SapROTWr.SapROTWrapper → GetROTEntry("SAPGUI") → GetScriptingEngine.
     /// Devuelve null si SAP GUI no está corriendo (o no está instalado).
     /// </summary>
     private static object? ScriptingEngine()
     {
-        Type? wrapperType = Type.GetTypeFromProgID("SapROTWr.CSapROTWrapper");
+        Type? wrapperType = null;
+        foreach (string progId in RotWrapperProgIds)
+        {
+            wrapperType = Type.GetTypeFromProgID(progId);
+            if (wrapperType != null) break;
+        }
         if (wrapperType == null) return null; // saprotwr.dll no registrada → SAP GUI no instalado
 
         object? wrapper = Activator.CreateInstance(wrapperType);

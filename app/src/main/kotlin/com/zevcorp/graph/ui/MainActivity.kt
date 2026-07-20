@@ -69,10 +69,56 @@ class MainActivity : Activity(), UserChannel {
     private var updProgress: ProgressBar? = null
     private var latest: Release? = null
 
+    /**
+     * Popup OBLIGATORIO de presentación: pide el nombre una única vez (no se puede cerrar sin
+     * responder). Con él, el usuario aparece como tarjeta en el panel Android del Provider Studio
+     * y todos sus prompts/logs quedan atribuidos. Sale con prefs["userName"] + upsert en la nube.
+     */
+    private fun askUserName() {
+        val input = EditText(this).apply {
+            hint = "Tu nombre"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
+            setTextColor(Palette.text)
+            setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(dp(20), dp(16), dp(20), dp(4))
+            addView(TextView(this@MainActivity).apply {
+                text = "¡Hola! Soy Ü 😊\n¿Cómo te llamas?"
+                textSize = 17f
+                setTextColor(Palette.text)
+                setPadding(0, 0, 0, dp(12))
+            })
+            addView(input)
+        }
+        val dialog = AlertDialog.Builder(this)
+            .setView(body)
+            .setCancelable(false)
+            .setPositiveButton("Empezar", null) // listener manual: no cerrar si está vacío
+            .create()
+        dialog.setCanceledOnTouchOutside(false)
+        dialog.setOnShowListener {
+            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
+                val name = input.text.toString().trim().take(60)
+                if (name.isBlank()) { input.error = "Necesito tu nombre para empezar"; return@setOnClickListener }
+                app.prefs.edit().putString("userName", name).apply()
+                com.zevcorp.graph.platform.Telemetry.ensureUser(name)
+                dialog.dismiss()
+            }
+        }
+        dialog.show()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         builtWithMode = Palette.mode
         mode = app.prefs.getString(KEY_UI_MODE, MODE_CLOUD) ?: MODE_CLOUD
+        // Presentación obligatoria: sin nombre no se usa la app (su tarjeta en el panel Android
+        // del Provider Studio nace de aquí). También lo pide la burbuja si ejecutan antes de abrir.
+        if (com.zevcorp.graph.platform.Telemetry.userName.isBlank()) askUserName()
 
         // Vista principal: la textura de nubes viva (cielo animado + barra de nube). Pantalla propia,
         // a pantalla completa detrás de las barras del sistema para que el cielo llegue a los bordes.
