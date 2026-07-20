@@ -391,7 +391,8 @@ class GraphApp : Application() {
     /**
      * Pídele algo por texto o voz. Gemini 3.5 Flash lo ejecuta con el motor mixto. Si mientras
      * ejecuta llega otro audio (augmentExecution), se cancela y REINTERPRETA ambos prompts juntos.
-     * Al terminar, una cadena de pensamiento breve decide si anticipar una acción segura.
+     * Al terminar, una cadena de pensamiento breve decide si proponer una acción directa (o hacer
+     * una segura), solo si de verdad vale la pena.
      */
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Ü"
@@ -486,7 +487,7 @@ class GraphApp : Application() {
                 voice.narrate("Ok, lo ajusto sobre la marcha")
             }
             bubble?.showExecutionMic(false)
-            // El amigo prevenido: ¿alguna acción de certeza total que convenga hacer justo ahora?
+            // Proactivo: ¿hay UNA acción directa encadenada que valga la pena proponer/hacer ya?
             anticipate(surface, service, user, summary)
             summary
         } } catch (ce: CancellationException) {
@@ -500,20 +501,29 @@ class GraphApp : Application() {
         return result
     }
 
-    /** Cadena de pensamiento breve al terminar → acción autónoma segura y/o aviso hablado. */
+    /** Cadena de pensamiento breve al terminar → propuesta proactiva (offer) o acción autónoma segura. */
     private suspend fun anticipate(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, summary: String) {
         val request = synchronized(goalPrompts) { goalPrompts.joinToString(" · ") }
         // Coherente con la vía activa: sin subconsciente, la anticipación solo ve el MCP base.
         val availableLearned = if (subconsciousExecution) learnedTools.list() else emptyList()
         val tools = Mcp(service, AndroidSystemApi(service), availableLearned).tools.joinToString(", ") { it.name }
         val foresight = runCatching { anticipation.consider(request, summary, tools) }.getOrNull() ?: return
-        if (foresight.say.isNotBlank()) voice.speak(foresight.say)
-        if (foresight.task.isNotBlank()) {
-            LogBus.log("run", "🤝 acción anticipada: ${foresight.task}")
-            val goal = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de " +
-                "certeza total y le conviene): ${foresight.task}. Hazla de forma directa y para."
-            runCatching { newSession(surface, service, user, resume = false, maxTurns = 12).first.run(goal, announce = false) }
-                .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }
+        when (foresight.action) {
+            // Proactivo: propone la acción directa por voz y, si el usuario acepta ("sí, hazlo"),
+            // el hilo unificado la ejecuta EXACTAMENTE (consumePendingVoice → contexto "offer").
+            "offer" -> {
+                LogBus.log("run", "🙋 propongo tras ejecutar: ${foresight.question}")
+                voice.speak(foresight.question)
+                notePendingVoice("offer", foresight.app, foresight.question, foresight.task)
+            }
+            // Acción autónoma de certeza total (con cuentagotas): la hace directa y para.
+            "task" -> {
+                LogBus.log("run", "🤝 acción anticipada: ${foresight.task}")
+                val goal = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de " +
+                    "certeza total y le conviene): ${foresight.task}. Hazla de forma directa y para."
+                runCatching { newSession(surface, service, user, resume = false, maxTurns = 12).first.run(goal, announce = false) }
+                    .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }
+            }
         }
     }
 

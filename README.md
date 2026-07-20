@@ -121,9 +121,9 @@ El registro crea la cuenta al instante (sin confirmación por correo) vía la Ed
 
 Mientras el asistente ejecuta aparece un **micrófono casi invisible** abajo. Si le dices algo más, **no se encola**: se cancela el motor y se **reinterpretan todos los prompts juntos** (uno puede anular, modificar o ampliar al otro — decisión pura del LLM). `GraphApp.run` corre un bucle que reconstruye el objetivo con `buildGoal(prompts)` y relanza el motor cada vez que `augmentExecution` añade un audio.
 
-## El amigo prevenido (anticipación)
+## La anticipación proactiva
 
-Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay algo que hacer **justo ahora** para que lo pedido no se tropiece — como un amigo que se anticipa a los problemas. (Mindset **protector** de la acción recién ejecutada — p.ej. alarma puesta → subir el volumen. El mindset **propositivo** en tiempo real vive en el aprendizaje pasivo, arriba.) Ejecuta **de forma autónoma** solo acciones de **certeza total y seguras** (p.ej. tras poner una alarma, `set_volume alarm 100`); cualquier riesgo que no deba tocar por su cuenta lo deja como **aviso hablado**. Nunca envía mensajes, llama, compra ni nada irreversible.
+Al **terminar** una tarea, una cadena de pensamiento CORTÍSIMA (`Anticipation`) evalúa si hay **una acción directa** —el siguiente eslabón natural de lo que acaba de hacer— que le ahorre al usuario el próximo paso. El mindset es **proactivo, no miedoso**: en vez de advertencias precavidas de hipótesis lejanas (*"ten un cargador cerca porque gasta batería"*), **propone la acción concreta encadenada** con la tarea (*tras revisar cuántos datos quedan para compartir → "¿activo el compartir datos?"*) y, si el usuario acepta, la **ejecuta**. Su **default es callar**: solo habla cuando la recomendación es **claramente valiosa**, filtrada por un umbral de valor autoevaluado (`worth ≥ 0.30`) en vez de un contador fijo — así, en la práctica, solo interviene en ~3 de cada 10 ejecuciones. Sin sesgos por costumbre (no ofrece cambiar el volumen salvo que sea de verdad el paso obvio). Nunca envía mensajes, llama, compra ni nada irreversible por su cuenta.
 
 ## La burbuja flotante
 
