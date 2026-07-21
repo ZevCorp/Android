@@ -12,8 +12,28 @@ namespace U.WindowsClient;
 /// </summary>
 public sealed class Config
 {
-    public string BackendUrl { get; set; } = "https://u-windows-backend.vercel.app";
+    /// <summary>
+    /// URL del backend viejo (u-windows-backend). Se conserva como constante porque es la vía de
+    /// emergencia documentada: `set U_BACKEND_URL=https://u-windows-backend.vercel.app` y el cliente
+    /// vuelve al backend viejo (rutas /api/* + Bearer ClientToken) sin recompilar nada.
+    /// </summary>
+    public const string LegacyBackendUrl = "https://u-windows-backend.vercel.app";
+
+    /// <summary>
+    /// El cerebro ya no es el backend dedicado de Windows: es Graph, el backend central, que expone
+    /// las mismas rutas bajo /api/v1 (ver <see cref="Backend.BackendClient"/>). La auth también
+    /// cambia: X-API-Key de Graph (%APPDATA%\U\graph.json o env GRAPH_API_KEY) en vez del Bearer.
+    /// Emergencia: la variable de entorno U_BACKEND_URL pisa este valor (ver <see cref="Load"/>).
+    /// </summary>
+    public string BackendUrl { get; set; } = "https://graph-eight-pied.vercel.app";
+
+    /// <summary>
+    /// Token Bearer del backend VIEJO. Contra Graph no se usa (ahí manda la X-API-Key); solo viaja
+    /// cuando U_BACKEND_URL apunta de vuelta a u-windows-backend, para que la vuelta atrás funcione
+    /// sin configurar nada más.
+    /// </summary>
     public string? ClientToken { get; set; } = "e86d4ec981bba9889aaf69d5ac37a781db288bb2f0d22b0c";
+
     public string UserId { get; set; } = "anon";
 
     /// <summary>
@@ -37,13 +57,30 @@ public sealed class Config
 
     public static Config Load()
     {
+        Config cfg;
         try
         {
-            if (File.Exists(Path))
-                return JsonSerializer.Deserialize<Config>(File.ReadAllText(Path)) ?? new Config();
+            cfg = File.Exists(Path)
+                ? JsonSerializer.Deserialize<Config>(File.ReadAllText(Path)) ?? new Config()
+                : new Config();
         }
-        catch { }
-        return new Config();
+        catch
+        {
+            cfg = new Config();
+        }
+
+        // Migración silenciosa a Graph: los config.json guardados antes del cambio traen el backend
+        // viejo persistido, y sin esto ninguna instalación existente se movería sola. Solo se migra
+        // si es EXACTAMENTE el default viejo: una URL puesta a mano en el panel Backend se respeta.
+        if (string.Equals(cfg.BackendUrl?.TrimEnd('/'), LegacyBackendUrl, StringComparison.OrdinalIgnoreCase))
+            cfg.BackendUrl = "https://graph-eight-pied.vercel.app";
+
+        // Vía de emergencia: si Graph se cae o el port sale mal, `set U_BACKEND_URL=<url>` (p.ej. la
+        // LegacyBackendUrl de arriba) manda sobre lo persistido y sobre la migración, sin tocar disco.
+        string? fromEnv = Environment.GetEnvironmentVariable("U_BACKEND_URL");
+        if (!string.IsNullOrWhiteSpace(fromEnv)) cfg.BackendUrl = fromEnv.Trim();
+
+        return cfg;
     }
 
     public void Save()

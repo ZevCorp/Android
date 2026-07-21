@@ -15,8 +15,11 @@ namespace U.Graph;
 /// </summary>
 public sealed class GraphConfig
 {
-    /// <summary>Base del backend Graph. Sin barra final.</summary>
-    public string BaseUrl { get; set; } = "https://graph-five-orpin.vercel.app";
+    /// <summary>
+    /// Base del backend Graph. Sin barra final. El dominio viejo (graph-five-orpin) quedó degradado;
+    /// el deploy sano vive en graph-eight-pied. Sigue siendo sobreescribible por %APPDATA%\U\graph.json.
+    /// </summary>
+    public string BaseUrl { get; set; } = "https://graph-eight-pied.vercel.app";
 
     /// <summary>API key permanente. Viaja como X-API-Key en todas las rutas /api/v1.</summary>
     public string? ApiKey { get; set; }
@@ -48,6 +51,16 @@ public sealed class GraphConfig
         // La variable de entorno gana: permite instalar sin escribir la key en disco.
         string? fromEnv = Environment.GetEnvironmentVariable("GRAPH_API_KEY");
         if (!string.IsNullOrWhiteSpace(fromEnv)) cfg.ApiKey = fromEnv.Trim();
+
+        // Migración silenciosa: los graph.json guardados antes del cambio de dominio traen el deploy
+        // degradado (graph-five-orpin) persistido, y sin esto ninguna instalación existente se
+        // movería sola al deploy sano. Solo se toca el valor si es EXACTAMENTE el default viejo:
+        // una URL puesta a mano (p.ej. un entorno de pruebas) se respeta.
+        if (string.Equals(cfg.BaseUrl?.TrimEnd('/'), "https://graph-five-orpin.vercel.app",
+                StringComparison.OrdinalIgnoreCase))
+        {
+            cfg.BaseUrl = "https://graph-eight-pied.vercel.app";
+        }
 
         return cfg;
     }

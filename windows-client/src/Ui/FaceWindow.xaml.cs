@@ -60,7 +60,9 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
         SetMuted(_config.Muted); // si lo silenciaron en una sesión anterior, sigue mudo
 
         var mcp = new LocalMcp(_uia);
-        _backend = new BackendClient(_config);
+        // El backend es Graph: la credencial (X-API-Key) sale del MISMO GraphConfig que usa la
+        // ventana de workflows — una sola fuente de key para toda la app.
+        _backend = new BackendClient(_config, _graphConfig);
         _loop = new AgentLoop(_backend, _uia, mcp, this, this, InstalledApps.List);
 
         Header.MouseLeftButtonDown += (_, ev) => { if (ev.ButtonState == MouseButtonState.Pressed) DragMove(); };
@@ -310,9 +312,10 @@ public partial class FaceWindow : Window, IVoice, IUserChannel
         _config.BackendUrl = BackendUrl.Text.Trim();
         _config.ClientToken = string.IsNullOrWhiteSpace(ClientToken.Text) ? null : ClientToken.Text.Trim();
         _config.Save();
-        // Recablea el cliente con la nueva URL/token.
+        // Recablea el cliente con la nueva URL/token (el token solo aplica contra el backend viejo;
+        // contra Graph la key sale de graph.json).
         var mcp = new LocalMcp(_uia);
-        _backend = new BackendClient(_config);
+        _backend = new BackendClient(_config, _graphConfig);
         _loop = new AgentLoop(_backend, _uia, mcp, this, this, InstalledApps.List);
         SetStatus("Backend guardado");
     }

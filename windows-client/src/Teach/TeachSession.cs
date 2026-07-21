@@ -18,11 +18,11 @@ namespace U.WindowsClient.Teach;
 /// sube directo a Google y a Supabase con URLs firmadas de corta duración, que es lo mejor de los
 /// dos mundos.
 ///
-/// Flujo:
-/// 1. /api/teach/upload-token  → URL de subida a Gemini + URL de archivo (Supabase Storage)
+/// Flujo (rutas sin prefijo: BackendClient antepone /api/v1 contra Graph, /api contra el backend viejo):
+/// 1. /teach/upload-token  → URL de subida a Gemini + URL de archivo (Supabase Storage)
 /// 2. PUT del mp4 directo a Gemini (bytes, sin key) y también al archivo, para que lo veamos después
-/// 3. /api/teach/file-state en bucle → hasta que Gemini deja el video ACTIVE
-/// 4. /api/teach/process-video → el backend procesa con el prompt médico y guarda el conocimiento
+/// 3. /teach/file-state en bucle → hasta que Gemini deja el video ACTIVE
+/// 4. /teach/process-video → el backend procesa con el prompt médico y guarda el conocimiento
 /// 5. El mp4 y el resumen quedan además en el disco del usuario (VideoLibrary)
 /// </summary>
 public sealed class TeachSession : IAsyncDisposable
@@ -149,7 +149,7 @@ public sealed class TeachSession : IAsyncDisposable
 
         StatusChanged?.Invoke(this, "Preparando subida…");
         var token = await _backend.PostAsync<UploadTokenResponse>(
-            "/api/teach/upload-token", new UploadTokenRequest { ContentLength = length, UserId = _userId }, ct);
+            "/teach/upload-token", new UploadTokenRequest { ContentLength = length, UserId = _userId }, ct);
         if (token?.GeminiUploadUrl == null)
             throw new InvalidOperationException("el backend no devolvió URL de subida para Gemini");
         if (token.ArchiveError != null)
@@ -179,7 +179,7 @@ public sealed class TeachSession : IAsyncDisposable
 
         StatusChanged?.Invoke(this, "Analizando lo que enseñaste…");
         var result = await _backend.PostAsync<ProcessResult>(
-            "/api/teach/process-video", new ProcessRequest { FileUri = fileUri, UserId = _userId }, ct);
+            "/teach/process-video", new ProcessRequest { FileUri = fileUri, UserId = _userId }, ct);
         string summary = result?.Summary ?? "";
         LogBus.Log("teach", $"procesado: {result?.Notes?.Count ?? 0} nota(s). summary=\"{summary}\"");
 
@@ -233,7 +233,7 @@ public sealed class TeachSession : IAsyncDisposable
         for (int i = 0; i < 90; i++)
         {
             var res = await _backend.PostAsync<FileStateResponse>(
-                "/api/teach/file-state", new FileStateRequest { FileUri = fileUri }, ct);
+                "/teach/file-state", new FileStateRequest { FileUri = fileUri }, ct);
             string state = res?.State ?? "UNKNOWN";
 
             if (state == "ACTIVE") return;

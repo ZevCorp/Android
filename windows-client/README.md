@@ -32,7 +32,7 @@ src/
   SystemApi/WindowsSystemApi.cs ← launch app, URLs, correo, ajustes, volumen…
   SystemApi/InstalledApps.cs
   Mcp/LocalMcp.cs          ← registro nombre→ejecutor local (NO conoce descripciones ni prompts)
-  Backend/BackendClient.cs ← POST /api/agent/turn
+  Backend/BackendClient.cs ← POST /api/v1/agent/turn (Graph; /api/agent/turn si se vuelve al backend viejo)
   Agent/AgentLoop.cs       ← el bucle del cliente (gemelo de ExecutionEngine, cerebro remoto)
   Voice/VoiceIO.cs
   Update/Updater.cs        ← auto-update (Velopack); ver ../RELEASING-WINDOWS.md
@@ -63,9 +63,13 @@ dotnet build -c Release
 dotnet run -c Release
 ```
 
-Al abrir, despliega **Backend** en la carita y pon la URL de tu deploy de Vercel
-(`https://<tu-deploy>.vercel.app`) y, si configuraste `CLIENT_TOKEN`, el token. Guardar. Luego escribe
-o dicta lo que quieras (p.ej. *"abre el navegador y busca el clima"*).
+El backend es **Graph** (`https://graph-eight-pied.vercel.app`, ya por defecto) y la credencial es la
+API key de Graph (`miracle_…`): ponla en `%APPDATA%\U\graph.json` (campo `ApiKey`) o en la variable de
+entorno `GRAPH_API_KEY` — la misma que usa la ventana de workflows 🧭. Luego escribe o dicta lo que
+quieras (p.ej. *"abre el navegador y busca el clima"*).
+
+> **Emergencia:** `set U_BACKEND_URL=https://u-windows-backend.vercel.app` devuelve el cliente al
+> backend viejo (rutas `/api/*` + Bearer `ClientToken`) sin recompilar. Ver `src/Config.cs`.
 
 > **Verificación:** al no haber SDK de Windows en el entorno de construcción (Linux), el cliente se
 > entrega revisado a mano pero **sin compilar aquí**. El primer `dotnet build` debe correrse en Windows.
