@@ -103,6 +103,24 @@ class Mcp(
             listOf(McpParam("query", "Qué buscar"))) { system.webSearch(it.str("query")) },
         McpTool("open_url", "Abre una URL en el navegador.",
             listOf(McpParam("url", "URL http(s)"))) { system.openUrl(it.str("url")) },
+        McpTool("check_simit_fines", "Abre el portal OFICIAL de SIMIT (Sistema Nacional de Información " +
+            "de Comparendos de Tránsito, simit.org.co) para consultar comparendos/multas de tránsito en " +
+            "Colombia por cédula o placa. Úsala cuando el usuario pida revisar sus comparendos o multas, " +
+            "o evaluar si uno prescribió/caducó. Tras abrir, sigue con computer-use: busca por cédula o " +
+            "placa (pregunta con ask_user cuál usar si no lo sabes) y lee, de cada infracción, su ESTADO " +
+            "(comparendo/pendiente de resolución VS. resolución o multa YA en firme) y su FECHA. " +
+            "CONOCIMIENTO LEGAL para razonar (Código Nacional de Tránsito, Ley 769 de 2002; SIEMPRE " +
+            "aclara al usuario que esto NO es asesoría legal definitiva y que debe confirmarlo con el " +
+            "organismo de tránsito): la CADUCIDAD (art. 161) es de 1 año desde el hecho — si sigue como " +
+            "\"comparendo\" SIN resolución sancionatoria en firme pasado ese año, la autoridad pudo haber " +
+            "perdido la facultad de sancionar; la PRESCRIPCIÓN (art. 159) es de 3 años, pero aplica al " +
+            "COBRO de una multa que YA está en firme (otro escenario distinto). Ninguna de las dos opera " +
+            "sola en el portal: hay que ALEGARLA mediante un derecho de petición ante el organismo de " +
+            "tránsito que impuso el comparendo (NO ante SIMIT, que solo consulta). LÍMITES ESTRICTOS: " +
+            "JAMÁS pagues, envíes ni radiques ningún formulario/recurso/derecho de petición en nombre del " +
+            "usuario — es una gestión legal ante un tercero y debe hacerla él mismo. Solo informa lo que " +
+            "encontraste y, si lo pide, redacta el TEXTO del derecho de petición (por chat o con " +
+            "send_email/share_text) para que él lo revise y presente.")) { system.openUrl("https://www.simit.org.co/") },
         McpTool("open_maps", "Abre Maps en un lugar o búsqueda.",
             listOf(McpParam("query", "Lugar o búsqueda"))) { system.maps(it.str("query")) },
         McpTool("directions", "Abre la navegación hacia un destino.",

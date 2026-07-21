@@ -37,8 +37,11 @@ Dos familias, ambas declaradas en `core` (`Mcp`) con nombre, esquema de parámet
 | `open_camera` | `MediaStore.ACTION_IMAGE_CAPTURE` |
 | `open_settings` | `Settings.ACTION_*` por sección |
 | `share_text` · `set_clipboard` | `ACTION_SEND` / `ClipboardManager` |
+| `check_simit_fines` | `ACTION_VIEW` a simit.org.co + computer-use |
 
 Estas usan los **Common Intents de Android** — llamadas de sistema directas, no interacción con la pantalla. El modelo las prefiere sobre computer-use para tareas del sistema. Añadir una capacidad = añadir una entrada a `tools`.
+
+**Skill: comparendos SIMIT.** `check_simit_fines` abre el portal oficial de multas de tránsito colombianas y guía al modelo (vía la `description` de la herramienta, que es lo que el LLM lee como function-calling schema) para leer estado y fecha de cada infracción y razonar sobre caducidad (1 año, art. 161 Ley 769/2002) y prescripción (3 años, art. 159) — con la advertencia explícita de que no es asesoría legal definitiva. Límite estricto: nunca paga, envía ni radica nada por el usuario; el derecho de petición para alegar la caducidad debe presentarlo el usuario mismo ante el organismo de tránsito (SIMIT solo consulta).
 
 **Herramientas aprendidas** (capa de enseñanza): además, el asistente puede *crear* herramientas MCP nuevas enseñándole (ver abajo). Se ejecutan reproduciendo una secuencia de toques sobre el árbol de UI.
 
