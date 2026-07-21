@@ -5,6 +5,9 @@ import android.app.AlertDialog
 import android.content.Intent
 import android.content.res.ColorStateList
 import android.graphics.Color
+import android.graphics.Typeface
+import android.graphics.drawable.ColorDrawable
+import android.graphics.drawable.RippleDrawable
 import android.os.Bundle
 import android.provider.Settings
 import android.speech.RecognizerIntent
@@ -14,6 +17,7 @@ import android.view.View
 import android.view.WindowManager
 import android.widget.Button
 import android.widget.EditText
+import android.widget.FrameLayout
 import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.ScrollView
@@ -75,39 +79,78 @@ class MainActivity : Activity(), UserChannel {
      * y todos sus prompts/logs quedan atribuidos. Sale con prefs["userName"] + upsert en la nube.
      */
     private fun askUserName() {
+        // Estética fija (negro sólido "premium"), independiente del tema claro/oscuro de la app.
+        val black = 0xFF000000.toInt()
+        val white = 0xFFFFFFFF.toInt()
+        val dim = 0xFF8E9297.toInt()
+        val border = 0xFF262626.toInt()
+        val field = 0xFF161616.toInt()
+
         val input = EditText(this).apply {
-            hint = "Tu nombre"
+            hint = "Escribe tu nombre"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_FLAG_CAP_WORDS
-            setTextColor(Palette.text)
-            setHintTextColor(Palette.textDim)
-            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
-            setPadding(dp(12), dp(10), dp(12), dp(10))
+            setTextColor(white)
+            setHintTextColor(dim)
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            background = rounded(field, dp(14).toFloat(), border)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
+        }
+        val startBtn = Button(this).apply {
+            text = "Empezar"
+            isAllCaps = false
+            textSize = 15f
+            setTextColor(black)
+            typeface = Typeface.DEFAULT_BOLD
+            stateListAnimator = null
+            background = RippleDrawable(
+                ColorStateList.valueOf(Color.argb(40, 0, 0, 0)),
+                rounded(white, dp(14).toFloat()), null)
+            setPadding(dp(16), dp(14), dp(16), dp(14))
         }
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
-            setPadding(dp(20), dp(16), dp(20), dp(4))
+            background = rounded(black, dp(28).toFloat(), border)
+            setPadding(dp(24), dp(26), dp(24), dp(22))
             addView(TextView(this@MainActivity).apply {
-                text = "¡Hola! Soy Ü 😊\n¿Cómo te llamas?"
-                textSize = 17f
-                setTextColor(Palette.text)
-                setPadding(0, 0, 0, dp(12))
+                text = "Hola, soy Ü 👋"
+                textSize = 25f
+                setTextColor(white)
+                typeface = Typeface.DEFAULT_BOLD
+                letterSpacing = 0.01f
             })
-            addView(input)
+            addView(TextView(this@MainActivity).apply {
+                text = "¿Cómo te llamas?"
+                textSize = 15f
+                setTextColor(dim)
+                setPadding(0, dp(6), 0, dp(20))
+            })
+            addView(input, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT))
+            addView(startBtn, LinearLayout.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT).apply {
+                topMargin = dp(16)
+            })
+        }
+        // Margen lateral para que la tarjeta redondeada "flote" y no toque los bordes de la pantalla.
+        val root = FrameLayout(this).apply {
+            setPadding(dp(22), 0, dp(22), 0)
+            addView(body, FrameLayout.LayoutParams(
+                FrameLayout.LayoutParams.MATCH_PARENT, FrameLayout.LayoutParams.WRAP_CONTENT))
         }
         val dialog = AlertDialog.Builder(this)
-            .setView(body)
+            .setView(root)
             .setCancelable(false)
-            .setPositiveButton("Empezar", null) // listener manual: no cerrar si está vacío
             .create()
+        // Sin el chrome blanco del AlertDialog: solo se ve nuestra tarjeta negra redondeada.
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
         dialog.setCanceledOnTouchOutside(false)
-        dialog.setOnShowListener {
-            dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener {
-                val name = input.text.toString().trim().take(60)
-                if (name.isBlank()) { input.error = "Necesito tu nombre para empezar"; return@setOnClickListener }
-                app.prefs.edit().putString("userName", name).apply()
-                com.zevcorp.graph.platform.Telemetry.ensureUser(name)
-                dialog.dismiss()
-            }
+        startBtn.setOnClickListener {
+            val name = input.text.toString().trim().take(60)
+            if (name.isBlank()) { input.error = "Necesito tu nombre para empezar"; return@setOnClickListener }
+            app.prefs.edit().putString("userName", name).apply()
+            com.zevcorp.graph.platform.Telemetry.ensureUser(name)
+            dialog.dismiss()
         }
         dialog.show()
     }

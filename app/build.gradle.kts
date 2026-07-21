@@ -31,8 +31,8 @@ android {
         applicationId = "com.zevcorp.graph"
         minSdk = 30
         targetSdk = 35
-        versionCode = 37
-        versionName = "0.37"
+        versionCode = 42
+        versionName = "0.42"
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
         buildConfigField("String", "DEFAULT_DEEPGRAM_KEY", "\"$defaultDeepgramKey\"")
         buildConfigField("String", "DEFAULT_OPENAI_KEY", "\"$defaultOpenAiKey\"")
