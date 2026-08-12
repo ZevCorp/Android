@@ -57,6 +57,8 @@ class MainActivity : Activity(), UserChannel {
     private var cloudBar: View? = null
     /** La cara heroica arrastrable (portada) y el botón de activar permisos: solo sin accesibilidad. */
     private var heroFace: View? = null
+    /** El motor de movimiento de la cara heroica: el MISMO de la burbuja de accesibilidad. */
+    private var heroMotion: FaceMotion? = null
     private var accessBtn: View? = null
     /** Tema con el que se construyó esta pantalla: si cambia (desde la burbuja), se recrea. */
     private var builtWithMode = Palette.mode
@@ -151,6 +153,8 @@ class MainActivity : Activity(), UserChannel {
             app.prefs.edit().putString("userName", name).apply()
             com.zevcorp.graph.platform.Telemetry.ensureUser(name)
             dialog.dismiss()
+            // Lo siguiente que necesita saber de ti: a qué te dedicas.
+            maybeAskProfession()
         }
         dialog.show()
     }
@@ -161,7 +165,7 @@ class MainActivity : Activity(), UserChannel {
         mode = app.prefs.getString(KEY_UI_MODE, MODE_CLOUD) ?: MODE_CLOUD
         // Presentación obligatoria: sin nombre no se usa la app (su tarjeta en el panel Android
         // del Provider Studio nace de aquí). También lo pide la burbuja si ejecutan antes de abrir.
-        if (com.zevcorp.graph.platform.Telemetry.userName.isBlank()) askUserName()
+        if (com.zevcorp.graph.platform.Telemetry.userName.isBlank()) askUserName() else maybeAskProfession()
 
         // Vista principal: la textura de nubes viva (cielo animado + barra de nube). Pantalla propia,
         // a pantalla completa detrás de las barras del sistema para que el cielo llegue a los bordes.
@@ -1054,8 +1058,13 @@ class MainActivity : Activity(), UserChannel {
         }
         root.addView(bar, barLp)
 
-        // 5) Botón minimalista de configuración de VOZ, arriba-izquierda.
-        val voiceChip = buildVoiceChip(t)
+        // 5) Chips minimalistas arriba-izquierda: configuración de VOZ y la entrada a dictar.
+        val voiceChip = LinearLayout(this).apply {
+            orientation = LinearLayout.HORIZONTAL
+            addView(buildVoiceChip(t))
+            addView(View(this@MainActivity), LinearLayout.LayoutParams(dp(8), 1))
+            addView(buildDictateChip(t))
+        }
         val voiceLp = fp(-2, -2, Gravity.TOP or Gravity.START).apply { topMargin = dp(10); leftMargin = dp(16) }
         root.addView(voiceChip, voiceLp)
 
@@ -1106,8 +1115,57 @@ class MainActivity : Activity(), UserChannel {
         }
         block.addView(face, fp(dp(112), dp(112), Gravity.CENTER))
         floatY(face)
-        attachDrag(block) { heroListen(face) }
+        attachHeroMotion(block, face)
         return block
+    }
+
+    /**
+     * La cara de la portada se mueve EXACTAMENTE como la burbuja de accesibilidad: mismo arrastre
+     * con inercia, mismo lanzamiento de un lado a otro con aterrizaje al borde, mismo encogido de
+     * reposo y mismo paseo. No es un parecido: es el mismo motor (FaceMotion), y lo único que
+     * cambia es que aquí se mueve una vista dentro de la pantalla en vez de una ventana del sistema.
+     *
+     * Las coordenadas del motor son las de LA CARA (no las del bloque con su aura), para que al
+     * lanzarla aterrice pegada al borde igual que la burbuja y no flotando a media distancia.
+     */
+    private fun attachHeroMotion(block: View, face: View) {
+        // Origen de la cara dentro de la pantalla, ya con el bloque colocado por el layout.
+        fun homeX() = block.left + face.left
+        fun homeY() = block.top + face.top
+
+        val motion = FaceMotion(
+            context = this,
+            scope = scope,
+            size = { face.width.takeIf { it > 0 } ?: dp(112) },
+            bounds = {
+                // El padre se resuelve al vuelo: cuando se construye la cara todavía no está
+                // colgada de la portada.
+                val parent = block.parent as? View
+                val w = parent?.width?.takeIf { it > 0 } ?: resources.displayMetrics.widthPixels
+                val h = parent?.height?.takeIf { it > 0 } ?: resources.displayMetrics.heightPixels
+                w to h
+            },
+            place = { px, py ->
+                block.translationX = (px - homeX()).toFloat()
+                block.translationY = (py - homeY()).toFloat()
+            },
+            scale = { f -> block.scaleX = f; block.scaleY = f },
+            onTap = { heroListen(face) },
+        )
+        heroMotion = motion
+        // Hasta que no hay layout no se sabe dónde nació la cara: sin esto el primer arrastre daría
+        // un salto (el motor creería que está en 0,0).
+        block.addOnLayoutChangeListener(object : View.OnLayoutChangeListener {
+            override fun onLayoutChange(
+                v: View, l: Int, t2: Int, r: Int, b: Int, ol: Int, ot: Int, or2: Int, ob: Int
+            ) {
+                if (block.width == 0) return
+                block.removeOnLayoutChangeListener(this)
+                motion.placeAt(homeX(), homeY())
+                motion.attach(block)
+                motion.scheduleIdleShrink()
+            }
+        })
     }
 
     /** Toque en la cara heroica: CRECE (feedback de que está escuchando) y activa el micrófono. */
@@ -1118,27 +1176,6 @@ class MainActivity : Activity(), UserChannel {
             face.animate().scaleX(1f).scaleY(1f).setDuration(320).start()
             if (!heard.isNullOrBlank()) runPrompt(heard)
             else Toast.makeText(this, "No te escuché", Toast.LENGTH_SHORT).show()
-        }
-    }
-
-    /** Arrastre libre: mueve la vista siguiendo el dedo; un toque limpio (sin desplazamiento) es "click". */
-    private fun attachDrag(v: View, onTap: () -> Unit) {
-        val slop = android.view.ViewConfiguration.get(this).scaledTouchSlop
-        var offX = 0f; var offY = 0f; var downX = 0f; var downY = 0f; var moved = false
-        v.setOnTouchListener { view, e ->
-            when (e.actionMasked) {
-                android.view.MotionEvent.ACTION_DOWN -> {
-                    offX = e.rawX - view.translationX; offY = e.rawY - view.translationY
-                    downX = e.rawX; downY = e.rawY; moved = false; true
-                }
-                android.view.MotionEvent.ACTION_MOVE -> {
-                    view.translationX = e.rawX - offX; view.translationY = e.rawY - offY
-                    if (kotlin.math.hypot(e.rawX - downX, e.rawY - downY) > slop) moved = true
-                    true
-                }
-                android.view.MotionEvent.ACTION_UP -> { if (!moved) onTap(); true }
-                else -> false
-            }
         }
     }
 
@@ -1186,6 +1223,119 @@ class MainActivity : Activity(), UserChannel {
         setPadding(dp(22), dp(13), dp(22), dp(13))
         elevation = dp(6).toFloat()
         setOnClickListener { activateAll() }
+    }
+
+    /**
+     * Entrada a la experiencia de dictar: hablas y sale la información organizada. Para un médico
+     * es su nota clínica; para cualquier otra profesión, el reporte con SU formato. Si todavía no
+     * ha dicho a qué se dedica, primero se le pregunta.
+     */
+    private fun buildDictateChip(t: MiracleTheme): View = TextView(this).apply {
+        text = "Dictar"
+        textSize = 13f
+        setTextColor(t.pillText)
+        typeface = android.graphics.Typeface.DEFAULT_BOLD
+        gravity = Gravity.CENTER
+        background = rounded(t.pill, dp(20).toFloat(), t.border)
+        elevation = dp(4).toFloat()
+        setPadding(dp(16), dp(8), dp(16), dp(8))
+        setOnClickListener { openDictation() }
+    }
+
+    /** Pregunta la profesión una sola vez, al principio. Si ya la sabe, no molesta. */
+    private fun maybeAskProfession() {
+        if (app.prefs.getString(KEY_PROFESSION, "").isNullOrBlank()) askProfession()
+    }
+
+    /** Abre el dictado, o la configuración inicial si el usuario aún no está configurado. */
+    private fun openDictation() {
+        when (app.prefs.getString(KEY_PROFESSION, "")) {
+            PROFESSION_DOCTOR -> startActivity(Intent(this, NoteActivity::class.java))
+            PROFESSION_OTHER ->
+                if (app.prefs.getBoolean("organizerReady", false)) {
+                    startActivity(Intent(this, NoteActivity::class.java))
+                } else {
+                    startActivity(Intent(this, SetupActivity::class.java))
+                }
+            else -> askProfession()
+        }
+    }
+
+    /**
+     * LA BIFURCACIÓN: ¿médico u otra profesión? De ella depende con qué se organiza lo que dictes.
+     *
+     * Un médico entra directo: su formato de nota ya existe en el backend y es el mismo de la web.
+     * Cualquier otra profesión pasa por la configuración hablada, donde la carita le explica qué
+     * sabe hacer, le pregunta a qué se dedica y con eso se escribe SU formato.
+     */
+    private fun askProfession() {
+        val black = 0xFF000000.toInt()
+        val white = 0xFFFFFFFF.toInt()
+        val dim = 0xFF8E9297.toInt()
+        val border = 0xFF262626.toInt()
+
+        lateinit var dialog: AlertDialog
+        fun choose(profession: String) {
+            app.prefs.edit().putString(KEY_PROFESSION, profession).apply()
+            dialog.dismiss()
+            startActivity(Intent(
+                this,
+                if (profession == PROFESSION_DOCTOR) NoteActivity::class.java else SetupActivity::class.java
+            ))
+        }
+
+        val body = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            background = rounded(black, dp(28).toFloat(), border)
+            setPadding(dp(24), dp(26), dp(24), dp(22))
+            addView(TextView(this@MainActivity).apply {
+                text = "¿A qué te dedicas?"
+                textSize = 25f
+                setTextColor(white)
+                typeface = Typeface.DEFAULT_BOLD
+            })
+            addView(TextView(this@MainActivity).apply {
+                text = "Según lo que hagas, organizo distinto lo que me dictes."
+                textSize = 15f
+                setTextColor(dim)
+                setPadding(0, dp(6), 0, dp(20))
+            })
+        }
+        fun option(label: String, hint: String, primary: Boolean, onClick: () -> Unit) {
+            body.addView(LinearLayout(this).apply {
+                orientation = LinearLayout.VERTICAL
+                background = RippleDrawable(
+                    ColorStateList.valueOf(Color.argb(40, 0, 0, 0)),
+                    rounded(if (primary) white else 0xFF161616.toInt(), dp(14).toFloat(), border), null)
+                setPadding(dp(16), dp(14), dp(16), dp(14))
+                addView(TextView(this@MainActivity).apply {
+                    text = label
+                    textSize = 16f
+                    setTextColor(if (primary) black else white)
+                    typeface = Typeface.DEFAULT_BOLD
+                })
+                addView(TextView(this@MainActivity).apply {
+                    text = hint
+                    textSize = 13f
+                    setTextColor(if (primary) 0xFF4A4A4A.toInt() else dim)
+                })
+                setOnClickListener { onClick() }
+            }, LinearLayout.LayoutParams(-1, -2).apply { topMargin = dp(10) })
+        }
+        option("Soy médico", "Convierto la consulta en tu nota clínica.", primary = true) {
+            choose(PROFESSION_DOCTOR)
+        }
+        option("Otra profesión", "Te escucho un momento y armo tu formato.", primary = false) {
+            choose(PROFESSION_OTHER)
+        }
+
+        val root = FrameLayout(this).apply {
+            setPadding(dp(22), 0, dp(22), 0)
+            addView(body, FrameLayout.LayoutParams(-1, -2))
+        }
+        dialog = AlertDialog.Builder(this).setView(root).create()
+        dialog.window?.setBackgroundDrawable(ColorDrawable(Color.TRANSPARENT))
+        dialog.show()
     }
 
     /** Botón minimalista "Voz" (arriba-izquierda): misma píldora limpia que el resto de la portada. */
@@ -1473,6 +1623,7 @@ class MainActivity : Activity(), UserChannel {
     override fun onDestroy() {
         super.onDestroy()
         recognizer?.destroy(); recognizer = null
+        heroMotion?.destroy(); heroMotion = null
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -1514,5 +1665,9 @@ class MainActivity : Activity(), UserChannel {
         const val MODE_CLOUD = "cloud"
         const val MODE_USER = "user"
         const val MODE_DEV = "dev"
+        /** Médico u otra profesión: decide con qué se organiza lo que la persona dicta. */
+        const val KEY_PROFESSION = "profession"
+        const val PROFESSION_DOCTOR = "medico"
+        const val PROFESSION_OTHER = "otra"
     }
 }

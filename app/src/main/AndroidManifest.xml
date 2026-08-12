@@ -33,6 +33,20 @@
             </intent-filter>
         </activity>
 
+        <!-- Configuración inicial hablada de quien NO es médico: la carita explica qué sabe hacer,
+             escucha a qué se dedica la persona y con eso el backend escribe SU formato. -->
+        <activity
+            android:name=".ui.SetupActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
+        <!-- Dictar y que salga organizado: nota clínica para médicos, reporte con su propio
+             formato para cualquier otra profesión. -->
+        <activity
+            android:name=".ui.NoteActivity"
+            android:exported="false"
+            android:launchMode="singleTop" />
+
         <!-- Asistente del sistema: seleccionable en Ajustes → App de asistente digital;
              se invoca manteniendo oprimido el botón de encendido (o el gesto de assist). -->
         <activity

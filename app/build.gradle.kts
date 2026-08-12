@@ -72,4 +72,8 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // WebSocket para la Live API de Gemini (conversación hablada de ida y vuelta). El resto de la
+    // app habla HTTP con HttpURLConnection y no necesita nada; un WebSocket a mano sobre SSLSocket
+    // sí, y no vale la pena escribirlo.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

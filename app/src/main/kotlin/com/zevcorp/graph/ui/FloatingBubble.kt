@@ -6,7 +6,6 @@ import android.animation.AnimatorListenerAdapter
 import android.animation.ValueAnimator
 import android.content.Intent
 import android.view.animation.AccelerateInterpolator
-import android.view.animation.OvershootInterpolator
 import android.graphics.Color
 import android.graphics.PixelFormat
 import android.graphics.Typeface
@@ -19,7 +18,6 @@ import android.speech.SpeechRecognizer
 import android.speech.tts.TextToSpeech
 import android.view.Gravity
 import android.view.MotionEvent
-import android.view.VelocityTracker
 import android.view.View
 import android.view.WindowManager
 import android.widget.EditText
@@ -56,7 +54,54 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var panel: View? = null
     /** Momento del último autocierre por toque-fuera: evita que ese mismo toque en la carita reabra. */
     private var outsideCloseAt = 0L
-    private var dragAnimator: ValueAnimator? = null
+    /**
+     * EL MOVIMIENTO (arrastre con inercia, aterrizaje al borde, reposo y paseo) vive en FaceMotion,
+     * compartido con la carita de dentro de la app: las dos se mueven igual porque son el mismo
+     * código, no porque se parezcan. Aquí solo se dice CÓMO se aplica una posición — moviendo la
+     * ventana del overlay — y qué pasa al tocarla o al soltarla.
+     */
+    private val motion: FaceMotion by lazy {
+        FaceMotion(
+            context = service,
+            scope = scope,
+            size = { bubbleParams.width },
+            bounds = {
+                val m = service.resources.displayMetrics
+                m.widthPixels to m.heightPixels
+            },
+            place = { px, py ->
+                bubbleParams.x = px
+                bubbleParams.y = py
+                runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+                moveSpeechToBubble()
+            },
+            scale = { f -> bubble.scaleX = f; bubble.scaleY = f },
+            onTap = { onBubbleTouch() },
+            onDragTrack = { cx, cy -> voiceDock.track(cx, cy) },
+            onDragEnd = { _, _ ->
+                if (voiceDock.docked) {
+                    // El dedo se mantuvo 2.5 s en la esquina y la escucha ya arrancó: solo asienta
+                    // la burbuja en la esquina, sin volver a armar nada.
+                    snapToCorner(bubbleParams.width)
+                    true
+                } else {
+                    // Al SOLTAR el dedo se cancela cualquier cuenta pendiente: lanzar la burbuja a
+                    // la esquina (o soltarla ahí sin mantener) NO activa la voz. Solo el
+                    // arrastre-y-mantener 2.5 s la activa (lo maneja voiceDock.track en MOVE).
+                    voiceDock.cancel()
+                    false
+                }
+            },
+            // Con el cuadro de diálogo abierto se mantiene grande mientras lo usas.
+            busy = { panel != null },
+            canWander = {
+                val pm = service.getSystemService(android.os.PowerManager::class.java)
+                pm?.isInteractive == true &&
+                    !app.executing && !voiceDock.docked && !voiceDock.listening && panel == null
+            },
+        )
+    }
+
 
     // Gestos sobre la carita: 1 toque = menú (con leve retraso) · 2 = micrófono · 3 = tema.
     private var tapCount = 0
@@ -71,7 +116,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private val openAiTts by lazy { com.zevcorp.graph.voice.OpenAiTts(service) }
 
     /** Esquinas superiores = zona de encaje para el MODO REUNIÓN (escucha continua con cerebro). */
-    private val voiceDock by lazy {
+    private val voiceDock: VoiceDock by lazy {
         VoiceDock(service,
             setThinking = { bubble.thinking = it },
             narrate = ::narrate,
@@ -142,189 +187,46 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             y = service.resources.displayMetrics.heightPixels / 3
         }
         bubble.elevation = faceElevation() // sombra profunda que contrasta con el fondo (outline en FaceView)
-        attachDrag(size)
-        bubble.setOnClickListener {
-            when {
-                // Un toque lo calla: corta la voz (OpenAI o sistema) y esconde el globo.
-                tts?.isSpeaking == true || openAiTts.isPlaying -> {
-                    playTick()
-                    tts?.stop()
-                    openAiTts.stop()
-                    speechHide?.cancel()
-                    speech?.visibility = View.GONE
-                }
-                // Escucha en vivo de la ejecución: el toque a la burbuja la apaga.
-                execLive -> { playTick(); stopExecLive() }
-                // Durante la escucha por esquina: el toque termina la grabación y procesa.
-                voiceDock.listening -> { playTick(); voiceDock.stopNow() }
-                // Pequeña al inicio de la barra de la app: UN toque = sube grande y es el micrófono.
-                appDocked && atBar -> { playListenChime(); flyUpAndListen() }
-                // Estado normal: gestos por número de toques (1 menú · 2 micrófono · 3 tema).
-                else -> onBubbleTap()
-            }
-        }
+        motion.placeAt(bubbleParams.x, bubbleParams.y)
+        motion.attach(bubble)
         bubble.pivotX = size / 2f
         bubble.pivotY = size / 2f
         wm.addView(bubble, bubbleParams)
         scheduleIdleShrink()
     }
 
-    /* ---------- Reposo: la carita se encoge cuando llevas rato sin usarla ---------- */
-
-    private var idleJob: Job? = null
-    private var idleAnimator: ValueAnimator? = null
-    @Volatile private var shrunk = false
-    // Transición "dopamínica": encoge con un rebote suave y agranda con un pop marcado (overshoot).
-    private val idleEase = OvershootInterpolator(1.6f)
-    private val idleGrow = OvershootInterpolator(3.4f)
-
-    /** Reinicia el temporizador de reposo; si estaba encogida, la agranda de nuevo. */
-    private fun wake() {
-        if (appDocked) return // anclada a la app: su tamaño y posición los gobierna la app
-        wanderJob?.cancel()
-        if (shrunk) animateScale(1f, idleGrow)
-        scheduleIdleShrink()
-    }
-
     /**
-     * Reprograma el encogido de reposo. Por defecto ~15 s (dejó de usarla); tras SOLTARLA de un
-     * arrastre pasa un [delayMs] corto (~0.7 s) para que vuelva a pequeña casi de inmediato.
+     * Un toque en la carita. Qué significa depende de lo que esté pasando: callarla mientras habla,
+     * cortar una escucha en curso, o — en reposo — el gesto por número de toques.
      */
-    private fun scheduleIdleShrink(delayMs: Long = 15_000) {
-        if (appDocked) return
-        idleJob?.cancel()
-        idleJob = scope.launch {
-            delay(delayMs)
-            // Nunca se encoge con el cuadro de diálogo abierto: se mantiene grande mientras lo usas.
-            if (!shrunk && panel == null) { animateScale(0.56f, idleEase); startWander() }
-        }
-    }
-
-    /* ---------- Paseo en reposo: encogida, de vez en cuando cambia de sitio ---------- */
-
-    private var wanderJob: Job? = null
-
-    /**
-     * Muy de vez en cuando (tiempo ALEATORIO, entre 2 y 5 minutos) la carita encogida se pasea a
-     * otro punto del borde — señal sutil de vida. Solo con la pantalla ENCENDIDA (si está apagada
-     * no gasta nada: simplemente vuelve a sortear el próximo intento) y nunca mientras ejecuta,
-     * escucha o está anclada en una esquina.
-     */
-    private fun startWander() {
-        wanderJob?.cancel()
-        wanderJob = scope.launch {
-            val random = java.util.Random()
-            while (shrunk) {
-                delay(120_000L + (random.nextFloat() * 180_000L).toLong()) // 2–5 min, nunca exacto
-                if (!shrunk) break
-                val pm = service.getSystemService(android.os.PowerManager::class.java)
-                if (pm?.isInteractive != true) continue // pantalla apagada: no molestar ni gastar
-                if (app.executing || voiceDock.docked || voiceDock.listening || panel != null) continue
-                wanderOnce(random)
+    private fun onBubbleTouch() {
+        when {
+            // Un toque lo calla: corta la voz (OpenAI o sistema) y esconde el globo.
+            tts?.isSpeaking == true || openAiTts.isPlaying -> {
+                playTick()
+                tts?.stop()
+                openAiTts.stop()
+                speechHide?.cancel()
+                speech?.visibility = View.GONE
             }
+            // Escucha en vivo de la ejecución: el toque a la burbuja la apaga.
+            execLive -> { playTick(); stopExecLive() }
+            // Durante la escucha por esquina: el toque termina la grabación y procesa.
+            voiceDock.listening -> { playTick(); voiceDock.stopNow() }
+            // Pequeña al inicio de la barra de la app: UN toque = sube grande y es el micrófono.
+            appDocked && atBar -> { playListenChime(); flyUpAndListen() }
+            // Estado normal: gestos por número de toques (1 menú · 2 micrófono · 3 tema).
+            else -> onBubbleTap()
         }
     }
 
-    /** Un paseo: al borde opuesto (o el mismo, a veces) con altura aleatoria, animación lenta. */
-    private fun wanderOnce(random: java.util.Random) {
-        val m = service.resources.displayMetrics
-        val size = bubbleParams.width
-        val onLeft = bubbleParams.x + size / 2 < m.widthPixels / 2
-        val goLeft = if (random.nextFloat() < 0.75f) !onLeft else onLeft // casi siempre cruza
-        val destX = if (goLeft) 0 else m.widthPixels - size
-        val minY = service.dp(90)
-        val maxY = m.heightPixels - size - service.dp(140)
-        val destY = minY + (random.nextFloat() * (maxY - minY).coerceAtLeast(1)).toInt()
-        snapTo(destX, destY, dur = 1400, interp = idleEase)
-    }
+    /** Despierta la carita (la agranda y reinicia el reposo). Atajo sobre el motor. */
+    private fun wake() = motion.wake()
 
-    private fun animateScale(target: Float, interp: android.view.animation.Interpolator) {
-        shrunk = target < 0.99f
-        idleAnimator?.cancel()
-        val from = bubble.scaleX
-        idleAnimator = ValueAnimator.ofFloat(from, target).apply {
-            duration = if (target < from) 620 else 420
-            interpolator = interp
-            addUpdateListener { a ->
-                val f = a.animatedValue as Float
-                bubble.scaleX = f; bubble.scaleY = f
-            }
-            start()
-        }
-    }
+    private fun scheduleIdleShrink(delayMs: Long = 15_000) = motion.scheduleIdleShrink(delayMs)
 
-    /** Arrastre fluido con inercia: un flick corto la lanza a la esquina; siempre "aterriza" al borde. */
-    private fun attachDrag(size: Int) {
-        var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
-        var tracker: VelocityTracker? = null
-        bubble.setOnTouchListener { v, e ->
-            when (e.actionMasked) {
-                MotionEvent.ACTION_DOWN -> {
-                    wake() // tocarla/moverla la despierta y la agranda
-                    dragAnimator?.cancel()
-                    downX = e.rawX; downY = e.rawY; startX = bubbleParams.x; startY = bubbleParams.y; moved = false
-                    tracker = VelocityTracker.obtain().also { it.addMovement(e) }
-                }
-                MotionEvent.ACTION_MOVE -> {
-                    tracker?.addMovement(e)
-                    val dx = (e.rawX - downX).toInt(); val dy = (e.rawY - downY).toInt()
-                    if (moved || dx * dx + dy * dy > 120) {
-                        moved = true
-                        bubbleParams.x = startX + dx; bubbleParams.y = startY + dy
-                        runCatching { wm.updateViewLayout(bubble, bubbleParams) }
-                        voiceDock.track(bubbleParams.x + size / 2, bubbleParams.y + size / 2)
-                    }
-                }
-                MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!moved) v.performClick()
-                    else if (voiceDock.docked) {
-                        // El dedo se mantuvo 2.5 s en la esquina y la escucha ya arrancó: solo
-                        // asienta la burbuja en la esquina, sin volver a armar nada.
-                        snapToCorner(size)
-                    } else {
-                        // Al SOLTAR el dedo se cancela cualquier cuenta pendiente: lanzar la burbuja
-                        // a la esquina (o soltarla ahí sin mantener) NO activa la voz. Solo el
-                        // arrastre-y-mantener 2.5 s la activa (lo maneja voiceDock.track en MOVE).
-                        voiceDock.cancel()
-                        val vt = tracker
-                        vt?.addMovement(e); vt?.computeCurrentVelocity(1000)
-                        flingToEdge(size, vt?.xVelocity ?: 0f, vt?.yVelocity ?: 0f)
-                        // Al soltarla vuelve a pequeña casi de inmediato (~0.7 s), sin esperar los 15 s.
-                        scheduleIdleShrink(700)
-                    }
-                    tracker?.recycle(); tracker = null
-                }
-            }
-            true
-        }
-    }
-
-    /** Proyecta la velocidad (momentum) y anima hasta la esquina más cercana con rebote sutil. */
-    private fun flingToEdge(size: Int, vx: Float, vy: Float) {
-        val m = service.resources.displayMetrics
-        val maxX = m.widthPixels - size
-        val maxY = m.heightPixels - size
-        val projX = bubbleParams.x + vx * 0.12f
-        val projY = bubbleParams.y + vy * 0.12f
-        val destX = if (projX + size / 2 < m.widthPixels / 2) 0 else maxX
-        val destY = projY.toInt().coerceIn(service.dp(24), maxY - service.dp(24))
-        val speed = kotlin.math.hypot(vx.toDouble(), vy.toDouble()).toFloat()
-        val dur = (260 + (kotlin.math.hypot((destX - bubbleParams.x).toDouble(), (destY - bubbleParams.y).toDouble()) / (0.6f + speed / 4000f))).toLong().coerceIn(200, 620)
-        val fromX = bubbleParams.x; val fromY = bubbleParams.y
-        dragAnimator?.cancel()
-        dragAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = dur
-            interpolator = OvershootInterpolator(0.9f)
-            addUpdateListener { a ->
-                val f = a.animatedValue as Float
-                bubbleParams.x = (fromX + (destX - fromX) * f).toInt()
-                bubbleParams.y = (fromY + (destY - fromY) * f).toInt()
-                runCatching { wm.updateViewLayout(bubble, bubbleParams) }
-                moveSpeechToBubble()
-            }
-            start()
-        }
-    }
+    private fun snapTo(destX: Int, destY: Int, dur: Long = 220, interp: android.view.animation.Interpolator? = null) =
+        motion.snapTo(destX, destY, dur, interp)
 
     /** Asienta la burbuja en la esquina más cercana (solo visual; ya está en modo escucha). */
     private fun snapToCorner(size: Int) {
@@ -350,11 +252,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         rememberHome()
         appDocked = true
         atBar = false
-        wanderJob?.cancel()
-        idleJob?.cancel()
-        animateScale(1f, idleGrow)
+        motion.idleEnabled = false
+        motion.cancelIdle()
+        motion.animateScale(1f, motion.growInterpolator)
         val m = service.resources.displayMetrics
-        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 420, interp = idleGrow)
+        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 420, interp = motion.growInterpolator)
     }
 
     /** Vista principal: la carita se hace PEQUEÑA y se asienta al inicio de la barra de texto
@@ -364,12 +266,12 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         val first = !appDocked || !atBar
         appDocked = true
         atBar = true
+        motion.idleEnabled = false
         barDockX = cx - bubbleParams.width / 2
         barDockY = cy - bubbleParams.height / 2
-        wanderJob?.cancel()
-        idleJob?.cancel()
-        animateScale(BAR_SCALE, idleEase)
-        snapTo(barDockX, barDockY, dur = if (first) 420 else 200, interp = idleGrow)
+        motion.cancelIdle()
+        motion.animateScale(BAR_SCALE, motion.easeInterpolator)
+        snapTo(barDockX, barDockY, dur = if (first) 420 else 200, interp = motion.growInterpolator)
     }
 
     /** Sigue a la barra si se mueve (p.ej. sube con el teclado); no hace nada si está volando/mic. */
@@ -386,8 +288,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private fun flyUpAndListen() {
         atBar = false
         val m = service.resources.displayMetrics
-        animateScale(1f, idleGrow)
-        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 380, interp = idleGrow)
+        motion.animateScale(1f, motion.growInterpolator)
+        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 380, interp = motion.growInterpolator)
         scope.launch {
             delay(420) // deja aterrizar la carita antes de abrir el oído
             recognize { heard ->
@@ -406,8 +308,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private fun redockToBar() {
         if (!appDocked || barDockX < 0) return
         atBar = true
-        animateScale(BAR_SCALE, idleEase)
-        snapTo(barDockX, barDockY, dur = 320, interp = idleGrow)
+        motion.animateScale(BAR_SCALE, motion.easeInterpolator)
+        snapTo(barDockX, barDockY, dur = 320, interp = motion.growInterpolator)
     }
 
     /** La app volvió a segundo plano: la burbuja recupera su tamaño y regresa a donde estaba. */
@@ -415,7 +317,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         if (!appDocked) return
         appDocked = false
         atBar = false
-        animateScale(1f, idleGrow)
+        motion.idleEnabled = true
+        motion.animateScale(1f, motion.growInterpolator)
         // Si hay una ejecución en curso, no pelear con flyTo: el motor gobierna la posición.
         if (!app.executing && preAppDockX >= 0) snapTo(preAppDockX, preAppDockY, dur = 320)
         scheduleIdleShrink()
@@ -430,11 +333,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scope.launch {
             if (hidden) {
                 appDocked = false; atBar = false
-                wanderJob?.cancel(); idleJob?.cancel(); dragAnimator?.cancel()
+                motion.idleEnabled = true
+                motion.cancelIdle()
                 bubble.visibility = View.GONE
             } else if (bubble.visibility != View.VISIBLE) {
-                shrunk = false
-                bubble.scaleX = 1f; bubble.scaleY = 1f
+                motion.resetScale()
                 bubble.visibility = View.VISIBLE
                 scheduleIdleShrink()
             }
@@ -472,28 +375,9 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         runCatching { t.setSpeechRate(1.0f) }
     }
 
-    /** Animación de encaje hacia un punto (esquinas, regreso tras ejecutar, paseo en reposo). */
-    private fun snapTo(destX: Int, destY: Int, dur: Long = 220, interp: android.view.animation.Interpolator? = null) {
-        val fromX = bubbleParams.x; val fromY = bubbleParams.y
-        dragAnimator?.cancel()
-        dragAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
-            duration = dur
-            interp?.let { interpolator = it }
-            addUpdateListener { a ->
-                val f = a.animatedValue as Float
-                bubbleParams.x = (fromX + (destX - fromX) * f).toInt()
-                bubbleParams.y = (fromY + (destY - fromY) * f).toInt()
-                runCatching { wm.updateViewLayout(bubble, bubbleParams) }
-                moveSpeechToBubble()
-            }
-            start()
-        }
-    }
-
     fun destroy() {
         scope.cancel()
-        dragAnimator?.cancel()
-        idleAnimator?.cancel()
+        motion.destroy()
         voiceDock.destroy()
         tts?.shutdown()
         openAiTts.stop()
@@ -571,9 +455,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 interpolator = AccelerateInterpolator(1.7f)
                 addUpdateListener { a ->
                     val f = a.animatedValue as Float
-                    bubbleParams.x = (startX + (destX - startX) * f).toInt()
-                    bubbleParams.y = (startY + (destY - startY) * f).toInt()
-                    runCatching { wm.updateViewLayout(bubble, bubbleParams) }
+                    motion.placeAt(
+                        (startX + (destX - startX) * f).toInt(),
+                        (startY + (destY - startY) * f).toInt()
+                    )
                 }
                 addListener(object : AnimatorListenerAdapter() {
                     override fun onAnimationEnd(animation: Animator) { if (cont.isActive) cont.resume(Unit) }
@@ -761,7 +646,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         wm.addView(scroll, params)
         panel = scroll
         wake()            // asegura que la carita esté grande…
-        idleJob?.cancel() // …y no se encoja mientras el panel esté abierto
+        motion.cancelIdle() // …y no se encoja mientras el panel esté abierto
     }
 
     /** Toque fuera del panel: se cierra y el toque pasa al teléfono (marca la hora para no reabrir). */
@@ -820,11 +705,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
 
     /** Lleva la carita al centro superior desde cualquier posición (paseando, en una esquina, encogida). */
     private fun centerTop() {
-        wanderJob?.cancel()
-        idleJob?.cancel()
-        animateScale(1f, idleGrow)
+        motion.cancelIdle()
+        motion.animateScale(1f, motion.growInterpolator)
         val m = service.resources.displayMetrics
-        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 380, interp = idleGrow)
+        snapTo((m.widthPixels - bubbleParams.width) / 2, service.dp(150), dur = 380, interp = motion.growInterpolator)
     }
 
     /** Ejecuta un prompt con el motor mixto (Gemini computer-use + herramientas MCP). */

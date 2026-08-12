@@ -26,7 +26,8 @@ object RemoteConfig {
 
     private const val URL_CONFIG =
         "https://zyvfamlhlmztliexvmej.supabase.co/rest/v1/graph_client_config" +
-            "?id=eq.1&select=openai_key,gemini_key,deepgram_key,default_provider,default_openai_model,default_gemini_model"
+            "?id=eq.1&select=openai_key,gemini_key,deepgram_key,default_provider,default_openai_model," +
+            "default_gemini_model,miracle_api_base,miracle_api_key"
     private const val KEY = "sb_publishable_qroW231Ts7UYAEgr_f5cnQ_3SrW2ZrI" // publishable (cliente)
 
     private val json = Json { ignoreUnknownKeys = true }
@@ -51,6 +52,10 @@ object RemoteConfig {
                 .putString("remoteProvider", str("default_provider"))
                 .putString("remoteOpenaiModel", str("default_openai_model"))
                 .putString("remoteGeminiModel", str("default_gemini_model"))
+                // Backend Miracle (Graph): base y key con las que la app consume /api/v1 — la nota
+                // médica y el organizador de quien no es médico salen de ahí.
+                .putString("remoteMiracleBase", str("miracle_api_base"))
+                .putString("remoteMiracleKey", str("miracle_api_key"))
                 .apply()
             LogBus.log("config", "⚙ config del backend aplicada (proveedor ${str("default_provider")})")
         }.onFailure { LogBus.log("config", "⚙ sin config remota (uso el caché): ${it.message}") }
