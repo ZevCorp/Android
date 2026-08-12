@@ -1,6 +1,8 @@
 package com.zevcorp.graph.voice
 
 import android.content.Context
+import android.os.Handler
+import android.os.Looper
 import android.media.AudioAttributes
 import android.media.AudioFormat
 import android.media.AudioManager
@@ -106,6 +108,21 @@ class GeminiLive(
 
     private val userSaid = StringBuilder()
     private val assistantSaid = StringBuilder()
+
+    /**
+     * OkHttp llama a los métodos de WebSocketListener desde SU propio hilo lector, no el principal.
+     * Quien nos pasa `onAssistantText`/`onUserText`/`onSpeaking`/`onFinish` normalmente toca vistas
+     * ahí dentro (es lo natural: pintar la transcripción, animar la carita) — así que esas llamadas
+     * SIEMPRE se hacen desde el hilo principal, sin que cada consumidor tenga que acordarse. Si un
+     * callback tocara vistas desde el hilo de OkHttp, Android lanza CalledFromWrongThreadException;
+     * como eso ocurre DENTRO de un método de WebSocketListener, OkHttp lo toma como un fallo del
+     * listener y cierra la conexión — es decir, se vería como "se cayó la conexión" justo al hablar.
+     */
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private fun onMain(block: () -> Unit) {
+        if (Looper.myLooper() == Looper.getMainLooper()) block() else mainHandler.post(block)
+    }
 
     /**
      * Abre la conversación y SUSPENDE hasta que el modelo la cierra (llamando a [FINISH_TOOL]), o
@@ -246,7 +263,8 @@ class GeminiLive(
             }.toString())
             val args = obj["args"]?.jsonObject
             lastArgs = args
-            onFinish(args, handleFor(webSocket, cont))
+            val handleForFinish = handleFor(webSocket, cont)
+            onMain { onFinish(args, handleForFinish) }
         }
 
         val serverContent = message["serverContent"]?.jsonObject ?: return
@@ -254,26 +272,26 @@ class GeminiLive(
         // La persona habló encima: se corta el audio pendiente (barge-in).
         if (serverContent["interrupted"] != null) {
             runCatching { player?.pause(); player?.flush(); player?.play() }
-            onSpeaking(false)
+            onMain { onSpeaking(false) }
         }
 
         serverContent["outputTranscription"]?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull?.let {
             assistantSaid.append(it)
-            onAssistantText(it)
+            onMain { onAssistantText(it) }
         }
         serverContent["inputTranscription"]?.jsonObject?.get("text")?.jsonPrimitive?.contentOrNull?.let {
             userSaid.append(it)
-            onUserText(it)
+            onMain { onUserText(it) }
         }
 
         serverContent["modelTurn"]?.jsonObject?.get("parts")?.jsonArray?.forEach { part ->
             val inline = part.jsonObject["inlineData"]?.jsonObject ?: return@forEach
             val data = inline["data"]?.jsonPrimitive?.contentOrNull ?: return@forEach
-            onSpeaking(true)
+            onMain { onSpeaking(true) }
             play(Base64.decode(data, Base64.DEFAULT))
         }
 
-        if (serverContent["turnComplete"] != null) onSpeaking(false)
+        if (serverContent["turnComplete"] != null) onMain { onSpeaking(false) }
     }
 
     private fun handleFor(webSocket: WebSocket, cont: CancellableContinuation<Result>) = object : Handle {
