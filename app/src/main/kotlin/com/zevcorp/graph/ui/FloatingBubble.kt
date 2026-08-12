@@ -112,8 +112,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var speechHide: Job? = null
     private var tts: TextToSpeech? = null
     private var ttsReady = false
-    /** Voz de nueva generación (OpenAI); si está activa y hay key, reemplaza al TTS del sistema. */
-    private val openAiTts by lazy { com.zevcorp.graph.voice.OpenAiTts(service) }
+    /** La voz de Ü (Live API de Gemini); si está activa y hay key, reemplaza al TTS del sistema. */
+    private val geminiVoice by lazy { com.zevcorp.graph.voice.GeminiLiveVoice(service) }
 
     /** Esquinas superiores = zona de encaje para el MODO REUNIÓN (escucha continua con cerebro). */
     private val voiceDock: VoiceDock by lazy {
@@ -201,11 +201,11 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
      */
     private fun onBubbleTouch() {
         when {
-            // Un toque lo calla: corta la voz (OpenAI o sistema) y esconde el globo.
-            tts?.isSpeaking == true || openAiTts.isPlaying -> {
+            // Un toque lo calla: corta la voz (Gemini o sistema) y esconde el globo.
+            tts?.isSpeaking == true || geminiVoice.isPlaying -> {
                 playTick()
                 tts?.stop()
-                openAiTts.stop()
+                geminiVoice.stop()
                 speechHide?.cancel()
                 speech?.visibility = View.GONE
             }
@@ -380,7 +380,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         motion.destroy()
         voiceDock.destroy()
         tts?.shutdown()
-        openAiTts.stop()
+        geminiVoice.stop()
         soundPool.release()
         runCatching { wm.removeView(bubble) }
         panel?.let { runCatching { wm.removeView(it) } }
@@ -415,8 +415,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             moveSpeechToBubble()
             if (aloud) {
                 val clean = text.filter { it.code in 32..0x2FFF }
-                // Voz de nueva generación (OpenAI) si está elegida y hay key; si falla, TTS del sistema.
-                val spoke = runCatching { openAiTts.speak(clean) }.getOrDefault(false)
+                // La voz de Ü (Gemini Live) si está elegida y hay key; si falla, TTS del sistema.
+                val spoke = runCatching { geminiVoice.speak(clean) }.getOrDefault(false)
                 if (!spoke && ttsReady) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "graph")
             }
             speechHide?.cancel()

@@ -1425,13 +1425,13 @@ class MainActivity : Activity(), UserChannel {
     }
 
     /**
-     * Configuración de voz: voces NATURALES de OpenAI (nueva generación, muy humanas) o las del sistema
-     * (masculina/femenina). Aplica al instante y da una muestra hablada. Las voces de OpenAI usan la key
-     * del panel de Desarrollador; sin key, la muestra cae automáticamente a la voz del sistema.
+     * Configuración de voz: LA voz de Ü (Live API de Gemini — la misma que se oye en la
+     * configuración inicial) o la del sistema como respaldo. Aplica al instante y da una muestra
+     * hablada. La voz de Ü usa la key de Gemini (panel de Desarrollador); sin key, la muestra cae
+     * automáticamente a la voz del sistema.
      */
     private fun openVoiceSettings() {
-        val engine = app.prefs.getString("voiceEngine", "openai")
-        val oaVoice = app.prefs.getString("openaiVoice", "verse")
+        val engine = app.prefs.getString("voiceEngine", "gemini")
         val gender = app.prefs.getString("voiceGender", "male")
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1440,12 +1440,12 @@ class MainActivity : Activity(), UserChannel {
         }
         body.addView(title("Voz", 18f))
         body.gap(dp(4))
-        body.addView(caption("Elige cómo suena Miracle."))
+        body.addView(caption("Elige cómo suena Ü."))
         body.gap(dp(16))
         lateinit var dialog: AlertDialog
-        fun preview() { bubble()?.reapplyVoice(); bubble()?.speak("Hola, soy Miracle. Así sueno.") }
-        fun chooseOpenAi(v: String) {
-            app.prefs.edit().putString("voiceEngine", "openai").putString("openaiVoice", v).apply()
+        fun preview() { bubble()?.reapplyVoice(); bubble()?.speak("Hola, soy Ü. Así sueno.") }
+        fun chooseGeminiVoice() {
+            app.prefs.edit().putString("voiceEngine", "gemini").apply()
             preview(); dialog.dismiss()
         }
         fun chooseSystem(g: String) {
@@ -1453,19 +1453,15 @@ class MainActivity : Activity(), UserChannel {
             preview(); dialog.dismiss()
         }
         fun mark(active: Boolean, label: String) = if (active) "$label  ✓" else label
-        val oa = engine == "openai"
-        // Voces naturales de nueva generación (OpenAI).
-        listOf("verse" to "Verse", "coral" to "Coral", "sage" to "Sage").forEach { (id, name) ->
-            val on = oa && oaVoice == id
-            body.addView(button(mark(on, "Natural · $name"), primary = on) { chooseOpenAi(id) })
-            body.gap(dp(10))
-        }
-        // Voces del sistema (fallback sin key).
-        body.addView(button(mark(!oa && gender != "female", "Sistema · Masculina"), primary = !oa && gender != "female") { chooseSystem("male") })
+        val gemini = engine == "gemini"
+        body.addView(button(mark(gemini, "Voz de Ü"), primary = gemini) { chooseGeminiVoice() })
         body.gap(dp(10))
-        body.addView(button(mark(!oa && gender == "female", "Sistema · Femenina"), primary = !oa && gender == "female") { chooseSystem("female") })
+        // Voces del sistema (fallback sin key).
+        body.addView(button(mark(!gemini && gender != "female", "Sistema · Masculina"), primary = !gemini && gender != "female") { chooseSystem("male") })
+        body.gap(dp(10))
+        body.addView(button(mark(!gemini && gender == "female", "Sistema · Femenina"), primary = !gemini && gender == "female") { chooseSystem("female") })
         body.gap(dp(12))
-        body.addView(caption("Las voces Natural usan tu key de OpenAI (panel de Desarrollador). Sin key, suena la del sistema."))
+        body.addView(caption("La voz de Ü usa tu key de Gemini (panel de Desarrollador). Sin key, suena la del sistema."))
         dialog = AlertDialog.Builder(this).setView(body).create()
         dialog.window?.setBackgroundDrawableResource(android.R.color.transparent)
         dialog.show()

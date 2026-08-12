@@ -435,10 +435,12 @@ class GeminiLive(
         const val DEFAULT_MODEL = "gemini-3.1-flash-live-preview"
         const val DEFAULT_VOICE = "Orus"
         const val FINISH_TOOL = "configuracion_lista"
-        private const val ENDPOINT =
+        /** Compartido con GeminiLiveVoice: la síntesis de voz de todo el resto de la app usa el mismo socket. */
+        const val ENDPOINT =
             "wss://generativelanguage.googleapis.com/ws/google.ai.generativelanguage.v1beta.GenerativeService.BidiGenerateContent"
         /** La Live API recibe PCM de 16 kHz y devuelve PCM de 24 kHz. */
         private const val IN_RATE = 16_000
-        private const val OUT_RATE = 24_000
+        /** Compartido con GeminiLiveVoice. */
+        const val OUT_RATE = 24_000
     }
 }
