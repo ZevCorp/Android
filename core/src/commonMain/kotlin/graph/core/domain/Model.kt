@@ -120,7 +120,7 @@ class Mcp(
             "JAMÁS pagues, envíes ni radiques ningún formulario/recurso/derecho de petición en nombre del " +
             "usuario — es una gestión legal ante un tercero y debe hacerla él mismo. Solo informa lo que " +
             "encontraste y, si lo pide, redacta el TEXTO del derecho de petición (por chat o con " +
-            "send_email/share_text) para que él lo revise y presente.")) { system.openUrl("https://www.simit.org.co/") },
+            "send_email/share_text) para que él lo revise y presente.") { system.openUrl("https://www.simit.org.co/") },
         McpTool("open_maps", "Abre Maps en un lugar o búsqueda.",
             listOf(McpParam("query", "Lugar o búsqueda"))) { system.maps(it.str("query")) },
         McpTool("directions", "Abre la navegación hacia un destino.",
