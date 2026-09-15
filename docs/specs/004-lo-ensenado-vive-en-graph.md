@@ -1,8 +1,8 @@
 # Plan de implementación: lo enseñado vive en Graph — el protocolo y el cliente de aprendizaje
 
 Estado: **fase 4A1 implementada** (2026-09-14; promesas 401-406 verdes; cada una se vio ROJA con un
-sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · **fase 4A2 en rojo** (promesas
-407-412 escritas antes que su código) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
+sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · **fase 4A2 implementada** (promesas
+407-412 verdes; cada una se vio ROJA con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
 workflows en Graph · Rama: `yokh/aprendizaje-graph`
 
 Hoy el Android aprende solo: `ActiveLearning`, `GeminiLearning`, `GeminiWorkflow` y `WorkflowRepo`
@@ -113,6 +113,25 @@ código real, revertido con copia y sha256; cada uno rompió **solo** su promesa
 
 `./gradlew :app:compileReleaseKotlin -q` → exit 0 (con `GraphTransport.send`).
 
+### Verificación de la 4A2 (2026-09-14)
+
+El contrato nació rojo contra un esqueleto con `TODO()` (407-412 `⧗ PENDIENTE`, 1-15 y 401-406 intactas:
+`CONTRATO ROTO: 6 promesa(s) incumplida(s)`) y la implementación lo dejó en `CONTRATO INTACTO: 27 promesas.`
+Después, un sabotaje por promesa sobre `Leccion.kt` sin commitear, revertido con copia y sha256:
+
+| # | Sabotaje | Lo que dijo el juez |
+|---|---|---|
+| 407 | un paso que falla corta el lector | `el rechazo no cortó los de después expected:<[…/b1 … …/b6]> but was:<[…/b1, …/b2, …/b3]>`; solo la 407 |
+| 407 | cada paso en su propia corrutina | `dos llamadas viajaron a la vez expected:<1> but was:<7>`; rompe también la 409 y la 412: sin un lector único, ni la lección ni el descarte esperan a los pasos |
+| 408 | el fallo de `crearSesion` se traga y se enseña con una sesión inventada | `la key no vale: empezó a enseñar sin sesión` (`Ensenando` donde tocaba `NoSePuede`) |
+| 409 | la lección se escribe después del video y la nota | `la lección se escribió después de tocar la red del cierre: […, video, red …/context-notes, disco escribe lecciones/ses-1.json, red …/finish]` |
+| 410 | el cierre antes de la nota | `la nota viajó después de cerrar la sesión: [… …/steps, …/finish, …/context-notes]` |
+| 411 | una lectura agotada al cerrar deja pendiente | `la lectura agotada dejó un pendiente automático: [… cierres-pendientes/ses-2.json]` |
+| 411 | el `FinishPendiente` no se escribe | `el cierre que no salió no quedó en disco … expected:<1> but was:<0>` |
+| 412 | `descartar` llama a `terminar` | `descartada, siguió publicando … but was:<[…/sessions, …/steps, …/finish]>` |
+
+`./gradlew :app:compileReleaseKotlin -q --rerun` → exit 0. `app/` no se toca en esta fase.
+
 ---
 
 ## Las fases
@@ -157,6 +176,11 @@ Lo que deja en el almacén, un archivo por sesión (el id de sesión, escapado, 
 | `videos-por-reprocesar/<sesión>.json` | `sessionId`, `leccion`, `motivo`, `cuandoMs` | el video lanzó o no dejó nada |
 
 Pone verdes: **407-412**.
+
+**Abierto, del Capitán.** Descartar no llama a Graph, igual que Windows. Si Graph guarda los pasos al
+llegar —`PendingFinish.cs` dice que sí—, una demostración descartada deja en `GET /workflows` un workflow
+sin resumen con los pasos que alcanzaron a viajar. Borrarlo (`DELETE /workflows/{id}`) es borrar datos y
+cambia lo que el usuario ve en la lista: no se decidió aquí. Se mide en el Nivel 4 de 4C.
 
 ### Lo que viene (specs y fases propias, sobre este cliente)
 
