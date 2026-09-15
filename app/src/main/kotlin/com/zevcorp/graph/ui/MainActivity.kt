@@ -289,10 +289,13 @@ class MainActivity : Activity(), UserChannel {
         setup.addView(openaiInput)
         setup.gap(dp(8))
         // Graph (el cerebro remoto): la key y, si hace falta apuntar a otro despliegue, la URL base.
+        // El campo muestra solo la key que el usuario guardó, nunca la horneada: precargarla la
+        // guardaría como pref al tocar «Guardar keys», y la pref manda sobre la compilada, así que una
+        // key rotada en un APK futuro no ganaría nunca.
         val graphKeyInput = EditText(this).apply {
-            hint = "Graph API key (miracle_…)"
+            hint = "Graph API key (vacío = usa la del build)"
             inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
-            setText(app.prefs.getString("graphApiKey", GraphApp.DEFAULT_GRAPH_API_KEY))
+            setText(app.prefs.getString("graphApiKey", ""))
             setTextColor(Palette.text)
             setHintTextColor(Palette.textDim)
             background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
@@ -329,11 +332,13 @@ class MainActivity : Activity(), UserChannel {
         setup.addView(neoPassInput); setup.gap(dp(8))
         val setupRow = row()
         setupRow.addView(button("Guardar keys") {
+            val graphKey = graphKeyInput.text.toString().trim()
             app.prefs.edit()
                 .putString("apiKey", keyInput.text.toString().trim())
                 .putString("deepgramKey", deepgramInput.text.toString().trim())
                 .putString("openaiKey", openaiInput.text.toString().trim())
-                .putString("graphApiKey", graphKeyInput.text.toString().trim())
+                // Vacío borra la pref: vuelve a mandar la key del build.
+                .also { if (graphKey.isEmpty()) it.remove("graphApiKey") else it.putString("graphApiKey", graphKey) }
                 .putString("graphBaseUrl", graphUrlInput.text.toString().trim())
                 .putString("neo4jUri", neoUriInput.text.toString().trim())
                 .putString("neo4jUser", neoUserInput.text.toString().trim())

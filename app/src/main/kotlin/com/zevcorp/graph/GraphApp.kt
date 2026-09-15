@@ -679,6 +679,11 @@ class GraphApp : Application() {
         instance = this
         installCrashReporter()
         prefs = getSharedPreferences("graph", MODE_PRIVATE)
+        // El panel precargaba la key horneada de Graph y «Guardar keys» la dejaba como pref, que manda
+        // sobre la compilada: esa copia fijaría la key vieja aunque un APK futuro traiga otra. Una pref
+        // idéntica a la horneada no la eligió nadie: se retira y vuelve a mandar la del build.
+        if (DEFAULT_GRAPH_API_KEY.isNotEmpty() && prefs.getString("graphApiKey", "") == DEFAULT_GRAPH_API_KEY)
+            prefs.edit().remove("graphApiKey").apply()
         // Tema guardado (claro por defecto): cara y app en blanco/negro, sin azul.
         Palette.mode = runCatching { ThemeMode.valueOf(prefs.getString("theme", ThemeMode.LIGHT.name)!!) }
             .getOrDefault(ThemeMode.LIGHT)
