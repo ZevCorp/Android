@@ -1,6 +1,6 @@
 # Plan de implementación: el cerebro vive en Graph — Android pasa a ser cliente tonto
 
-Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · **promesa 12 verde** (2026-09-14; el hallazgo del Nivel 4, corregido y medido otra vez en el teléfono) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
+Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · **promesa 12 verde** (2026-09-14; el hallazgo del Nivel 4, corregido y medido otra vez en el teléfono) · **revisión R1: promesas 13-14 verdes y el juez endurecido** (2026-09-14; cada test nuevo se vio ROJO con un sabotaje real; la corrida en el teléfono va en R2) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
 habla con Graph · Rama: `yokh/cliente-graph`
 
 Hoy el Android piensa solo: `OpenAiBrain` y `GeminiBrain` (en `app/…/platform/`) arman el system
@@ -139,7 +139,9 @@ Lo que quedó, archivo por archivo:
   (una consulta por cerebro, compartida con los otros dos proveedores). Con `Falta`, `run()` no
   instancia el cerebro: loguea `[graph]`, lo dice por voz y devuelve la línea (promesa 9).
 - `app/…/platform/GraphTransport.kt` — el `TurnTransport` real: `HttpURLConnection`, 30 s conectar
-  / 5 min leer, cancelable (`disconnect()` al cancelar), cuerpo también en errores, status 0 sin red.
+  / 5 min leer, cancelable (`disconnect()` al cancelar), cuerpo también en errores, status 0 cuando no
+  conectó y -1 cuando conectó y la lectura se agotó (con `connect()` explícito, el timeout de conexión
+  solo salta ahí dentro), `Retry-After` en segundos, y la cancelación sale como cancelación (R1).
 - `app/…/ui/MainActivity.kt` — «Graph — cerebro remoto» en el selector de modelo; campos
   `graphApiKey` (password) y `graphBaseUrl` en el panel; «Guardar keys» los persiste.
 - `app/build.gradle.kts` — `graphApiKey` de `apikey.properties` o env `GRAPH_API_KEY` (la misma
@@ -233,10 +235,10 @@ sus keys horneadas. No se planifica aquí: se planifica cuando se haya medido.
 
 | Qué | Windows | Android | Por qué |
 |---|---|---|---|
-| Reintentos en HTTP transitorio | clasifica pero **no** reintenta | hasta **3** reintentos, espera 800 / 1600 / 3200 ms | la red móvil se cae al cambiar de celda o de wifi a datos; un 0 o un 503 casi siempre sale bien al segundo intento. En escritorio no vale la espera |
+| Reintentos en HTTP transitorio | clasifica pero **no** reintenta | hasta **3** reintentos, espera 800 / 1600 / 3200 ms (429 con `Retry-After`: eso, hasta 10 s), todo dentro de un tope de **6 min por turno**; una lectura agotada (-1) **no** se reintenta | la red móvil se cae al cambiar de celda o de wifi a datos; un 0 o un 503 casi siempre sale bien al segundo intento. En escritorio no vale la espera. La lectura agotada no, porque Graph pudo haber cobrado el turno |
 | `X-Miracle-App` | `windows_app` | `android_app` | atribución del consumo por plataforma |
 | `X-Miracle-Device-Id` | no viaja | viaja si existe | en el teléfono no hay "máquina": el id de dispositivo es lo que separa dos usuarios con el mismo email |
-| Superficie | `SurfaceLocator` (UIA) | `android://<paquete>` + `/<pantalla>` | mismo contrato (`surfaceId/Origin/Pathname`), distinta fuente |
+| Superficie | `SurfaceLocator` (UIA) | `android://<paquete>` + `/<pantalla>`; la pantalla en minúsculas, espacios → `-` y percent-encoding UTF-8 de lo que no es ascii (desde R1: antes se tiraba, y «设置» quedaba en `/`) | mismo contrato (`surfaceId/Origin/Pathname`), distinta fuente |
 | Modo legacy (`u-windows-backend`) | existe | **no** existe | el Android nunca habló con ese backend; no hay a qué volver |
 
 ---

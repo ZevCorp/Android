@@ -25,19 +25,21 @@ object AndroidSurface {
     private const val SEPARADOR = " · "
 
     /**
-     * Un título en forma de segmento de URL: minúsculas, sin acentos, espacios → `-`, y solo
-     * `[a-z0-9._~-]` (los "unreserved" de la RFC 3986). Así el id es comparable entre teléfonos
-     * aunque el título cambie de mayúsculas o de idioma de tilde.
+     * Un título en forma de segmento de URL: primero minúsculas y espacios → `-`; después, todo lo
+     * que no sea `[a-z0-9._~-]` (los "unreserved" de la RFC 3986) va en percent-encoding UTF-8. Nada
+     * se tira: «设置» o «Configurações» conservan cada letra, codificada, y el pathname se puede
+     * deshacer. Así el id es comparable entre teléfonos aunque el título cambie de mayúsculas.
      */
     private fun slug(titulo: String): String = titulo.lowercase()
-        .map { ACENTOS[it] ?: it }
-        .joinToString("")
         .replace(Regex("\\s+"), "-")
-        .filter { it in 'a'..'z' || it in '0'..'9' || it == '-' || it == '_' || it == '.' || it == '~' }
         .trim('-')
+        .encodeToByteArray()
+        .joinToString("") { byte ->
+            val b = byte.toInt() and 0xFF
+            val c = b.toChar()
+            if (b < 0x80 && (c in 'a'..'z' || c in '0'..'9' || c == '-' || c == '_' || c == '.' || c == '~')) c.toString()
+            else "%" + HEX[b shr 4] + HEX[b and 0xF]
+        }
 
-    private val ACENTOS = mapOf(
-        'á' to 'a', 'é' to 'e', 'í' to 'i', 'ó' to 'o', 'ú' to 'u', 'ü' to 'u', 'ñ' to 'n',
-        'à' to 'a', 'è' to 'e', 'ì' to 'i', 'ò' to 'o', 'ù' to 'u', 'ç' to 'c',
-    )
+    private const val HEX = "0123456789ABCDEF"
 }
