@@ -234,8 +234,8 @@ class Contrato003TopeYCuenta {
         run {
             val tel = Telefono(GUARDAR)
             val p = puerta(tel, Bitacora(), TopeDeIntentos(CELDA), conNodos = false)
-            p.telefono.tap(450, 850); p.telefono.tap(460, 860)
-            assertFalse(p.telefono.tap(470, 870), promesa(311))
+            p.telefono.tap(450, 820); p.telefono.tap(460, 830)                    // celda 3,5
+            assertFalse(p.telefono.tap(470, 840), promesa(311))
             assertTrue(p.telefono.tap(690, 990), promesa(311) + " · sin nodoEn no se usó la celda")
         }
 
@@ -245,7 +245,8 @@ class Contrato003TopeYCuenta {
             val p = puerta(tel, Bitacora(), TopeDeIntentos(CELDA))
             p.telefono.type(100, 310, "x"); p.telefono.type(110, 320, "x")
             assertFalse(p.telefono.type(120, 330, "x"), promesa(311) + " · el mismo punto pedido esquivó el tope")
-            assertTrue(p.telefono.type(1000, 430, "x"), promesa(311) + " · al escribir contó el nodo y no lo pedido")
+            p.telefono.type(1000, 430, "x")                                        // mismo nodo, otra celda pedida
+            assertEquals(3, tel.entradas.count { it == "type" }, promesa(311) + " · al escribir contó el nodo y no lo pedido")
         }
     }
 

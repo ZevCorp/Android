@@ -6,6 +6,8 @@ import graph.core.domain.Phone
 import graph.core.domain.ScreenState
 import graph.core.domain.SystemApi
 import graph.core.domain.UiPlayer
+import kotlinx.coroutines.CancellationException
+import kotlin.concurrent.Volatile
 
 /**
  * LA PUERTA ÚNICA AL TELÉFONO. Todo lo que toca la pantalla o lanza algo en el sistema entra por aquí:
@@ -21,6 +23,12 @@ import graph.core.domain.UiPlayer
  *  3. si no, delega en la superficie real.
  * Leer la pantalla (`state`) pasa siempre: mirar no es actuar.
  *
+ * DOS INTENTOS Y NO TRES (fase 3C, promesas 310-315). Con [tope], tocar, escribir y tocar por etiqueta
+ * consultan primero: si la tercera va a un destino que ya falló dos veces, no se toca el teléfono, se
+ * devuelve `false` y el log dice por qué. Si pasa: huella antes, se actúa, [asentar], huella después, y el
+ * resultado va al tope y a la [cuenta]. Las demás entradas solo cuentan como llamadas. Sin tope ni cuenta,
+ * la puerta es la de 3A.
+ *
  * Son cuatro vistas y no una clase que implemente las cuatro interfaces: `Phone.openApp` y
  * `SystemApi.openApp` tienen la misma firma y delegan en objetos distintos.
  *
@@ -34,14 +42,20 @@ class Puerta(
     private val system: SystemApi,
     private val player: UiPlayer? = null,
     private val log: GraphLog = GraphLog { _, _ -> },
-    /** Esqueleto de la fase 3C: todavía no se usan. */
+    /** El nodo vivo bajo un punto, el que se tocaría (3E). Sin él, el tope cuenta por celda de 48 dp. */
     private val nodoEn: ((Int, Int) -> NodoVivo?)? = null,
+    /** La huella de la pantalla CON los textos visibles de la ventana activa (3C). Sin ella no se juzga «cambió». */
     private val huella: (suspend () -> String)? = null,
+    /** Dos intentos y no tres por petición. Sin él, tocar y escribir pasan como en 3A. */
     private val tope: TopeDeIntentos? = null,
+    /** La medida de la petición: cada entrada que pasa el freno es una llamada. */
     private val cuenta: CuentaDePeticion? = null,
+    /** Espera a que la pantalla se asiente antes de la huella de después. Hoy no espera: lo cablea 3E, sin sleeps fijos. */
     private val asentar: suspend () -> Unit = {},
 ) {
-    private suspend fun pasa(accion: String, entra: suspend () -> Boolean): Boolean {
+    @Volatile private var dijeSinHuella = false
+
+    private suspend fun pasa(accion: String, vigilada: Vigilada? = null, entra: suspend () -> Boolean): Boolean {
         if (!freno.abierta) {
             log.log("puerta", "sin tarea abierta, no paso «$accion»")
             return false
@@ -50,13 +64,95 @@ class Puerta(
             log.log("puerta", "$PARASTE_TU, no paso «$accion»")
             throw Paraste(PARASTE_TU)
         }
-        return entra()
+        if (tope == null && cuenta == null) return entra()
+        val herramienta = accion.substringBefore(' ').substringBefore('(')
+        if (vigilada == null) {
+            cuenta?.llamada(herramienta)
+            return entra().also { cuenta?.resultado(herramienta, actuo = it) }
+        }
+        return vigila(accion, herramienta, vigilada, entra)
+    }
+
+    /** Tocar o escribir: lo que el tope vigila. [destino] se calcula antes de tocar. */
+    private class Vigilada(val escribe: Boolean, val destino: (TopeDeIntentos) -> TopeDeIntentos.Destino)
+
+    private suspend fun vigila(accion: String, herramienta: String, v: Vigilada, entra: suspend () -> Boolean): Boolean {
+        val t = tope
+        val destino = if (t != null) v.destino(t) else null
+        cuenta?.llamada(herramienta, if (t != null && destino != null) t.clave(destino) else "")
+        if (t != null && destino != null) {
+            t.rechazo(destino)?.let { porque ->
+                log.log("tope", "no paso «$accion»: $porque")
+                cuenta?.rechazada(herramienta)
+                return false
+            }
+        }
+        // Escribir se juzga por lo que devuelve la escritura: no hace falta leer la pantalla dos veces.
+        val antes = if (v.escribe) null else lee()
+        if (freno.pedido) {                                       // leer la huella lleva su rato
+            log.log("puerta", "$PARASTE_TU, no paso «$accion»")
+            throw Paraste(PARASTE_TU)
+        }
+        val dio = try {
+            entra()
+        } catch (e: CancellationException) {
+            throw e                                               // parar no es fallar
+        } catch (e: Exception) {
+            if (t != null && destino != null) t.despues(destino, TopeDeIntentos.Salida.Revento("reventó: ${e.message ?: e::class.simpleName}"))
+            cuenta?.resultado(herramienta, actuo = false)
+            throw e
+        }
+        val cambio = if (v.escribe || !dio || antes == null) null else {
+            asentar()
+            lee()?.let { it != antes }
+        }
+        val escribio = v.escribe && dio
+        if (t != null && destino != null) t.despues(destino, TopeDeIntentos.Salida.Intento(dio, escribio, cambio, queSalio(dio, escribio, cambio)))
+        cuenta?.resultado(herramienta, actuo = TopeDeIntentos.logro(dio, escribio, cambio) == true)
+        return dio
+    }
+
+    /** La huella, o `null` si no hay con qué juzgar. Sin huella lo dice una vez: el tope no frena por adivinar. */
+    private suspend fun lee(): String? {
+        val h = huella
+        if (h == null) {
+            if (!dijeSinHuella) {
+                dijeSinHuella = true
+                log.log("tope", "sin huella no juzgo si la pantalla cambió: un toque que se da no cuenta como fallo")
+            }
+            return null
+        }
+        return try {
+            h()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            log.log("tope", "no pude tomar la huella: ${e.message}")
+            null
+        }
+    }
+
+    private fun nodoVivoEn(x: Int, y: Int): NodoVivo? = try {
+        nodoEn?.invoke(x, y)
+    } catch (e: Exception) {
+        log.log("tope", "no pude leer el nodo en ($x,$y): ${e.message}; cuento por celda")
+        null
+    }
+
+    private fun queSalio(dio: Boolean, escribio: Boolean, cambio: Boolean?) = when {
+        !dio -> "no se dio"
+        escribio -> "escribió"
+        cambio == true -> "la pantalla cambió"
+        cambio == false -> "se dio y la pantalla no cambió"
+        else -> "se dio; sin huella no sé si cambió"
     }
 
     val telefono: Phone = object : Phone {
         override suspend fun state(withScreenshot: Boolean): ScreenState = phone.state(withScreenshot)
-        override suspend fun tap(x: Int, y: Int) = pasa("tap($x,$y)") { phone.tap(x, y) }
-        override suspend fun type(x: Int, y: Int, text: String) = pasa("type($x,$y)") { phone.type(x, y, text) }
+        override suspend fun tap(x: Int, y: Int) =
+            pasa("tap($x,$y)", Vigilada(escribe = false) { it.alTocar(x, y, nodoVivoEn(x, y)) }) { phone.tap(x, y) }
+        override suspend fun type(x: Int, y: Int, text: String) =
+            pasa("type($x,$y)", Vigilada(escribe = true) { it.alEscribirEn(x, y) }) { phone.type(x, y, text) }
         override suspend fun openApp(query: String) = pasa("open_app $query") { phone.openApp(query) }
         override suspend fun scroll(down: Boolean) = pasa("scroll ${if (down) "down" else "up"}") { phone.scroll(down) }
         override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long) =
@@ -96,6 +192,7 @@ class Puerta(
 
     /** Sin reproductor real, tocar por etiqueta no se puede: pasa por la puerta igual y devuelve `false`. */
     val reproductor: UiPlayer = object : UiPlayer {
-        override suspend fun tapLabel(label: String) = pasa("tap_label $label") { player?.tapLabel(label) == true }
+        override suspend fun tapLabel(label: String) =
+            pasa("tap_label $label", Vigilada(escribe = false) { TopeDeIntentos.Destino.Nombre(label) }) { player?.tapLabel(label) == true }
     }
 }
