@@ -43,13 +43,15 @@ class FinishPendiente(val sessionId: String, val workflowId: String, message: St
  *  - cabeceras: `X-API-Key`, `X-Miracle-App: android_app`, y el id de dispositivo y el email si existen; sin
  *    `X-Miracle-Feature`, salvo `/teach/…`, que va con la del puente consciente (promesa 402);
  *  - reintentos: los del cerebro ([enviarConReintentos]) dentro del tope de la llamada —90 s, o 5 min en
- *    `/teach/…`—; el cierre tiene su propio calendario, 3 intentos con 3 s y 8 s, cada uno con su tope; una
- *    lectura agotada nunca se reintenta (promesa 403);
+ *    `/teach/…`—; el cierre tiene su propio calendario, 3 intentos con 3 s y 8 s, cada uno con su tope (1 al
+ *    reintentar un pendiente al arrancar, 411); una lectura agotada nunca se reintenta (promesa 403);
  *  - errores: [GraphException] con el `error` de Graph y el status. Un `error` en un 2xx también termina la
  *    llamada, y un `""` no cuenta. Sin key no se llama a nadie. La cancelación sale tal cual;
- *  - lectura: una respuesta anidada a más de [PROFUNDIDAD_MAXIMA] niveles no se parsea y es [GraphException] (413);
+ *  - lectura: una respuesta anidada a más de [PROFUNDIDAD_MAXIMA] niveles no se parsea y es [GraphException], y un error
+ *    así no se vuelca en el mensaje: dice bytes (413);
  *    una lista o un plan sin su clave, también (416). Ningún log vuelca JSON de Graph: dice bytes o cuántos;
- *  - un id de workflow en blanco no llama a nadie: [IllegalArgumentException] con el porqué (415);
+ *  - un id de workflow en blanco no llama a nadie: [IllegalArgumentException] con el porqué; al alinear, `false` y el
+ *    porqué en el log (415);
  *  - el id de sesión o de workflow va SIEMPRE en la ruta, escapado: Graph guarda las sesiones en memoria de
  *    un serverless, y otra instancia no conoce una «sesión activa».
  */
@@ -108,26 +110,31 @@ class LearningClient(
     /**
      * Cierra la sesión: Graph post-procesa y persiste el workflow. Tres intentos con 3 s y 8 s entre ellos,
      * solo en transitorios (`WorkflowRecorder.cs:143`); cada intento con su propio tope, porque un 504 de
-     * Vercel tarda lo que tarda. Si los tres fallan, [FinishPendiente]. Una lectura agotada no se reintenta
+     * Vercel tarda lo que tarda. Si los [intentos] fallan, [FinishPendiente]. Una lectura agotada no se reintenta
      * y lanza [GraphException]: Graph pudo haber cerrado, y cobrado, la sesión.
+     *
+     * [intentos] baja a 1 para reintentar un cierre pendiente al arrancar, como Windows (`PendingFinish.cs:69`): los
+     * tres, con sus esperas y un post-procesado de LLM cada uno, se repetirían en cada arranque y para siempre.
      */
-    suspend fun terminar(sessionId: String, workflowId: String = sessionId): FinishResponse {
+    suspend fun terminar(sessionId: String, workflowId: String = sessionId, intentos: Int = CIERRE_INTENTOS): FinishResponse {
+        require(intentos in 1..CIERRE_INTENTOS) { "el cierre se intenta entre 1 y $CIERRE_INTENTOS veces, no $intentos" }
         val ruta = "${sesionRuta(sessionId)}/finish"
         var ultimo: GraphException? = null
-        for (intento in 1..CIERRE_INTENTOS) {
+        for (intento in 1..intentos) {
             try {
                 return leer(FinishResponse.serializer(), llamar("POST", ruta, "{}", reintentos = 0), ruta)
             } catch (e: GraphException) {
                 if (!e.transitorio) throw e
                 ultimo = e
-                log.log(TAG, "cierre de la grabación: intento $intento/$CIERRE_INTENTOS falló (HTTP ${e.status})")
-                if (intento < CIERRE_INTENTOS) sleep(CIERRE_ESPERAS_MS[intento - 1])
+                log.log(TAG, "cierre de la grabación: intento $intento/$intentos falló (HTTP ${e.status})")
+                if (intento < intentos) sleep(CIERRE_ESPERAS_MS[intento - 1])
             }
         }
         val status = ultimo?.status ?: TransportReply.NOT_CONNECTED
+        val tras = if (intentos == 1) "1 intento" else "$intentos intentos"
         throw FinishPendiente(
             sessionId, workflowId,
-            "graph no alcanzó a cerrar la grabación (HTTP $status) tras $CIERRE_INTENTOS intentos: los pasos ya están guardados; " +
+            "graph no alcanzó a cerrar la grabación (HTTP $status) tras $tras: los pasos ya están guardados; " +
                 "falta el resumen, y se completa sin volver a grabar" + (ultimo?.message?.let { " · $it" } ?: ""),
             status,
         )
@@ -176,15 +183,15 @@ class LearningClient(
     /**
      * Enseña al workflow a alcanzar su propia superficie: un paso de alineación en orden 0. Best-effort: si
      * falla, el workflow sigue igual y devuelve `false`, pero la causa queda en el log (Windows se la tragaba
-     * en un `catch { }`). Cancelar sale tal cual.
+     * en un `catch { }`). Un id en blanco tampoco llama a Graph: `false`, y el porqué en el log (415). Cancelar sale tal cual.
      */
     suspend fun prependAlignment(id: String): Boolean = try {
-        llamar("POST", "${workflowRuta(id)}/prepend-alignment", "{}")
+        llamar("POST", "${workflowRuta(conId(id, "alinear"))}/prepend-alignment", "{}")
         true
     } catch (e: CancellationException) {
         throw e
     } catch (e: Exception) {
-        log.log(TAG, "alinear $id falló (best-effort, el workflow sigue igual): ${e.message}")
+        log.log(TAG, "alinear «$id» falló (best-effort, el workflow sigue igual): ${e.message}")
         false
     }
 
@@ -278,14 +285,17 @@ class LearningClient(
         if (reply.status == TransportReply.TIMED_OUT)
             throw GraphException("graph no respondió a tiempo en $donde (${reply.body.ifBlank { "sin causa" }}); no se reintentó para no cobrar dos veces", reply.status)
         val error = errorDe(reply.body)
+        // Sin un `error` legible se cuenta un trozo del cuerpo; anidado de más, ni eso: sus bytes (413).
+        val enBytes = if (demasiadoAnidado(reply.body))
+            "respuesta de ${bytesUtf8(reply.body)} bytes anidada a más de $PROFUNDIDAD_MAXIMA niveles, no se lee" else null
         if (Reintentos.esTransitorio(reply.status)) {
             val cuando = if (envio.topado) "dentro del tope de ${Reintentos.corto(tope)} de la llamada, tras ${envio.intentos} intentos"
                 else "tras ${envio.intentos} intentos"
-            val causa = error ?: reply.body.trim().take(200).ifBlank { null }
+            val causa = error ?: enBytes ?: reply.body.trim().take(200).ifBlank { null }
             throw GraphException("graph no respondió (HTTP ${reply.status}) en $donde $cuando" + (causa?.let { ": $it" } ?: ""), reply.status)
         }
         if (reply.status !in 200..299)
-            throw GraphException(error?.let { "$it (HTTP ${reply.status} en $donde)" } ?: "graph HTTP ${reply.status} en $donde: ${reply.body.take(200)}", reply.status)
+            throw GraphException(error?.let { "$it (HTTP ${reply.status} en $donde)" } ?: "graph HTTP ${reply.status} en $donde: ${enBytes ?: reply.body.take(200)}", reply.status)
         if (error != null) throw GraphException("$error (HTTP ${reply.status} en $donde)", reply.status)
         return reply
     }
