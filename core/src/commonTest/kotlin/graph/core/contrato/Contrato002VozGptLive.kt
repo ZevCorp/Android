@@ -295,10 +295,13 @@ class Contrato002VozGptLive {
                 .filterIsInstance<Hecho.Pide>().singleOrNull()?.llamadas?.singleOrNull()
 
         val errorHondo = """{"type":"error","error":{"type":"invalid_request_error","code":"x_y","detalle":""" + "{\"a\":".repeat(998) + "1" + "}".repeat(998) + "}}"
+        // Los `{` DENTRO DE UNA LISTA también son niveles: medir solo los de una raíz objeto dejaba esto al parser.
+        val objetosEnLista = "[" + "{\"a\":".repeat(4000) + "1" + "}".repeat(4000) + "]"
         for ((que, hondo) in listOf(
             "«[» × 4000" to "[".repeat(4000),
             "de 4000 objetos" to """{"type":"response.event","event":""" + "{\"a\":".repeat(4000) + "1" + "}".repeat(4001),
             "error sin message de 1000 niveles" to errorHondo,
+            "de 4000 objetos dentro de una lista" to objetosEnLista,
         )) {
             assertEquals(emptyList<Hecho>(), sinReventar("el mensaje $que") { p.leer(hondo) }, promesa(203) + " · mensaje $que")
         }
@@ -307,6 +310,7 @@ class Contrato002VozGptLive {
         // comillas escapadas: medir el mensaje sin respetar textos y escapes lo daría por anidado y perdería la llamada.
         assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon("""{"a":${anidados(999)}}"""), promesa(203) + " · argumentos de 1000 niveles")
         assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon("[".repeat(4000)), promesa(203) + " · argumentos «[» × 4000")
+        assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon(objetosEnLista), promesa(203) + " · argumentos de 4000 objetos dentro de una lista")
         // El borde es el de U: 64 niveles se leen, 65 no.
         assertEquals(mapOf("a" to anidados(63)), pideCon("""{"a":${anidados(63)}}""")?.args, promesa(203) + " · 64 niveles se leen")
         assertEquals(emptyMap<String, String>(), pideCon("""{"a":${anidados(64)}}""")?.args, promesa(203) + " · 65 niveles ya no")
@@ -721,6 +725,19 @@ class Contrato002VozGptLive {
         for (aec in listOf(false, true)) for (sinEco in listOf(false, true)) {
             assertTrue(ModoDeCaptura.activa(forzada = true, aec = aec, sinCaminoDeEco = sinEco), promesa(215) + " · forzada con aec=$aec sinCaminoDeEco=$sinEco")
         }
+
+        // Y ESE ES EL DEFAULT DE LA CONVERSACIÓN: construida sin decir nada de la compuerta, el micrófono viaja idéntico
+        // aunque Ü esté sonando.
+        corre {
+            val v = Voz(aPelo = true)
+            val sala = vozDeLaSala()
+            v.guion(llega(sesionAbierta), hace {
+                v.sonando = true
+                v.conv.oirMicrofono(sala)
+            })
+            v.conv.conversar()
+            assertEquals(listOf(sala.toList()), v.audios().map { it.toList() }, promesa(215) + " · sin compuerta por defecto, lo que suena encima no se traga")
+        }
     }
 
     @Test
@@ -889,6 +906,9 @@ class Contrato002VozGptLive {
         /** Los envíos que fallan como si el socket hubiera muerto al mandarlos: no quedan en [enviados]. */
         var fallaAlEnviar: (String) -> Boolean = { false }
 
+        /** Los envíos en los que vence un `withTimeout` del adaptador: una cancelación que no es de la voz. No quedan en [enviados]. */
+        var vencenAlEnviar: (String) -> Boolean = { false }
+
         override suspend fun abrir(url: String, cabeceras: Map<String, String>): Apertura {
             urls += url
             this.cabeceras += cabeceras
@@ -906,6 +926,7 @@ class Contrato002VozGptLive {
         }
 
         override suspend fun enviar(texto: String) {
+            if (vencenAlEnviar(texto)) withTimeout(0) { awaitCancellation() }
             if (fallaAlEnviar(texto)) throw IllegalStateException("el socket murió al mandar")
             enviados += texto
         }
@@ -948,13 +969,18 @@ class Contrato002VozGptLive {
         """{"type":"error","error":{"type":"invalid_request_error","code":"$code","message":${JsonPrimitive(message)}}}"""
     private fun duracion(segundos: Double) = """{"type":"session.usage.updated","usage":{"seconds":$segundos}}"""
 
-    /** Una conversación entera sobre el canal con guion, con todo lo que toca grabado. El guion acaba deteniéndola. */
+    /**
+     * Una conversación entera sobre el canal con guion, con todo lo que toca grabado. El guion acaba deteniéndola.
+     * [aPelo] la construye sin NINGÚN parámetro con default —compuerta, pantalla, barge-in—, y entonces los de aquí no
+     * cuentan: lo que se juzga es el default de la clase.
+     */
     private inner class Voz(
         credencial: String? = clave,
         compuertaActiva: Boolean = false,
         ejecutor: suspend (Llamada) -> String = { "hecho: ${it.nombre}" },
         actuaEnPantalla: (String) -> Boolean = { true },
         bargeIn: Boolean? = null,
+        aPelo: Boolean = false,
     ) {
         /** La que devuelve `credencial()` en este momento: se puede rotar entre conexiones. */
         var credencialVigente = credencial
@@ -976,15 +1002,20 @@ class Contrato002VozGptLive {
 
         // El contrato común corre en el hilo único de `corre`: la voz se queda en él. El despachador de verdad lo juzga la 236.
         // SIN `bargeIn` LA BANDERA NO SE PASA: lo que se juzga «por defecto» es el default de la clase, no el de esta prueba.
-        val conv = if (bargeIn == null) {
-            ConversacionViva(
+        val conv = when {
+            aPelo -> ConversacionViva(
+                canal = canal, credencial = { credencialVigente }, instruccionesVoz = instruccionesVoz,
+                instruccionesDelegado = instruccionesDelegado, utensilios = utensilios, ejecutar = ejecutar, reproducir = reproducir,
+                callar = callar, sonando = { sonando }, dice = { dicho += it }, log = registrar, reloj = reloj,
+                hilo = EmptyCoroutineContext,
+            )
+            bargeIn == null -> ConversacionViva(
                 canal = canal, credencial = { credencialVigente }, instruccionesVoz = instruccionesVoz,
                 instruccionesDelegado = instruccionesDelegado, utensilios = utensilios, ejecutar = ejecutar, reproducir = reproducir,
                 callar = callar, sonando = { sonando }, dice = { dicho += it }, log = registrar, reloj = reloj,
                 compuertaActiva = compuertaActiva, actuaEnPantalla = actuaEnPantalla, hilo = EmptyCoroutineContext,
             )
-        } else {
-            ConversacionViva(
+            else -> ConversacionViva(
                 canal = canal, credencial = { credencialVigente }, instruccionesVoz = instruccionesVoz,
                 instruccionesDelegado = instruccionesDelegado, utensilios = utensilios, ejecutar = ejecutar, reproducir = reproducir,
                 callar = callar, sonando = { sonando }, dice = { dicho += it }, log = registrar, reloj = reloj,
@@ -1333,6 +1364,26 @@ class Contrato002VozGptLive {
         assertEquals(listOf("Te escucho.", "Se cortó un instante. Sigo, pero olvidé lo último que hablábamos."), delCanal.dicho, promesa(224))
         assertEquals(3, delCanal.decisiones().size, promesa(224) + " · ${delCanal.decisiones()}")
         assertEquals(1, delCanal.enLog("fin de la escucha por cancelación"), promesa(224) + " · la única cancelación es la de detener al final: ${delCanal.decisiones()}")
+
+        // EL MICRÓFONO TAMBIÉN RECIBE CANCELACIONES AJENAS. Un adaptador que vence su withTimeout al mandar un trozo lanza una
+        // CancellationException con la voz viva: el trozo se pierde con su línea en el log y oirMicrofono no la relanza, porque
+        // el bucle del micrófono que lo llama moriría callado.
+        val mic = Voz()
+        mic.canal.vencenAlEnviar = { json(it).texto("type") == "session.input_audio.append" }
+        mic.guion(
+            llega(sesionAbierta),
+            hace {
+                val oido = runCatching { repeat(2) { mic.conv.oirMicrofono(vozDeLaSala()) } }
+                assertNull(oido.exceptionOrNull(), promesa(224) + " · el micrófono no muere callado: ${oido.exceptionOrNull()}")
+                assertTrue(mic.conv.viva, promesa(224))
+            },
+            llega(sinHechos),
+        )
+        mic.conv.conversar()
+        assertEquals(1, mic.enLog("un trozo de micrófono no llegó al servidor: TimeoutCancellationException"), promesa(224) + " · una línea por motivo: ${mic.log}")
+        assertEquals(1, mic.canal.urls.size, promesa(224) + " · un trozo perdido no es un corte")
+        assertEquals(1, mic.decisiones().size, promesa(224) + " · ${mic.decisiones()}")
+        assertEquals(1, mic.enLog("fin de la escucha por cancelación"), promesa(224) + " · la de detener: ${mic.decisiones()}")
     }
 
     @Test
@@ -1625,6 +1676,49 @@ class Contrato002VozGptLive {
             deVuelta.tipos(), promesa(230) + " · en el modo de siempre la reapertura no manda append",
         )
         assertEquals(completas, deVuelta.enviados().last().delegado(), promesa(230))
+
+        // CAMBIAR DE MODO CON LA SESIÓN ABIERTA Y SIN CONFIRMAR. El session.start ya salió con el modo de antes: al confirmarse,
+        // el append solo dejaba a la voz en un modo y al delegado, con sus instrucciones y sus herramientas, en el otro.
+        val sinConfirmar = Voz()
+        sinConfirmar.guion(
+            hace { sinConfirmar.conv.cambiarModo(aprendiz, paraAprender, vuelve = false) },
+            llega(sinHechos),
+            hace { assertEquals(listOf<String?>("session.start"), sinConfirmar.tipos(), promesa(230) + " · sin confirmar no sale nada") },
+            llega(sesionAbierta),
+            llega(sinHechos),
+        )
+        sinConfirmar.conv.conversar()
+        assertEquals(
+            listOf<String?>("session.start", "session.update", "session.instructions.append"),
+            sinConfirmar.tipos(), promesa(230) + " · el start llevaba el modo de antes: al confirmar sale el cambio entero",
+        )
+        val (abrio, delegacion) = sinConfirmar.enviados()
+        assertEquals(completas, abrio.delegado(), promesa(230))
+        assertEquals(aprendiz, delegacion.delegado(), promesa(230) + " · el delegado también cambia de modo")
+        assertEquals(listOf<String?>("map_where_am_i"), delegacion.herramientas(), promesa(230) + " · con sus herramientas")
+        assertEquals(listOf<String?>(alCambiarDeModo + aprendiz), sinConfirmar.appends(), promesa(230))
+
+        // Y DE VUELTA: la reapertura salió en aprendiz y, antes de confirmarse, se vuelve al de siempre.
+        val alVolver = "VUELVES A TU MODO DE SIEMPRE. Lo anterior sobre el modo especial ya no manda; desde ahora mandan estas reglas:\n"
+        val vuelveSinConfirmar = Voz()
+        vuelveSinConfirmar.guion(
+            llega(sesionAbierta),
+            hace { vuelveSinConfirmar.conv.cambiarModo(aprendiz, paraAprender, vuelve = false) },
+            corte(),
+            hace { vuelveSinConfirmar.conv.cambiarModo(completas, deSiempre, vuelve = true) },
+            llega(sesionAbierta),
+            llega(sinHechos),
+        )
+        vuelveSinConfirmar.conv.conversar()
+        assertEquals(
+            listOf<String?>("session.start", "session.update", "session.instructions.append", "session.start", "session.update", "session.instructions.append"),
+            vuelveSinConfirmar.tipos(), promesa(230) + " · la reapertura salió en aprendiz y al confirmar vuelve entera al de siempre",
+        )
+        val deLaVuelta = vuelveSinConfirmar.enviados()
+        assertEquals(aprendiz, deLaVuelta[3].delegado(), promesa(230))
+        assertEquals(completas, deLaVuelta[4].delegado(), promesa(230) + " · el delegado no se queda en aprendiz toda la sesión")
+        assertEquals(listOf<String?>("pulsar"), deLaVuelta[4].herramientas(), promesa(230))
+        assertEquals(alVolver + persona, deLaVuelta[5].texto("content"), promesa(230) + " · y la voz vuelve a su persona")
     }
 
     @Test
@@ -1704,6 +1798,39 @@ class Contrato002VozGptLive {
         assertEquals("response.create", v.tipos().last(), promesa(232) + " · sin nada pendiente se pide la respuesta: ${v.tipos()}")
         assertEquals(1, v.enLog("usuario dijo: para eso, espera, hazlo y mira"), promesa(232) + " · el turno se cerró: ${v.log}")
         assertEquals(listOf("Te escucho."), v.dicho, promesa(232) + " · la voz no terminó ni dijo nada más")
+
+        // LA QUE CANCELA SU PROPIA CORRUTINA NO ES LA VOZ QUE TERMINA. En la pantalla se llevaba al obrero: la de detrás no
+        // corría, el turno no cerraba y los avisos esperaban a reconectar. En las de control se iba sin salida, y con un
+        // function_call huérfano el servidor rechaza cada response.create de la sesión: el delegado quedaba mudo.
+        for ((donde, enPantalla) in listOf("en la pantalla" to true, "de control" to false)) {
+            val s = Voz(actuaEnPantalla = { enPantalla }, ejecutor = {
+                if (it.id == "call_a") {
+                    currentCoroutineContext().cancel()
+                    awaitCancellation()
+                }
+                "hecho: ${it.id}"
+            })
+            s.guion(
+                llega(sesionAbierta),
+                hace { s.reloj.ms = 1_000 }, llega(usuario("pulsa dos veces")),
+                llega(pide("call_a", "pulsar")), llega(pide("call_b", "pulsar")),
+                llega(sinHechos),
+                hace { s.conv.avisar("la tarea terminó: pulsé dos veces") },
+                llega(sinHechos),
+                hace { s.reloj.ms = 5_000 }, llega(sinHechos),
+            )
+            val sola = runCatching { s.conv.conversar() }
+            assertNull(sola.exceptionOrNull(), promesa(232) + " · $donde: la voz terminó con ${sola.exceptionOrNull()}")
+            assertEquals(listOf("call_a", "call_b"), s.ejecutadas, promesa(232) + " · $donde: la de detrás corre")
+            val contestadas = s.salidas().associate { it.texto("item", "call_id") to it.texto("item", "output").orEmpty() }
+            assertEquals(setOf<String?>("call_a", "call_b"), contestadas.keys, promesa(232) + " · $donde: las dos se contestan, también la que se canceló sola: ${s.tipos()}")
+            assertTrue(contestadas["call_a"].orEmpty().startsWith("la herramienta se paró: "), promesa(232) + " · $donde: «${contestadas["call_a"]}»")
+            assertEquals("hecho: call_b", contestadas["call_b"], promesa(232) + " · $donde")
+            assertEquals(listOf<String?>("[aviso del sistema] la tarea terminó: pulsé dos veces"), s.textos(), promesa(232) + " · $donde: el aviso sale sin esperar a reconectar")
+            assertEquals("response.create", s.tipos().last(), promesa(232) + " · $donde: ${s.tipos()}")
+            assertEquals(1, s.enLog("usuario dijo: pulsa dos veces"), promesa(232) + " · $donde: el turno cierra: ${s.log}")
+            assertEquals(1, s.canal.urls.size, promesa(232) + " · $donde: sin reconectar")
+        }
 
         // SOLO TERMINAR LA CONVERSACIÓN LA CANCELA: la que corría no se contesta como si se hubiera parado sola, y la de
         // detrás no corre. Cancelada la corrutina, contestar sería actuar por una voz que ya no está.
@@ -1785,6 +1912,26 @@ class Contrato002VozGptLive {
         assertEquals(listOf<String?>("call_parar", "call_como", "call_mudo", "call_largo", "call_otro"), ids(), promesa(234))
         assertEquals(1, v.cuenta("response.create"), promesa(234) + " · ${v.tipos()}")
         assertEquals("response.create", v.tipos().last(), promesa(234))
+
+        // POR DEFECTO TODAS ACTÚAN EN LA PANTALLA: construida sin decir cuáles, ni «parar» se cruza con la que está actuando.
+        val soltar = CompletableDeferred<String>()
+        val sinCatalogo = Voz(aPelo = true, ejecutor = { if (it.id == "call_largo") soltar.await() else "hecho: ${it.nombre}" })
+        sinCatalogo.guion(
+            llega(sesionAbierta),
+            llega(pide("call_largo", "pulsar")),
+            llega(pide("call_parar", "parar")),
+            llega(sinHechos),
+            hace {
+                assertEquals(listOf("call_largo"), sinCatalogo.ejecutadas, promesa(234) + " · sin decir cuáles actúan en la pantalla, parar espera su turno")
+                assertTrue(sinCatalogo.salidas().isEmpty(), promesa(234))
+            },
+            hace { soltar.complete("pulsé") },
+            llega(sinHechos),
+            llega(sinHechos),
+        )
+        sinCatalogo.conv.conversar()
+        assertEquals(listOf("call_largo", "call_parar"), sinCatalogo.ejecutadas, promesa(234))
+        assertEquals(listOf<String?>("call_largo", "call_parar"), sinCatalogo.salidas().map { it.texto("item", "call_id") }, promesa(234) + " · en el orden en que llegaron")
     }
 
     @Test
@@ -1860,6 +2007,30 @@ class Contrato002VozGptLive {
         assertTrue(todo.all { it.length < 300 }, promesa(237) + " · recortado: ${todo.map { it.length }}")
         assertEquals(1, canalRoto.dicho.size, promesa(237))
         assertTrue(canalRoto.dicho.single().startsWith("No pude abrir la voz en vivo: IllegalStateException: TLS falló para "), promesa(237) + " · «${canalRoto.dicho.single()}»")
+
+        // UNA CLAVE CORTA Y SUELTA, sin «Bearer» delante y sin largo de token: la tapa su propia regla.
+        val claveSuelta = Voz()
+        claveSuelta.canal.lanzanAlAbrir[1] = IllegalStateException("la clave sk-abc123 no vale")
+        claveSuelta.conv.conversar()
+        assertTrue((claveSuelta.log + claveSuelta.dicho).none { "abc123" in it }, promesa(237) + " · ${claveSuelta.log + claveSuelta.dicho}")
+        assertEquals(listOf("No pude abrir la voz en vivo: IllegalStateException: la clave … no vale."), claveSuelta.dicho, promesa(237))
+
+        // LO QUE DICE EL SERVIDOR TAMBIÉN SE SANEA: repite los valores que se le mandaron y la cola de la clave, y el motivo de
+        // un cierre son hasta 123 B suyos. Al log llegan sin lo citado ni lo que tiene forma de clave, también en la decisión.
+        val eco = Voz()
+        eco.guion(
+            llega(sesionAbierta),
+            llega(fallo("invalid_value", "Invalid value: 'voz_que_no_existe'. Supported values are: 'marin'.")),
+            llega(fallo("", "Incorrect API key provided: sk-proj-****0000.")),
+            cierra(4000, "insufficient_quota.credit_balance_exhausted sk-proj-****0000 'voz_que_no_existe'"),
+        )
+        eco.conv.conversar()
+        val delServidor = eco.log.filter { "voz_que_no_existe" in it || "sk-proj" in it || "****0000" in it }
+        assertTrue(delServidor.isEmpty(), promesa(237) + " · lo que repite el servidor no llega al log: $delServidor")
+        assertEquals(1, eco.enLog("el servidor dice: Invalid value: «…». Supported values are: «…»."), promesa(237) + " · ${eco.log}")
+        assertEquals(1, eco.enLog("el servidor dice: Incorrect API key provided: …"), promesa(237) + " · ${eco.log}")
+        assertEquals(1, eco.enLog("el servidor cerró la conexión: 4000"), promesa(237) + " · ${eco.log}")
+        assertEquals(1, eco.enLog("fin de la escucha por cierre: no se reintenta, la cuenta no tiene crédito"), promesa(237) + " · ${eco.log}")
     }
 
     @Test
