@@ -63,7 +63,8 @@ internal fun medidaDe(e: Throwable): String = when {
  *  - reintentos: los del cerebro ([enviarConReintentos]) dentro del tope de la llamada —90 s, 5 min en
  *    `/teach/…` y [TOPE_DE_CONSULTA] al preguntar si una sesión ya se cerró, sin reintentos—; el cierre tiene su
  *    propio calendario, 3 intentos con 3 s y 8 s, cada uno con su tope (1 al reintentar un pendiente al arrancar,
- *    411); una lectura agotada nunca se reintenta (promesa 403);
+ *    411); una lectura agotada nunca se reintenta (promesa 403). `process-video` va una sola vez: Graph ya reintenta
+ *    contra Gemini (426);
  *  - errores: [GraphException] con el `error` de Graph y el status. Un `error` en un 2xx también termina la
  *    llamada, y un `""` no cuenta. Sin key no se llama a nadie. La cancelación sale tal cual;
  *  - lectura: una respuesta anidada a más de [PROFUNDIDAD_MAXIMA] niveles no se parsea y es [GraphException], y un error
@@ -204,9 +205,13 @@ class LearningClient(
         return estado.status.equals(ESTADO_CERRADA, ignoreCase = true) || estado.completedAt != null
     }
 
-    /** Borra un workflow. Si Graph dice 404, ya no existe: es lo que se pedía, cuenta como borrado. */
-    suspend fun borrar(id: String) {
-        val reply = llamar("DELETE", workflowRuta(conId(id, "borrar")), null, aceptados = setOf(404))
+    /**
+     * Borra un workflow. Si Graph dice 404, ya no existe: es lo que se pedía, cuenta como borrado. [unSoloIntento] quita los reintentos:
+     * lo usa el borrado de una demostración descartada (425), que es best-effort y en segundo plano.
+     */
+    suspend fun borrar(id: String, unSoloIntento: Boolean = false) {
+        val reintentos = if (unSoloIntento) 0 else Reintentos.MAX_REINTENTOS
+        val reply = llamar("DELETE", workflowRuta(conId(id, "borrar")), null, reintentos = reintentos, aceptados = setOf(404))
         if (reply.status == 404) log.log(TAG, "borrar $id: ya no existía (HTTP 404), cuenta como borrado")
     }
 
@@ -272,11 +277,19 @@ class LearningClient(
         return leer(FileStateResponse.serializer(), reply, ruta).state ?: "UNKNOWN"
     }
 
-    /** Lo que el video dejó. Van los pasos de ESTA demo, si hay; sin pasos, `steps` no viaja. */
+    /**
+     * Lo que el video dejó. Van los pasos de ESTA demo, si hay; sin pasos, `steps` no viaja.
+     *
+     * UNA SOLA LLAMADA por acción del usuario (426, decisión del Capitán): ni un 5xx, ni un 429, ni una lectura agotada, ni el tope la
+     * repiten. Graph ya reintenta adentro hasta 5 veces contra Gemini, y cada intento cuenta como consumo (`GeminiVideoClient.js:260-300`);
+     * con los reintentos del cerebro serían hasta 4 × 5 = 20 `generateContent`. Si falla, [GraphException] y quien llama deja el video
+     * para reprocesar a mano: nada lo reintenta solo, ni al arrancar.
+     */
     suspend fun processVideo(fileUri: String, userId: String, pasos: List<StepToRead> = emptyList()): ProcessResult {
         val ruta = "/api/v1/teach/process-video"
         val cuerpo = ProcessRequest(fileUri = fileUri, userId = userId, steps = pasos.ifEmpty { null })
-        val leido = leer(ProcessResult.serializer(), llamar("POST", ruta, LearningJson.encodeToString(ProcessRequest.serializer(), cuerpo), teach = true), ruta)
+        val reply = llamar("POST", ruta, LearningJson.encodeToString(ProcessRequest.serializer(), cuerpo), teach = true, reintentos = 0)
+        val leido = leer(ProcessResult.serializer(), reply, ruta)
         log.log(TAG, "video procesado: ${leido.notes?.size ?: 0} nota(s), interpretación ${if (leido.interpretation != null) "presente" else "AUSENTE"}")
         return leido
     }

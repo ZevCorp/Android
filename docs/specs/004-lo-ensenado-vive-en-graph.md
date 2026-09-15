@@ -81,6 +81,8 @@ otro en el mismo commit.
 | 422 | Mientras una lección se cierra, ningún arranque cierra su sesión: a Graph no le llega un paso ni una nota después de su finish. | 4A2 · Graph |
 | 423 | Lo que Graph responde de verdad se lee sin romperse: el workflow con sus variables en lista y sus fechas Neo4j, el plan con su eco y su contexto de ramas, y la alineación dice en el log si ya estaba o se aprendió. | 4A1 · Graph |
 | 424 | Dos arranques a la vez en el mismo proceso nunca reintentan el mismo cierre dos veces: mientras uno corre, el otro no llama a Graph ni toca el disco, y si el que corre se cancela, el siguiente arranque corre. | 4A2 · control |
+| 425 | Descartar una demostración que ya abrió sesión en Graph la borra allí con un solo DELETE en segundo plano: 2xx y 404 cuentan como hecho, otro fallo deja en el log solo el id y el status, sin sesión no se llama, y su cierre pendiente se borra antes, sin que ningún arranque la cierre después del DELETE. | 4A2 · Capitán (C) |
+| 426 | Procesar un video es una sola llamada por acción del usuario: ni un 5xx, ni un 429, ni una lectura agotada, ni el tope la repiten, y la lección cuyo video falla queda para reprocesar a mano, sin reintento al arrancar. | 4A1 · Capitán (F) |
 
 **La que cierra el asunto es la 401.** Si el protocolo no es el de Windows, Graph recibe algo que
 acepta con HTTP 200 y descarta en silencio (un `actionType` que no conoce, unos `alternativeTargets`
