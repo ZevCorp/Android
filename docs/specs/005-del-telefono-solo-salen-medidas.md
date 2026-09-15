@@ -90,7 +90,7 @@ caracteres`»; `p_status` ∈ {running, ok, error, cancelled} y `p_source` ∈ {
 | 503 | UUID, `#a1b2c3d4`, `celda:3,4`, `(120,300)`, `ses-1`, `call_…`, `/api/v1/workflows/wf-1` quedan; `wf-zorbax`, `#Zorbax12`, `com.whatsapp`, `3001234567` y una ruta con un segmento que es texto caen |
 | 504 | El JSON de `cuerpoDePedido` y `cuerpoDeUsuario` se parsea: claves exactas de la RPC, largos en vez de texto, estado y vía cerrados, id no UUID → `null`, y ningún secreto en el cuerpo |
 | 505 | El JSON de `filasDeLog`: cuatro claves por fila, mensaje igual a la puerta; líneas de la voz pasadas por `TelemetriaDeVoz.paraRemoto` y luego por la puerta conservan «`usuario dijo: N caracteres`»; `mensaje(mensaje(x)) == mensaje(x)`; 10 000 palabras salen en ≤ 4001 caracteres sin un `‹` abierto |
-| 506 | Los formatos literales de `yokh/precision` (`CuentaDePeticion.cerrar`, `TopeDeIntentos.enLog`, `Engine`, `ArmadoDeEjecucion`, `Puerta`) salen iguales o conservan su medida, su sello y su excepción |
+| 506 | Los formatos literales de `yokh/precision` (`CuentaDePeticion.cerrar`, `TopeDeIntentos.enLog`, `Engine`, `ArmadoDeEjecucion`, `Puerta`) salen iguales o conservan su medida, su sello y su excepción. Y, con precisión ya integrada, el código de verdad: `CuentaDePeticion` con `TopeDeIntentos.enLog` sobre un nodo sellado, una celda, un campo, un nombre y un nodo sin id deja líneas `peticion:` que pasan enteras; `Freno` y `ArmadoDeEjecucion` con un pedido que nombra a alguien conservan «(pedido de N caracteres)» y «ya hay una tarea en curso» sin un trozo de la persona |
 | 507 | Fuentes de `app` sin comentarios: cada `http(` de `Telemetry.kt` lleva un cuerpo `PuertaDeTelemetria.…(`; `Telemetry.kt` no nombra `Json…`, ni claves de la RPC, y abre una sola conexión; los miembros públicos de `Telemetry` son los siete; cada aparición de `Telemetry` fuera de su archivo es el import simple o uno de esos miembros; nadie más nombra las tablas; `LogBus` sigue guardando `line` entera |
 
 ### Sabotajes (cada uno pone roja su promesa)
@@ -103,6 +103,7 @@ caracteres`»; `p_status` ∈ {running, ok, error, cancelled} y `p_source` ∈ {
 | 504 | `p_prompt` viaja crudo | roja: el pedido sale |
 | 505 | `filasDeLog` pone el mensaje crudo | roja: el mensaje no es el de la puerta |
 | 506 | el sello pide 9 hex en vez de 8 | roja: el destino sellado cae |
+| 506 | `TopeDeIntentos.enLog` dice «etiqueta de N caracteres» (precisión cambia su formato; los casos literales siguen verdes) | roja: la línea real de peticion cae |
 | 507 | `promptStarted` vuelve a armar su JSON en `Telemetry.kt` | roja: un `http(` sin cuerpo de la puerta |
 
 ---

@@ -1,5 +1,10 @@
 package graph.core.contrato
 
+import graph.core.domain.GraphLog
+import graph.core.precision.ArmadoDeEjecucion
+import graph.core.precision.CuentaDePeticion
+import graph.core.precision.Freno
+import graph.core.precision.TopeDeIntentos
 import graph.core.telemetria.LineaDeLog
 import graph.core.telemetria.PuertaDeTelemetria
 import graph.core.voz.TelemetriaDeVoz
@@ -12,7 +17,10 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNotNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.TestTimeSource
 
 /**
  * DEL TELÉFONO SOLO SALEN MEDIDAS (docs/specs/005, promesas 501-506). Se juzga la puerta pura con las líneas reales de cada
@@ -291,5 +299,43 @@ class Contrato005SoloSalenMedidas {
         assertTrue(consciente.endsWith("(IllegalStateException)") && "consciente" in consciente, promesa(p) + " · workflow: $consciente")
         val etiquetaSellada = puerta.mensaje("✋ tercera entrada a «#9e8d7c6b» · 3 turnos · 4 acciones · 9s · no sigo")
         assertTrue(etiquetaSellada.endsWith("«#9e8d7c6b» · 3 turnos · 4 acciones · 9s · no sigo"), promesa(p) + " · motor: $etiquetaSellada")
+
+        // Y con el código de verdad de precisión: si su formato cambia, esto lo ve antes que el panel. El sello lleva la llave
+        // del proceso (8 hex al azar): de los secretos solo se buscan trozos que no pueden salir en hex.
+        val personas = arrayOf("Zorbax", "zorbax", "Qwyk", "qwyk")
+        val reloj = TestTimeSource()
+        val lineas = mutableListOf<String>()
+        val log = GraphLog { _, mensaje -> lineas += mensaje }
+        val topeReal = TopeDeIntentos(48)
+        val cuenta = CuentaDePeticion(reloj, log)
+        for (destino in listOf(
+            TopeDeIntentos.Destino.Nodo("a11y:id=com.whatsapp:id/send;cls=android.widget.Button;text=Enviar a Zorbax", "Enviar a Zorbax"),
+            TopeDeIntentos.Destino.Celda(3, 4),
+            topeReal.alEscribir("Teléfono de Zorbax"),
+            TopeDeIntentos.Destino.Nombre("Zorbax Qwyk"),
+            TopeDeIntentos.Destino.Nodo("a11y:text=Zorbax Qwyk", "Zorbax Qwyk"),
+        )) {
+            repeat(2) { cuenta.llamada("tap", topeReal.clave(destino), topeReal.enLog(destino)) }
+            reloj += 120.milliseconds
+            cuenta.resultado("tap", actuo = true)
+            val linea = assertNotNull(cuenta.cerrar(), promesa(p) + " · la cuenta no dejó línea")
+            assertEquals(linea, puerta.mensaje(linea), promesa(p) + " · la línea real de peticion pasa entera")
+            sinFuga(p, linea, *personas)
+        }
+        corre {
+            val armado = ArmadoDeEjecucion(Freno(log = log), log)
+            val pedido = "escríbele a Zorbax al 3009876542"
+            runCatching {
+                armado.correr(pedido) {
+                    runCatching { armado.correr("y a Qwyk también") { } }
+                    armado.parar("píldora de Zorbax")
+                }
+            }
+            val abierta = puerta.mensaje(assertNotNull(lineas.firstOrNull { it.startsWith("tarea abierta") }, promesa(p) + " · $lineas"))
+            assertTrue(abierta.endsWith("(pedido de ${n(pedido)} caracteres)"), promesa(p) + " · la medida del pedido al abrir: $abierta")
+            val rechazo = puerta.mensaje(assertNotNull(lineas.firstOrNull { it.startsWith("ya hay una tarea en curso") }, promesa(p) + " · $lineas"))
+            assertTrue(rechazo.startsWith("ya hay una tarea en curso: ") && rechazo.endsWith("(pedido de ${n("y a Qwyk también")} caracteres)"), promesa(p) + " · el rechazo: $rechazo")
+            for (l in lineas) sinFuga(p, puerta.mensaje(l), *personas, "3009876542")
+        }
     }
 }
