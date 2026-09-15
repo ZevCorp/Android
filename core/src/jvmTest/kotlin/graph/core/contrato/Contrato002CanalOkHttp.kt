@@ -8,7 +8,9 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
 import okhttp3.Response
@@ -214,14 +216,18 @@ class Contrato002CanalOkHttp {
             assertEquals("¿sigues?", oyente.recibidos.poll(TOPE_MS, TimeUnit.MILLISECONDS), "$p · el envío esperó a la escucha")
             assertEquals(Recibido.Mensaje("sigo"), aTiempo("la escucha que esperaba") { escucha.await() }, p)
 
-            // Esperas que se cancelan en plena llegada no se llevan ningún mensaje.
+            // Esperas que se cancelan en plena llegada no se llevan ningún mensaje. Lo leído se anota DENTRO de la corrutina,
+            // sin suspender entre recibir y anotar: con `withTimeoutOrNull` el tope puede vencer con el mensaje ya devuelto y
+            // tirarlo, y eso lo perdería el juez, no el canal.
             canal.enviar("ráfaga")
-            val leidos = mutableListOf<Recibido>()
+            val leidos: MutableList<Recibido> = Collections.synchronizedList(mutableListOf())
             val fin = System.nanoTime() + TOPE_MS * 1_000_000
             while (leidos.size < RAFAGA && System.nanoTime() < fin) {
-                withTimeoutOrNull(1) { canal.recibir() }?.let { leidos += it }
+                val espera = fuera.launch { leidos += canal.recibir() }
+                delay(1)
+                espera.cancelAndJoin()
             }
-            assertEquals(List<Recibido>(RAFAGA) { Recibido.Mensaje("r$it") }, leidos, "$p · con recibir cancelado a mitad se perdió o se desordenó algo")
+            assertEquals(List<Recibido>(RAFAGA) { Recibido.Mensaje("r$it") }, synchronized(leidos) { leidos.toList() }, "$p · con recibir cancelado a mitad se perdió o se desordenó algo")
         } finally {
             fuera.cancel()
             canal.cerrar("fin")
