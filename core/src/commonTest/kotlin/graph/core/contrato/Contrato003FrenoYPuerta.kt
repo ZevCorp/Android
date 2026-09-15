@@ -196,6 +196,9 @@ class Contrato003FrenoYPuerta {
 
     private class Reventon(mensaje: String) : Exception(mensaje)
 
+    /** Un `Error`, no una `Exception`: lo que lanza un TTS que no llegó a inicializarse. */
+    private class TtsSinIniciar : Error("el tts no se inició")
+
     /* ---------- Las promesas ---------- */
 
     @Test
@@ -527,6 +530,20 @@ class Contrato003FrenoYPuerta {
         assertFalse(freno.pedido, promesa(306) + " · el alto quedó echado tras reventar: el teléfono quedaría muerto")
         assertFalse(freno.abierta, promesa(306))
         assertEquals(listOf(LISTO), avisos.filter { it == LISTO }, promesa(306) + " · $avisos")
+
+        // Un aviso que revienta con un Error y no con una Exception (el TTS sin inicializar): ni tapa la causa de
+        // la tarea, ni impide soltar.
+        run {
+            val b = Bitacora()
+            val f = Freno(log = b, avisa = { throw TtsSinIniciar() })
+            val causa = assertFailsWith<Reventon>(promesa(306) + " · un aviso que revienta con un Error tapó la causa de la tarea") {
+                f.enTarea("con la voz rota") { f.pide("botón"); throw Reventon("la causa") }
+            }
+            assertEquals("la causa", causa.message, promesa(306))
+            assertFalse(f.abierta, promesa(306) + " · un aviso roto dejó la tarea abierta")
+            assertFalse(f.pedido, promesa(306) + " · un aviso roto dejó el alto echado")
+            assertEquals(2, b.lineas.count { it.startsWith("freno: no pude avisar") }, promesa(306) + " · ${b.lineas}")
+        }
 
         // Parada por la puerta dentro de la tarea: la Paraste sale tal cual y también suelta.
         val paraste = assertFailsWith<Paraste>(promesa(306)) {

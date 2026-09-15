@@ -56,6 +56,7 @@ el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato003FrenoYPu
 | 314 | Una petición nueva devuelve el tope a cero; un aviso del sistema o una llamada retirada no. | 3C |
 | 315 | Cada petición deja una línea `peticion:` con su medida; lo rechazado y lo retirado también cuentan; sin llamadas no se emite. | 3C |
 | 316 | Parar dentro de un paso consciente de un workflow para la corrida entera: el workflow no sigue con el paso siguiente. | 3B |
+| 319 | Pedir el alto al mismo tiempo que termina la tarea nunca deja el freno armado sin tarea ni hace nacer parada a la siguiente. | revisión 3A-3C |
 
 **La que cierra el asunto es la 301.** Es la que U no tiene: en U un freno sin `Empezar` es un
 freno que no frena y nadie se entera. Aquí una puerta sin tarea abierta no deja pasar nada y lo dice.
@@ -73,7 +74,7 @@ lo avanza en vez de dormir.
 | 303 | El `ExecutionEngine` real con la puerta como teléfono y MCP. (a) El alto se pide durante el primer `tap` de un turno de cuatro acciones: el teléfono graba un solo `tap`, gestos y sistema nada, el cerebro dio un solo turno, `run` devuelve «paraste: …» y se narra una sola vez, sin «¡Listo!». (b) El alto se pide dentro de `next`: ninguna entrada llega. (c) El alto se pide en la última acción de un turno: no se pide otro turno. (d) El alto se pide dentro de `next` y el turno trae una pregunta: no se dice ni se le pregunta a nadie. (e) Lo mismo con un turno `done`: no dice el resumen ni «¡Listo!», devuelve «paraste: …». (f) Un `Wait(3000)` del modelo con el alto a los 120 ms: `run` acaba en menos de 1 s. (g) Cancelar el trabajo que corre `run` propaga una cancelación que no es `Paraste` y no narra «Paré». La entrada rechazada lanza `Paraste` (tipo exacto) con el mensaje «paraste tú» |
 | 304 | `empezar` + `pide` ×10 → un aviso y una línea «freno: alto pedido (…); paro «…»». `termine()` → «Listo, tienes el control de vuelta.» una vez; otro `termine()` no lo repite; una tarea sin alto no lo dice |
 | 305 | `duerme(3000)` con reloj de prueba y el alto pedido a los 120 ms → devuelve `true`, pasó menos de 200 ms y ningún trozo pasó de 40 ms. Sin alto, `duerme(100)` devuelve `false` tras 100 ms en trozos `[40, 40, 20]`. Y con el reloj y la espera reales, un alto a los 120 ms corta un `duerme(3000)` antes de 1 s |
-| 306 | `enTarea { throw Reventon("revienta") }` (una excepción que no es cancelación, para que una `Paraste` no cuente como reventón) → sale tal cual, `abierta` y `pedido` son `false`. Con un alto pedido dentro también, y la frase de devolver el control se dice. Después, un `tap` por la puerta no pasa y lo dice el log. Anidada: `enTarea("exterior") { enTarea("paso consciente") { tap }; … }` → tras el bloque de dentro la tarea sigue abierta, el `tap` siguiente pasa y el alto arma |
+| 306 | `enTarea { throw Reventon("revienta") }` (una excepción que no es cancelación, para que una `Paraste` no cuente como reventón) → sale tal cual, `abierta` y `pedido` son `false`. Con un alto pedido dentro también, y la frase de devolver el control se dice. Después, un `tap` por la puerta no pasa y lo dice el log. Anidada: `enTarea("exterior") { enTarea("paso consciente") { tap }; … }` → tras el bloque de dentro la tarea sigue abierta, el `tap` siguiente pasa y el alto arma. Un `avisa` que lanza un `Error` (no una `Exception`, como un TTS sin inicializar) en el alto y al soltar: sale la causa de la tarea, el freno suelta y el log dice dos veces «no pude avisar» |
 | 307 | Lee `app/src/main/kotlin/**/*.kt` (se busca subiendo desde el directorio del test): ningún archivo construye `ExecutionEngine(`, `Mcp(`, `WorkflowRunner(` ni `Puerta(`; `ArmadoDeEjecucion(` y `Manos(` solo en `Ejecucion.kt`; ningún argumento `phone`/`gestures`/`player` recibe `service`/`ui`/`this`. Y `ArmadoDeEjecucion` puro con falsos crudos: sin tarea abierta, el motor, una herramienta MCP y el reproductor de workflows no llegan a ningún falso |
 | 308 | Fuentes: `StopReceiver` llama `Ejecucion.parar("notificación")`, la píldora de `FloatingBubble` `Ejecucion.parar("píldora")`, `stopExecution` `Ejecucion.parar("botón")`, y ningún archivo de la app cancela el trabajo de la corrida (`runJob`) ni llama `stopExecution` desde la píldora o la notificación. El cableado: `GraphApp.run` corre el motor dentro de `Ejecucion.correr` y mira `Ejecucion.sigue()` tras el motor, antes de reencaminar o anticipar; `Ejecucion.parar` pide el alto al armado y después, no en su lugar, `cortaSiNoSuelta`, sin `cancel`; `Ejecucion.correr` es `armado.correr`; y en la app hay un solo `Freno(`, en `Ejecucion.kt`. Puro: `parar` sin tarea no arma; dentro de `correr` arma el freno de esa tarea, tres órdenes distintas avisan una vez; y un turno de Graph colgado tras el alto se corta con `cortaSiNoSuelta` y la corrida termina como cancelación |
 | 309 | `ArmadoDeEjecucion` con `GraphBrain` real sobre un transporte guionado que cuenta requests. Graph manda `[tap, tap, type]` o `[tap, wait, wait]` y el alto llega durante el primer `tap`: una sola acción ejecutada (una línea «▪»), un solo request a Graph y `correr` termina en `Paraste` |
@@ -84,6 +85,7 @@ lo avanza en vez de dormir.
 | 314 | Tope con dos fallos: `abrePeticion(SISTEMA, …)` y `retirada` lo dejan rechazando y la cuenta no emite; `abrePeticion(PERSONA, …)` lo vacía (fallos y listas), emite la línea de la anterior, y por la puerta el tercer toque vuelve a llegar |
 | 315 | `CuentaDePeticion` con `TestTimeSource`: línea exacta `llamadas=5 distintas=3 intentos_max=3 «celda:1,1» primera=800 ms ultima=1400 ms desde_peticion=1000 ms rechazadas=1 retiradas=1` y en el log como `peticion: …`; sin acción que actuó, `primera=— ultima=—`; un resultado sin llamada no cuenta; sin llamadas ni `cerrar` ni `nuevaPeticion` emiten. Por la puerta: tres toques a «Guardar» (uno rechazado) y un scroll dejan `llamadas=4 … rechazadas=1` |
 | 316 | Un workflow de tres pasos (consciente, subconsciente, consciente) como herramienta MCP del motor armado. Sin alto: pasan `tap`, `tapLabel` y `tap` (el paso consciente anidado no cerró la corrida). Con el alto durante el `tap` del paso 1: nada más llega, el workflow no vuelve a leer la pantalla para el paso 2 ni da el paso 1 por hecho, Graph no da otro turno y `correr` termina en `Paraste` |
+| 319 | Hilos de verdad: la píldora pide el alto en bucle desde otro hilo mientras la corrida hace `empezar`/`termine` hasta un millón de vueltas o 3 s. Tras cada `termine`, ni `abierta` ni `pedido`; los avisos alternan «Vale, paro.» → «Listo, tienes el control de vuelta.» sin salirse de orden y hay tantos altos como devoluciones (y más de cero); la tarea siguiente nace suelta. Sin candado: 5.363 frenos armados sin tarea en un millón de vueltas |
 
 ---
 
@@ -281,8 +283,8 @@ Límites dichos:
 - `tapLabel` cuenta por el nombre pedido, no por el nodo que resuelve el reproductor: la puerta no ve
   ese nodo. Tocar «Guardar» por etiqueta y por coordenada son dos destinos hasta que 3D lo resuelva.
 - Sin `huella`, un toque que se dio no se juzga: ni fallo para el tope ni «actuó» para la cuenta.
-- Como el freno, sin compare-and-set ni candados (common no los trae): dos entradas simultáneas desde
-  hilos distintos podrían contarse mal. Hoy una sola corrida toca a la vez.
+- Sin candado (el del freno llegó con la promesa 319; el tope y la cuenta no lo tienen): dos entradas
+  simultáneas desde hilos distintos podrían contarse mal. Hoy una sola corrida toca a la vez.
 
 ## Lo que NO entra, y por qué
 
@@ -295,8 +297,9 @@ Límites dichos:
 - El texto «no ejecutado: no hay tarea abierta» no llega al modelo: las interfaces del teléfono
   devuelven `Boolean` y el motor traduce `false` a «no se pudo ejecutar la acción». El porqué queda
   en el log. Si 3B necesita que el modelo lo lea, es un cambio del motor con su promesa.
-- `Freno` usa `@Volatile` y no compare-and-set (common no trae atómicos sin dependencia): dos `pide`
-  exactamente simultáneos desde hilos distintos podrían avisar dos veces.
+- `Freno` mira y cambia su estado en un `Candado` (`expect`/`actual`, `synchronized` en jvm) con el log y el
+  aviso dentro: el aviso corre con el candado cerrado, así que tiene que ser rápido y no esperar a otro hilo
+  que pida el alto (el de la app lanza el globo en su scope y vuelve).
 - Hay **una** tarea por proceso. Dos corridas de fuera simultáneas (la burbuja y la app principal a la vez)
   comparten la tarea: un alto frena las dos, y la primera que acaba la cierra; la otra ya no toca el teléfono
   y lo dice en el log. Falla cerrada, no abierta. La app ya asumía una corrida a la vez (`runJob` único).
