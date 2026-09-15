@@ -34,6 +34,12 @@ class Puerta(
     private val system: SystemApi,
     private val player: UiPlayer? = null,
     private val log: GraphLog = GraphLog { _, _ -> },
+    /** Esqueleto de la fase 3C: todavía no se usan. */
+    private val nodoEn: ((Int, Int) -> NodoVivo?)? = null,
+    private val huella: (suspend () -> String)? = null,
+    private val tope: TopeDeIntentos? = null,
+    private val cuenta: CuentaDePeticion? = null,
+    private val asentar: suspend () -> Unit = {},
 ) {
     private suspend fun pasa(accion: String, entra: suspend () -> Boolean): Boolean {
         if (!freno.abierta) {
