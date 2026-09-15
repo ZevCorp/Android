@@ -53,6 +53,7 @@ class Contrato003LaAppPorLaPuerta {
             307 to "El motor y el MCP solo se arman sobre la puerta: ningún archivo de la app construye un ExecutionEngine o un Mcp, ni entrega el servicio de accesibilidad crudo como manos.",
             308 to "La píldora, la notificación y cualquier otra orden de parar usan el mismo alto: frenan la corrida en curso por la misma puerta.",
             320 to "Un paso consciente dentro de una corrida no devuelve el tope a cero ni abre otra petición; una corrida nueva de fuera sí.",
+            321 to "La sesión de telemetría de un pedido la abre solo la corrida que se abrió: una corrida rechazada por «ya hay una tarea en curso» no abre sesión, no pisa ni deja en nulo la de la corrida viva, y no manda una sesión propia.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -466,5 +467,39 @@ class Contrato003LaAppPorLaPuerta {
         assertEquals(emptyList(), fuentes.flatMap { it.donde(escondido) }, promesa(320) + " · un tope o una cuenta se esconden tras un alias")
         assertEquals(emptyList(), fuentes.flatMap { it.donde(Regex("""\b(abrePeticion|nuevaPeticion)\b""")) },
             promesa(320) + " · la app abre o reinicia una petición por su cuenta")
+    }
+
+    /**
+     * LA SESIÓN DE TELEMETRÍA LA ABRE QUIEN ABRIÓ LA CORRIDA (integración de la ola 1, B1). `Telemetry.promptStarted` fija el
+     * pedido en curso de la telemetría: abierta antes de `Ejecucion.correr`, una corrida que se cruza entre mirar y abrir la
+     * pisaba y, al rechazarse, la dejaba en nulo con la viva corriendo. Solo se lee en las fuentes: `Telemetry` es de Android.
+     */
+    @Test
+    fun promesa321() = corre {
+        val fuentes = fuentesDeLaApp()
+        val app = fuentes.uno("GraphApp.kt")
+        val abre = Regex("""(?<![\w])promptStarted\s*\(|::\s*promptStarted\b""")
+        val llamadas = fuentes.flatMap { f -> f.donde(abre).filterNot { f.nombre == "Telemetry.kt" && Regex("""\bfun\s+promptStarted\s*\(""").containsMatchIn(it) } }
+        assertEquals(1, llamadas.size, promesa(321) + " · la app abre la sesión de telemetría en más o menos de un sitio: $llamadas")
+        assertTrue(llamadas.single().substringBefore(":").endsWith("GraphApp.kt"), promesa(321) + " · $llamadas")
+
+        val run = cuerpo(app.codigo, Regex("""suspend fun run\s*\(prompt"""))
+        val corrida = bloqueDe(run, "Ejecucion.correr(") ?: fail(promesa(321) + " · GraphApp.run no corre dentro de Ejecucion.correr")
+        assertEquals(1, abre.findAll(run).count(), promesa(321) + " · GraphApp.run abre la sesión más de una vez")
+        assertEquals(1, abre.findAll(corrida).count(),
+            promesa(321) + " · Telemetry.promptStarted está fuera del bloque de Ejecucion.correr: la corrida rechazada pisaría la sesión de la viva")
+
+        // El rechazo no manda sesión: el catch de CorridaEnCurso no nombra Telemetry.
+        val rechazo = Regex("""catch\s*\(\s*\w+\s*:\s*CorridaEnCurso\s*\)""").find(run) ?: fail(promesa(321) + " · GraphApp.run ya no atrapa CorridaEnCurso")
+        val bloqueDelRechazo = bloqueDe(run.substring(rechazo.range.first), "catch") ?: fail(promesa(321) + " · el catch de CorridaEnCurso no cierra")
+        assertFalse("Telemetry" in bloqueDelRechazo, promesa(321) + " · la corrida rechazada manda su propia sesión: $bloqueDelRechazo")
+
+        // Cada cierre cierra el id que abrió el bloque, si se abrió: nunca uno de una sesión que no existe.
+        val cierres = Regex("""(?<![\w])promptFinished\s*\(""").findAll(run).map { it.range.first }.toList()
+        assertTrue(cierres.isNotEmpty(), promesa(321) + " · GraphApp.run ya no cierra la sesión")
+        for (pos in cierres) {
+            assertTrue(Regex("""telemetryId\s*\?\.\s*let\s*\{\s*(?:it\s*->\s*)?Telemetry\s*\.\s*$""").containsMatchIn(run.substring(maxOf(0, pos - 60), pos)),
+                promesa(321) + " · un promptFinished no cierra el id del bloque con telemetryId?.let: …${run.substring(maxOf(0, pos - 60), minOf(run.length, pos + 40))}")
+        }
     }
 }

@@ -26,6 +26,7 @@ import graph.core.precision.Puerta
 import graph.core.precision.QuienHabla
 import graph.core.precision.TopeDeIntentos
 import graph.core.precision.abrePeticion
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
@@ -59,6 +60,7 @@ class Contrato003LoQueSaleYUnaCorrida {
         val PROMESAS = mapOf(
             317 to "Ninguna línea de log de la ejecución lleva lo que el usuario escribió, pidió o lo que la pantalla muestra: solo tipos, largos, celdas y nombres de herramienta.",
             318 to "Una corrida de fuera no se abre encima de otra: la segunda dice «ya hay una tarea en curso» sin pedir turnos ni tocar el teléfono, y un motor sin tarea abierta termina como parada sin pedir otro turno.",
+            322 to "Acabar una corrida limpia siempre, aunque soltar el freno lance una cancelación: la cancelación sale, la corrida deja su línea peticion: al acabar y no al abrir la siguiente, y la siguiente se abre suelta.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -505,5 +507,33 @@ class Contrato003LoQueSaleYUnaCorrida {
             assertEquals(emptyList(), mano.entradas, promesa(318) + " · la segunda corrida tocó el teléfono")
             assertFalse(freno.abierta, promesa(318) + " · la corrida cancelada no soltó al acabar")
         }
+    }
+
+    /**
+     * ACABAR UNA CORRIDA LIMPIA SIEMPRE (integración de la ola 1, B8). Desde la parte 3, una cancelación dentro del aviso de
+     * soltar sale de `Freno.termine` (306). En el `finally` de `correr` eso se llevaba por delante lo que venía detrás: la
+     * cuenta no cerraba y su línea `peticion:` salía al abrir la corrida siguiente, dentro de otra sesión.
+     */
+    @Test
+    fun promesa322() = corre {
+        val listo = "Listo, tienes el control de vuelta."
+        val bitacora = Bitacora()
+        var cancelaAlSoltar = true
+        val freno = Freno(log = bitacora, avisa = { if (it == listo && cancelaAlSoltar) throw CancellationException("cancelado mientras avisaba") })
+        val cuenta = CuentaDePeticion(log = bitacora)
+        val armado = ArmadoDeEjecucion(freno, bitacora, cuenta = cuenta)
+        fun peticiones() = bitacora.lineas.filter { it.startsWith("peticion: ") }
+
+        val salida = runCatching { armado.correr("abre ajustes") { cuenta.llamada("tap"); armado.parar("píldora") } }
+        val cancelada = assertIs<CancellationException>(salida.exceptionOrNull(), promesa(322) + " · la cancelación de soltar no salió de correr: $salida")
+        assertEquals("cancelado mientras avisaba", cancelada.message, promesa(322) + " · salió otra cosa: $cancelada")
+        assertEquals(1, peticiones().size, promesa(322) + " · la corrida acabó sin dejar su línea peticion: ${bitacora.lineas}")
+        assertTrue(peticiones().single().startsWith("peticion: llamadas=1 "), promesa(322) + " · ${peticiones()}")
+        assertFalse(armado.enCurso, promesa(322) + " · la corrida quedó en curso")
+        assertFalse(freno.pedido, promesa(322) + " · el alto quedó echado")
+
+        cancelaAlSoltar = false
+        assertTrue(armado.correr("la siguiente") { freno.abierta && !freno.pedido }, promesa(322) + " · la siguiente no nació suelta")
+        assertEquals(1, peticiones().size, promesa(322) + " · la línea de la corrida cancelada salió al abrir la siguiente: ${peticiones()}")
     }
 }
