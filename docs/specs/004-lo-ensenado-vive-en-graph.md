@@ -22,8 +22,9 @@ enseñanza activa (4C) y el reproductor (4D) van en fases propias, sobre estas p
 
 ## Diagnóstico: qué se midió
 
-Se midió leyendo el cliente Windows, no suponiendo. Graph no está en esta máquina: ninguna línea de
-este cliente habló con él todavía (ver «Supuestos de Graph sin verificar»).
+Se midió leyendo el cliente Windows, no suponiendo. El 2026-09-15 se leyó además el código de Graph (`e9d0d44`, rama
+`yokh/android-en-graph`): lo que confirma o refuta está en «Verificado en el código de Graph». Ninguna línea de este cliente habló
+todavía con el Graph vivo (Nivel 4, con 4C/4D).
 
 | Qué | Medida | Fuente |
 |---|---|---|
@@ -247,7 +248,7 @@ Todo en `core/src/commonMain/kotlin/graph/core/graph/`, sin dependencias nuevas:
 - `GraphHeaders.kt` — `feature` opcional (por defecto la del cerebro, promesa 8 intacta).
 - `learning/Protocol.kt` — espejo `@Serializable` de `Contracts.cs` y de los contratos de
   `TeachSession.cs`; `vacioEsAusente`; `WorkflowResumen` (espejo de `WorkflowSummary.FromJson`).
-- `learning/LearningClient.kt` — las trece llamadas, con topes, reintentos y errores.
+- `learning/LearningClient.kt` — las catorce llamadas, con topes, reintentos y errores (la decimocuarta, `cerradaEnGraph`, es de la 421).
 - `learning/NombreDeWorkflow.kt` — espejo de `NombreDeWorkflow.cs`.
 - `learning/Profundidad.kt` — la guarda de 64 niveles antes de parsear (de la revisión, abajo).
 
@@ -278,10 +279,12 @@ Lo que deja en el almacén, un archivo por sesión (el id de sesión, escapado, 
 
 Pone verdes: **407-412**.
 
-**Abierto, del Capitán.** Descartar no llama a Graph, igual que Windows. Si Graph guarda los pasos al
-llegar —`PendingFinish.cs` dice que sí—, una demostración descartada deja en `GET /workflows` un workflow
-sin resumen con los pasos que alcanzaron a viajar. Borrarlo (`DELETE /workflows/{id}`) es borrar datos y
-cambia lo que el usuario ve en la lista: no se decidió aquí. Se mide en el Nivel 4 de 4C.
+**Abierto, del Capitán.** Descartar no llama a Graph, igual que Windows. Verificado en el código de Graph (`e9d0d44`): cada paso
+se guarda al llegar (`Neo4jWorkflowRepository.js:322-365`) y una sesión sin `finish` se queda en `recording`. `GET /workflows` no
+filtra por estado (`:132-175`), así que una demostración descartada **se ve en la lista**, sin resumen y con los pasos que alcanzaron
+a viajar, y con al menos un paso **le llega al cerebro** como herramienta (`AgentWorkflowStore.js:45-50`). Borrarla
+(`DELETE /workflows/{id}`) es borrar datos y cambia lo que el usuario ve en la lista: no se decidió aquí. La llamada ya existe,
+`LearningClient.borrar`, lista y sin usar.
 
 ### Revisión de la 4A1 — lo que Graph manda raro (hecha)
 
@@ -364,10 +367,10 @@ Un control independiente del diff `3f370e1..00b6d7b` encontró cuatro cosas. Có
   no respondió a tiempo o dijo que no, también; si queda pendiente, ya está. Y desde que llega la cancelación, la red del cierre
   tiene `TOPE_DE_CIERRE_CANCELADO` (2 min): un hijo de la corrida de quien llama se entera de la cancelación y arranca el
   cronómetro, que al vencer corta la red; queda el pendiente y la cancelación sale. Cortar a tiempo depende de que el transporte
-  sea cancelable, y `GraphTransport` lo es (`disconnect()` al cancelar). El supuesto: si el proceso muere después de un `finish`
-  que salió y antes de borrar el provisional, el arranque reintenta una sesión que Graph ya cerró; con 404 o 400, `trasFallo` lo
-  juzga FALLIDO y el pendiente se borra tras ese único `finish` (juzgado). Si Graph respondiera 2xx y post-procesara otra vez,
-  cobraría dos veces (ver «Supuestos»).
+  sea cancelable, y `GraphTransport` lo es (`disconnect()` al cancelar). Si el proceso muere después de un `finish` que salió y
+  antes de borrar el provisional, al arrancar queda el pendiente de una sesión que Graph ya cerró. Esta revisión suponía que
+  Graph la desconocería (404 o 400) y que el pendiente se borraría tras un `finish` FALLIDO; el código de Graph lo refuta: un
+  `finish` repetido responde 200 y post-procesa con el LLM otra vez. Lo corrige la 421 (abajo, «Lo que Graph hace de verdad»).
 - **El arranque no tenía tope (411).** Con Graph caído, N pendientes × 90 s. Ahora intenta hasta `MAX_PENDIENTES_POR_ARRANQUE`
   (5) y ninguno que empiece pasados `TOPE_DE_ARRANQUE` (2 min), medidos con un reloj inyectable. El tope se mira antes de cada
   intento: el que ya salió termina en su propio tope de 90 s, porque cortarlo a mitad dejaría a Graph cerrando sin que nadie lo
@@ -413,10 +416,90 @@ Sin sabotaje que el juez vea: la serie de `descartar` (`cancelAndJoin` antes de 
 
 `./gradlew :app:compileReleaseKotlin -q --rerun` → exit 0. `app/` no se toca.
 
+### Lo que Graph hace de verdad (tercera pasada, esta corrida)
+
+Un mapeo del código de Graph (`e9d0d44`, solo lectura) contrastó cada supuesto de esta spec; el detalle, con su `path:línea`, está en
+«Verificado en el código de Graph». Lo que cambió en el cliente:
+
+- **Un `finish` repetido cobra otra vez (421).** `finish` no mira el estado: relee los pasos, post-procesa con el LLM y marca
+  `status: "done"` y `completedAt` cada vez (`WorkflowLearner.js:69-121`, `Neo4jWorkflowRepository.js:605`), y responde 200 con el
+  workflow completo (`registerPublicApiRoutes.js:508-529`). Nunca 400; 404 solo si el workflow no existe o es de otra key
+  (`WorkflowLearner.js:23-36`, `httpErrors.js:11-13`). El supuesto de la 420 —«con 404 o 400 el pendiente se borra»— era falso: un
+  proceso que muere entre un `finish` que salió y el borrado del provisional dejaba al arranque cerrando, y cobrando, otra vez. Ahora
+  el arranque pregunta primero con un `GET /workflows/{id}` de un solo intento (`LearningClient.cerradaEnGraph`): con `done` o
+  `completedAt` la da por cerrada sin `finish`; si no se sabe —no respondió, no la encuentra, sin key—, el `finish` de siempre.
+  **Costo que queda:** si Graph ya la había cerrado y el GET no responde pero el `finish` sí, cobra otra vez.
+- **Pasos y notas sobre una sesión cerrada se guardan (422).** Con el id en la ruta, `resolveSessionId` no exige la sesión en memoria
+  (`LearningSessionService.js:40-49`), y `recordStep` y `addContextNote` miran el dueño, no el estado (`WorkflowLearner.js:49-67`):
+  201. `Leccion` no manda un paso ni una nota después de su `finish`: la cola se cierra y el lector termina antes de escribir la
+  lección (409, 418), y la nota va antes del `finish` en la misma corrida. El camino venía de fuera: un arranque que corría mientras
+  una lección cerraba —la app que vuelve al frente y llama otra vez a `reintentarPendientes`— encontraba el provisional (420) y
+  cerraba la sesión, y la nota y el `finish` de la lección llegaban después, con dos cobros. Ahora las sesiones que una lección está
+  cerrando quedan en un registro del proceso, desde antes del provisional hasta que `terminar` acaba, y el arranque no las toca.
+  **Lo que no cubre:** otro proceso sobre el mismo disco, y un paso en vuelo que el tope de vaciado o una cancelación cortan del lado
+  del cliente: la petición pudo haber llegado a Graph, que la termina aunque el cliente se desconecte, y quedar guardada después del
+  `finish`. En la lección cuenta como no enviado. Tampoco hay juez multihilo para el orden «registro antes del provisional»: en el
+  hilo único del contrato las dos líneas corren seguidas bajo `NonCancellable`.
+- **La forma real se lee (423).** `GET /workflows` y `GET /workflows/{id}` devuelven `Workflow.toJSON`, con `variables` como lista de
+  objetos, las fechas `{low, high}` sin convertir y las ramas (`Workflow.js:35-92,134-158`, `WorkflowCatalog.js:121-151`). El cliente
+  no tipaba `variables` al leer un workflow —lo pasa crudo—, así que no estaba roto; ahora lo juzga un cuerpo con esa forma. El plan
+  (`WorkflowExecutor.js:38-55`) trae el eco de `variables` y `executionIntent`, `runtimeIntelligence` y `branchContext` (objeto o
+  `null`), que no se leen; `key` y `scroll` son ejecutables con `value` o `selector`. Sin pasos, 404; sin pasos ejecutables o con
+  dinámicos sin resolver, 500. Ninguno de los dos se reintenta.
+- **La alineación dice cuál fue (423).** `prepend-alignment` ignora el cuerpo: 404 si el workflow no existe, 400 sin `sourceOrigin`,
+  `{workflow, already_present:true}` si el primer paso ya es `app:…`. Si no, antepone `{actionType:'navigation', url:<sourceOrigin>,
+  selector:'app:<origin sin esquema, hasta la primera />', stepOrder:0}` y responde `{workflow, learned:true}`
+  (`registerPublicApiRoutes.js:579-619`). Con `android://com.x/…` el selector queda `app:com.x`. Hasta ahora el cliente no dejaba
+  nada en el log cuando la alineación salía; ahora escribe `already_present` o `learned` con el id, sin el workflow.
+
+### Verificación de la tercera pasada (2026-09-15)
+
+Las pruebas se escribieron primero (`e533199`), contra el código de `6e48350` con una sola novedad: la firma de
+`LearningClient.cerradaEnGraph`, en `TODO`. El juez dijo `CONTRATO ROTO: 6 promesa(s) incumplida(s)`:
+
+- 411: «expected:<[GET /api/v1/workflows/wf-ses-1, POST …/ses-1/finish]> but was:<[POST …/ses-1/finish]>»;
+- 413: `⧗ PENDIENTE`, por la firma en `TODO`;
+- 420: «murió tras un finish que salió y el arranque volvió a cerrar la sesión … expected:<0> but was:<1>»;
+- 421: «ya cerrada en Graph, el arranque volvió a cerrarla»;
+- 422: «un arranque tocó la sesión que una lección de este proceso está cerrando: [POST …/ses-1/finish]»;
+- 423: «ya estaba: el log no lo dice: []».
+
+Los dos primeros bloques de la 423 —la lista, el workflow, el cierre y el plan con la forma real— pasaron antes de caer en la
+alineación: leer la forma real no estaba roto. La implementación (`15e0192`) lo dejó en `CONTRATO INTACTO: 38 promesas.` Después
+vinieron 7 sabotajes, cada uno en su propio clon (`git archive 15e0192`), fuera del worktree:
+
+| # | Sabotaje | Lo que dijo el juez |
+|---|---|---|
+| 421 | el arranque no pregunta si Graph ya la cerró | `ya cerrada en Graph, el arranque volvió a cerrarla expected:<[GET /api/v1/workflows/ses-1]> but was:<[POST …/ses-1/finish]>`. Rompe también la 411 (su lista trae el GET) y la 420 (el `finish` repetido) |
+| 421 | el GET con los reintentos del cerebro | `HTTP 503 al preguntar expected:<[GET …/ses-1, POST …/finish]> but was:<[GET …, GET …, GET …`. Y la 411: `al arrancar se esperó entre intentos: [800, 1600, 3200, 800, 1600, 3200]` |
+| 421 | cerrada solo por `status`, sin `completedAt` | `con completedAt, el arranque volvió a cerrarla expected:<[GET …/ses-1]> but was:<[GET …/ses-1, POST …/ses-1/finish]>`. Solo la 421 |
+| 422 | el arranque no mira el registro del proceso | `un arranque tocó la sesión que una lección de este proceso está cerrando: [GET …/ses-1, POST …/ses-1/finish]`. Solo la 422 |
+| 422 | `terminar` no saca la sesión del registro | `terminada la lección, el arranque no cerró lo que dejó pendiente … expected:<1> but was:<0>`. Rompe también la 411, la 418, la 419, la 420 y la 421: el registro es del proceso, y una sesión que no sale de él tapa sus pendientes en todas las pruebas que siguen |
+| 423 | la alineación que sale no deja línea | `ya estaba: el log no lo dice: []` |
+| 423 | `already_present` y `learned` al revés | `ya estaba: el log no lo dice: [[aprendizaje] alinear wf_ya: graph ya tenía el paso de alineación (learned)]` |
+
+Sin sabotaje que el juez vea: que el registro se llene antes del provisional y no después, porque en el hilo único del contrato las
+dos líneas corren seguidas bajo `NonCancellable` (ver arriba). Lo que es solo spec —lo verificado y lo que viene para 4C y 4D— no
+lleva sabotaje.
+
+`./gradlew :app:compileReleaseKotlin -q --rerun` → exit 0. `app/` no se toca.
+
 ### Lo que viene (specs y fases propias, sobre este cliente)
 
 4B grabador por accesibilidad · 4C enseñanza activa por Graph (cablea la lección, el almacén y el video) ·
 4D reproductor del plan · 4E `workflow_*` por Graph · 4F comprobar.
+
+Lo que el código de Graph ya les pide:
+
+- **4D** tiene que ejecutar un paso `navigation` con selector `app:<paquete>` **abriendo esa app**, o enfocándola si ya está abierta:
+  es el paso de alineación que `prepend-alignment` antepone en orden 0, con `url` igual al `sourceOrigin` (`android://<paquete>`).
+  Tomarlo por un selector de accesibilidad no resuelve nada.
+- **4C** manda en `upload-token` y `process-video` el mismo `userId` que el turno (`TurnRequest.userId`; en la app, `auth.userId`):
+  Graph guarda las notas del video en la memoria de ese usuario y el turno la lee con el suyo. Si viaja vacío, los dos caen en
+  `anon`. Hoy no pueden diferir porque ninguna parte de la app llama a esas rutas, y `LearningClient` no fija el `userId`: lo
+  recibe de quien llama.
+- **4C** llama a `reintentarPendientes` en segundo plano, y puede hacerlo también con una lección cerrándose: la 422 lo cubre dentro
+  del proceso.
 
 ---
 
@@ -431,7 +514,7 @@ Sin sabotaje que el juez vea: la serie de `descartar` (`cancelAndJoin` antes de 
 | `""` de Graph | `??` no cae | ausente al leer (`vacioEsAusente`) | la trampa medida |
 | Cancelar `interpretSteps` | el `catch (Exception)` se traga también la cancelación | la cancelación sale | cancelar la corrida no es un fallo del modelo (promesa 14) |
 | Fallo de `prepend-alignment` | `catch { }` mudo | devuelve `false` y deja la causa en el log | best-effort no es invisible |
-| Cuerpo de `notaDeContexto`, `borrar`, `prependAlignment` | se parsea (`PostAsync<JsonElement>`): un 2xx vacío lanza | no se parsea; solo cuentan el status y un `error` legible | nadie usa ese cuerpo; un 2xx vacío no es un fallo |
+| Cuerpo de `notaDeContexto`, `borrar`, `prependAlignment` | se parsea (`PostAsync<JsonElement>`): un 2xx vacío lanza | no decide nada; solo cuentan el status y un `error` legible. La alineación lee `already_present` o `learned` para el log, y si no los trae no es un fallo (423) | nadie usa ese cuerpo; un 2xx vacío no es un fallo |
 | `X-Miracle-App` y `execution_intent.source` | `windows_app` · `windows-u` | `android_app` · `android_app` | atribución por plataforma |
 | `createdAt` como fecha ISO | se lee | no se lee (queda sin fecha) | Graph manda el entero Neo4j (medido 2026-09-02); leer ISO sin `kotlinx-datetime` es otra dependencia |
 | La lección en disco | se escribe dentro del bloque del video (`GuardarLaLeccion` tras parar el mp4): si parar el video falla, no hay lección | se escribe siempre, después de vaciar los pasos y antes del video, la nota y el cierre | la lección no depende de ninguna llamada |
@@ -439,6 +522,7 @@ Sin sabotaje que el juez vea: la serie de `descartar` (`cancelAndJoin` antes de 
 | Vaciar la cola al parar | espera 30 s y cierra con el lector todavía vivo: un paso colgado puede llegar después de `finish` | pasados los 30 s se corta el lector antes de escribir la lección; lo que no salió cuenta como no enviado, con su motivo | ningún paso viaja después del cierre, y la lección dice la verdad |
 | Nota de contexto | viaja el resumen del video, no lo hablado | una sola nota con lo hablado y el resumen del video, si hay | lo que el usuario explica de viva voz es el contexto más fiel |
 | Cierres pendientes | un solo `pending-finish.json` que se reescribe entero; al cerrar, solo el transitorio deja pendiente; al arrancar, un intento por pendiente y todo lo no transitorio se descarta | un archivo por sesión con escritura atómica, provisional desde antes de la red; `-1` no deja pendiente y al arrancar se descarta; `401`/`403` y sin key dejan pendiente al cerrar y se conservan al arrancar, con un solo criterio (`trasFallo`); al arrancar, un intento por pendiente, como Windows, hasta 5 y 2 min, empezando por los que menos se intentaron | reescribir una lista entera es perder todas por un corte; un proceso que muere a mitad del cierre no pierde la sesión (420); una key mal puesta se arregla, la sesión no murió por eso; tres intentos con esperas y un post-procesado cada uno se repetirían en cada arranque; con Graph caído, N pendientes × 90 s se comerían el arranque (411) |
+| Reintentar un cierre pendiente | `PendingFinish.cs` manda `finish` directo | antes pregunta con un GET de un intento si Graph ya la cerró (`status` `done` o `completedAt`); si sí, la da por cerrada sin `finish`. Y no toca una sesión que una lección de este proceso está cerrando | un `finish` repetido responde 200 y cobra el LLM otra vez (`WorkflowLearner.js:69-121`); una nota que llega después del `finish` se guarda igual (421, 422) |
 | Cuándo se vacía la cola | en `recorder.StopAsync`, después del video y de la nota (`WorkflowTeachSession.cs:374`) | lo primero de `terminar`, antes de la lección, el video y la nota | la lección lleva los últimos pasos, y ninguno viaja después de que el video y la nota ya se mandaron |
 | Cancelar el cierre | `StopAsync(CancellationToken.None)` (`FaceWindow.xaml.cs:3193`): nada del cierre se cancela, ni el video | se cancela lo que espera —vaciar la cola, el video, que queda para reprocesar y ni se empieza si ya se canceló—; la lección, la nota, el cierre y su pendiente corren bajo `NonCancellable` y la cancelación sale después, con la lección TERMINADA; la red del cierre, con 2 min de tope desde la cancelación | un `viewModelScope` se cancela al salir de la pantalla: minutos de video para nadie no sirven, pero una sesión sin cerrar ni pendiente se pierde (418), y quien cancela no puede quedar esperando 4,7 min (420) |
 | El lector de pasos se muere | el lector es de `WorkflowRecorder` y vive lo que vive la grabación | vive en el `scope` que le pasan: si se cancela o falla, lo que no viajó cuenta como no enviado y la lección sale incompleta; `pasoObservado` dice `false` | un scope ajeno se puede cancelar sin que la lección se entere; `join()` no es «cola vacía» (417) |
@@ -451,39 +535,92 @@ Sin sabotaje que el juez vea: la serie de `descartar` (`cancelAndJoin` antes de 
 
 ---
 
+## Verificado en el código de Graph (`e9d0d44`)
+
+Leído en `/home/hhh/Downloads/TRABAJO/Graph` (rama `yokh/android-en-graph`) el 2026-09-15; las rutas son de ese repo. Leer el código
+no es hablar con el Graph vivo: lo que depende del despliegue sigue abajo, en «sin verificar».
+
+- **Abrir la sesión.** `POST /learning/sessions` no valida `context`: lo copia si es un objeto (`web/api/registerPublicApiRoutes.js:444-456`)
+  y no persiste `platform` ni `surface`. `startWorkflow` guarda `appId`, los `source*`, `contextNotes`, `scope` y `ownerId`
+  (`src/infrastructure/repositories/Neo4jWorkflowRepository.js:280-306`); `source_url` y `source_origin` `android://…` se guardan como
+  texto. El id es `wf_${Date.now()}` y es también el workflow (`src/application/use-cases/WorkflowLearner.js:39`); responde 201
+  `{session:{id, workflow_id, recording:true}}` (`registerPublicApiRoutes.js:459-465`). **Riesgo:** si el alta falla, `reset` borra
+  de la memoria de esa instancia todas las sesiones de la key (`:467`, `src/application/use-cases/LearningSessionService.js:106-121`).
+  A este cliente no le rompe una enseñanza en curso de la misma key, porque con el id en la ruta `resolveSessionId` no exige la
+  sesión en memoria (`LearningSessionService.js:40-49`); sí rompe a un cliente que dependa de la «sesión activa» sin id.
+- **La key es el dueño.** Con `X-API-Key`, el dueño de los workflows es `api-client:<label>` de esa key (`web/api/requireAuth.js:378-395`,
+  montado en `web/server.js:577`): todos los teléfonos con la misma key ven, cierran y borran los mismos workflows. Lo de otra key da 404.
+- **Cabeceras.** `X-Miracle-App` y `X-Miracle-Feature` solo atribuyen consumo: ninguna ruta de aprendizaje las exige. Con API key,
+  `android_app` se acepta como app (`src/application/use-cases/UsageAttributionResolver.js:100-112`) y `conscious_bridge` es una
+  feature del vocabulario (`src/domain/usage/vocabulary.js:52`, `UsageAttributionResolver.js:114-119`). El consumo de Gemini del video
+  se registra como `teach_video` venga la cabecera que venga (`src/infrastructure/teach/GeminiVideoClient.js:53-75`).
+- **Pasos.** Al grabar, Graph acepta cualquier `actionType` no vacío (`WorkflowLearner.js:54`). En el plan deja `navigation` con `url`
+  (también `android://…`), `click`, `input` y `select` con `selector`, y `key` y `scroll` con `value` o `selector`
+  (`src/application/use-cases/WorkflowExecutor.js:14-25`). Los selectores opacos `a11y:…` y las pistas vuelven intactos: `surfaceHints`
+  se guarda como JSON y se lee como objeto (`Neo4jWorkflowRepository.js:326`, `src/domain/entities/Step.js:48`). Los textos del paso
+  (`selector`, `label`, `url`…) vuelven recortados (`Step.js:37-47`), `value` y `selectedValue` tal cual, y `allowedOptions` trae
+  `value`, `label` y `text` siempre como texto (`Step.js:64-69`).
+- **Plan.** `execution_intent` y `variables` vuelven de eco sin validarse (`WorkflowExecutor.js:47-48`): `source: android_app` y
+  `surface: native` valen. Suma `runtimeIntelligence` y `branchContext` (objeto o `null`) (`:49-53`,
+  `src/application/use-cases/WorkflowBranchPlanner.js:133-139`). Sin pasos, 404 «not found or has no steps»; sin pasos ejecutables o
+  con dinámicos sin resolver, 500 (`WorkflowExecutor.js:28-36,58-66,131-135`, `registerPublicApiRoutes.js:634-639`,
+  `web/api/httpErrors.js:11-19`). El LLM solo entra con `variables.context` y pasos dinámicos (`WorkflowExecutor.js:79-99`).
+- **Lista y workflow.** `GET /workflows` y `GET /workflows/{id}` devuelven `Workflow.toJSON` —id, description, summary, executionGuide,
+  status, scope, ownerId, appId, `source*`, contextNotes, createdAt, updatedAt, completedAt, `published*`, steps, variables (lista de
+  objetos) y totalSteps— más `branches` (`src/domain/entities/Workflow.js:35-92,134-158`,
+  `src/application/use-cases/WorkflowCatalog.js:121-151`), con `ORDER BY w.id ASC` (`Neo4jWorkflowRepository.js:174`). Las fechas llegan
+  `{low, high}` porque el driver no convierte enteros (`src/infrastructure/Neo4jDriver.js:38-52,126`) y `Integer` no tiene `toJSON`.
+  El id de una sesión siempre es texto (`wf_…`). La lista incluye lo propio, lo global y lo que no tiene dueño
+  (`Neo4jWorkflowRepository.js:94-105`).
+- **Borrar.** `DELETE /workflows/{id}` de algo que no existe, o que es de otra key, da 404 `Workflow not found` (`WorkflowCatalog.js:267-276`,
+  `registerPublicApiRoutes.js:560-573`).
+- **`error` en un 2xx.** Las rutas de aprendizaje y workflows nunca lo mandan: todo error sale por `publicError` con 404, 503 o 500
+  (`registerPublicApiRoutes.js:95-99`, `httpErrors.js:11-19`). `upload-token` puede traer `archiveError` en un 200, que no es un
+  `error` (`src/application/use-cases/TeachVideoService.js:67-91`).
+- **Sesiones en memoria.** `LearningSessionService` guarda las sesiones en un `Map` de la instancia (`LearningSessionService.js:1-6`).
+  Con el id en la ruta eso no importa: una sesión que otra instancia no conoce se resuelve por su id contra Neo4j (`:40-49`) y no da
+  error.
+- **`finish`.** Responde 200 `{workflow_id, summary, workflow}` con el workflow completo (`registerPublicApiRoutes.js:508-529`).
+  Post-procesa con el LLM del cerebro: título, resumen y modos de valor en una llamada que nunca lanza
+  (`src/application/use-cases/WorkflowExecutionGuideBuilder.js:185-228`). Deja `status: "done"` y `completedAt`
+  (`Neo4jWorkflowRepository.js:605`). **Repetido sobre una sesión cerrada, responde 200 y cobra otra vez**; nunca responde 400, y 404
+  solo si no existe o es de otra key (`WorkflowLearner.js:23-36,69-121`). Refuta el supuesto de la 420, y lo corrige la 421.
+- **Pasos y notas después de `finish`.** Dan 201 y se guardan en el workflow ya cerrado (`LearningSessionService.js:40-49`,
+  `WorkflowLearner.js:49-67`, `Neo4jWorkflowRepository.js:322-408`). La 422 lo cierra del lado del cliente.
+- **Una sesión sin `finish` se ve.** Se queda en `recording` y sale en `GET /workflows`, que no filtra por estado
+  (`Neo4jWorkflowRepository.js:132-175`); con al menos un paso, le llega al cerebro como herramienta
+  (`src/application/use-cases/AgentWorkflowStore.js:45-50`). Refuta el supuesto de que una demostración descartada no deja nada
+  visible; el borrado sigue abierto (4A2). **Riesgo aparte:** el cerebro lee el catálogo con `getCatalog(null)`
+  (`AgentWorkflowStore.js:45`), sin filtrar por key, así que el cerebro de una key ve los workflows de las demás, con sus descripciones.
+- **Alineación.** Ver «Lo que Graph hace de verdad» (`registerPublicApiRoutes.js:579-619`).
+- **`/teach/*` es Gemini, sin alternativa.** `upload-token`, `file-state` y `process-video` van siempre contra Gemini, con la config de
+  enseñanza (`TeachVideoService.js:12-15,54-110,117-159`). Solo `process-video` genera y reintenta: hasta 5 intentos cuando Gemini da
+  429 o 5xx, con esperas de 0,8 s a 6,4 s, y cada intento se registra como consumo (`GeminiVideoClient.js:40-42,211-220,256-300`).
+  `upload-token` reserva el archivo con una sola llamada y `file-state` consulta una vez (`:78-113`). Si los 5 intentos fallan, Graph
+  responde 502 (`TeachVideoService.js:156-158`), que este cliente reintenta como transitorio. La función de Vercel tiene
+  `maxDuration: 60` (`vercel.json:8-11`): un 504 puede llegar mientras Gemini genera y factura. **Costo:** un `process-video` son
+  hasta 4 llamadas del cliente (403) × 5 intentos de Graph = 20 `generateContent`. `interpret-steps` no usa Gemini sino el LLM del
+  cerebro (`src/application/use-cases/TeachStepsInterpreter.js:32-38,50`), igual que `finish` (`WorkflowLearner.js:85-90`).
+- **Las notas del video son del `userId`.** `process-video` guarda cada nota con `memoryRepository.remember(userId, …)`, y un `userId`
+  vacío es `anon` (`TeachVideoService.js:123,138-140`). El turno lee la memoria con su propio `userId`, también `anon` si falta
+  (`src/application/use-cases/AgentTurnService.js:85,109`). En Android, el del turno es `auth.userId` o nada (`app/…/GraphApp.kt:340`,
+  `GraphBrain.kt:103`); el de `LearningClient` lo pone quien llama, y hoy nadie llama. 4C tiene que usar el mismo.
+- **Profundidad y tamaño.** Graph no acota la `interpretation`, que devuelve tal cual (`GeminiVideoClient.js:316-323`,
+  `src/domain/teach/interpretarPasos.js:153-158`), ni el workflow. El cliente corta a 64 niveles (413); el tamaño no lo acota nadie.
+
 ## Supuestos de Graph sin verificar
 
-Todo lo que este cliente asume y **no** está en `windows-graph/src/Contracts.cs` ni se midió desde un
-Android. Se verifica en el Nivel 4 de 4C/4D, contra el Graph vivo; hasta entonces, cada uno es un
-riesgo abierto.
+Lo que el código no dice o depende del despliegue. Se verifica en el Nivel 4 de 4C/4D, contra el Graph vivo; hasta entonces, cada uno
+es un riesgo abierto.
 
-- `POST /api/v1/learning/sessions` acepta `context.platform = "android"` y un `source_url`/`source_origin` `android://…`.
-- `StepRequest.actionType` `key` y `scroll` (el grabador de Windows los emite y `WorkflowExecutor` descarta del plan lo que no sea `input|select|click|navigation`): el cliente los deja pasar como texto libre; qué hace Graph con ellos no se sabe.
-- `navigation` con `url = android://paquete/Activity` es ejecutable para Graph.
-- Los selectores opacos `a11y:…` y las pistas de superficie de Android (`observedSurface android://…`, `readiness`, `fingerprint`, `clickPos`) viajan y vuelven intactos en el plan, igual que los de UIA/SAP.
-- `X-Miracle-App: android_app` sin `X-Miracle-Feature` es válido en `/learning/*` y `/workflows/*` (en el turno se midió con la feature).
-- `execution_intent.source = "android_app"` es un valor aceptado (Windows manda `windows-u`).
-- `X-Miracle-Feature: conscious_bridge` es la atribución correcta para `/teach/*` también desde Android.
-- `GET /api/v1/workflows` devuelve para esta API key los workflows grabados desde Android, con el mismo shape (`id`, `description`, `sourceOrigin`, `sourceTitle`, `totalSteps`, `createdAt {low, high}`).
-- `DELETE /api/v1/workflows/{id}` sigue respondiendo 404 cuando no existe (y no 200 ni 410).
-- `finish`, `plan` e `interpret-steps` no dependen de Gemini; `upload-token` y `process-video` sí (sin créditos desde 2026-09-03, pueden fallar).
-- Un 2xx con `{"error":"…"}` es un fallo y no un éxito parcial.
-- Las sesiones de aprendizaje viven en memoria serverless: por eso el id va siempre en la ruta; si Graph pierde una sesión entre instancias, el paso responde con un error que este cliente muestra tal cual.
-- Una sesión que nunca recibe `finish` no deja un workflow visible. `PendingFinish.cs` dice que «los pasos ya están guardados» antes del cierre: si es así, una demostración descartada deja en `GET /workflows` un workflow sin resumen con los pasos que alcanzaron a viajar (ver la decisión abierta en 4A2).
-- Un `finish` repetido sobre una sesión que Graph ya cerró (el reintento al arrancar de un cierre que sí había salido) responde un error no transitorio y no cierra ni cobra dos veces.
-- Si un 502, 503 o 504 en `process-video`, `interpret-steps`, `upload-token` o `finish` llega después de que Gemini o el
-  LLM ya cobraron. Esos transitorios se reintentan: `/teach/*` hasta 3 veces y el cierre en 3 intentos, así que hoy
-  `process-video` puede llegar a 4 cobros por un solo video.
-- Qué responde `finish` reintentado sobre una sesión cerrada o perdida (¿404? ¿400?). Hoy, un transitorio seguido de un
-  404 da `GraphException` y no `FinishPendiente`: la lección lo cuenta como `FALLIDO` aunque el primer intento pudo
-  haberla cerrado. Con el provisional (420) pasa también al arrancar, cuando el proceso murió entre un `finish` que salió y el
-  borrado: con 404 o 400 el pendiente se borra tras un solo intento; con 2xx, Graph podría post-procesar y cobrar dos veces.
-- `execution_intent.surface = "native"` es un valor válido desde Android.
-- `allowedOptions` trae `value` y `label` no nulos, y los valores de `variables` son texto. Desde la 414 el cliente tolera
-  lo contrario, pero Graph no lo promete.
-- El `id` de un workflow es siempre texto. Desde la 415 un número se lee como su texto.
-- Graph acota la profundidad o el tamaño de `interpretation` y `workflow`. Desde la 413 el cliente corta a 64 niveles;
-  el tamaño no lo acota nadie.
+- Que el despliegue que atiende a Android corre `e9d0d44` o algo compatible: todo lo de arriba se leyó en esa revisión.
+- Que la cuenta de Gemini tiene saldo (se quedó sin créditos el 2026-09-03): sin eso, `upload-token` y `process-video` fallan con 502.
+- Que el LLM del cerebro está configurado: sin él, `finish` cierra con un resumen determinístico, sin título y sin cobrar
+  (`WorkflowExecutionGuideBuilder.js:190-194`).
+- Si un 504 de Vercel en `finish` llega después de que el post-procesado ya cobró. Si pasa, el siguiente intento de `terminar` (son 3)
+  cobra otra vez: la 421 pregunta antes de reintentar un pendiente al arrancar, no entre los intentos del cierre.
+- Si Gemini factura un `generateContent` que el `maxDuration` de Vercel cortó.
+- Con varias keys en `MIRACLE_API_KEYS`, cómo se reparten de verdad los dueños entre teléfonos y usuarios.
 
 ---
 
