@@ -146,7 +146,7 @@ Lo que quedó, archivo por archivo:
   hilo principal). Con `Falta`, `run()` no
   instancia el cerebro: loguea `[graph]`, lo dice por voz y devuelve la línea (promesa 9).
 - `app/…/platform/GraphTransport.kt` — el `TurnTransport` real: `HttpURLConnection`, 30 s conectar
-  / 5 min leer, cancelable (`disconnect()` al cancelar), cuerpo también en errores, status 0 cuando no
+  / 5 min leer, cancelable (`disconnect()` al cancelar; desde R2, también en toda otra salida, lectura agotada incluida), cuerpo también en errores, status 0 cuando no
   conectó y -1 cuando conectó y la lectura se agotó (con `connect()` explícito, el timeout de conexión
   solo salta ahí dentro), `Retry-After` en segundos, y la cancelación sale como cancelación (R1).
 - `app/…/ui/MainActivity.kt` — «Graph — cerebro remoto» en el selector de modelo; campos

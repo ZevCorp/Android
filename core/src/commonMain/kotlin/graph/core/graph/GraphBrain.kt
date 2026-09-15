@@ -205,7 +205,11 @@ class GraphBrain(
         runCatching { TurnJson.decodeFromString(TurnResponse.serializer(), body).error }.getOrNull()?.takeIf { it.isNotBlank() }
             ?: body.trim().take(200).ifBlank { null }
 
-    /** Dónde se rompió la lectura, según kotlinx («… at path: $.actions[0].args»); sin ruta, el cuerpo entero (`$`). */
+    /**
+     * Dónde se rompió la lectura, sacado del TEXTO del mensaje de kotlinx («… at path: $.actions[0].args»).
+     * Ese texto no es API estable de kotlinx: si cambia el formato, esto degrada a `$` (el cuerpo
+     * entero) y el mensaje sigue trayendo el cuerpo, que es lo que importa para diagnosticar.
+     */
     private fun ruta(e: Throwable?): String =
         e?.message?.let { Regex("at path: (\\S+)").find(it)?.groupValues?.get(1) } ?: "\$"
 
