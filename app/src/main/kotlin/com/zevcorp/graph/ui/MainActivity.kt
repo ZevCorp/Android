@@ -1224,7 +1224,7 @@ class MainActivity : Activity(), UserChannel {
 
     /** Etiqueta del botón de modelo según lo elegido (proveedor + nivel GPT-5.6). */
     private fun modelLabel(): String = when (app.prefs.getString("provider", "GEMINI")) {
-        "OPENAI" -> "Modelo: " + when (app.prefs.getString("openaiModel", "gpt-5.6-terra")) {
+        "OPENAI" -> "Modelo: " + when (app.prefs.getString("openaiModel", "gpt-5.6-luna")) {
                 "gpt-5.6-sol" -> "Sol ☀️"
                 "gpt-5.6-luna" -> "Luna 🌙"
                 else -> "Terra 🌍"
@@ -1241,7 +1241,7 @@ class MainActivity : Activity(), UserChannel {
         val chosen = app.prefs.getString("provider", "GEMINI")
         val openai = chosen == "OPENAI"
         val graph = chosen == "GRAPH"
-        val oaModel = app.prefs.getString("openaiModel", "gpt-5.6-terra")
+        val oaModel = app.prefs.getString("openaiModel", "gpt-5.6-luna")
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(Palette.bg, dp(24).toFloat(), Palette.cardBorder)

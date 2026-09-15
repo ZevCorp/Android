@@ -104,7 +104,7 @@ class GraphApp : Application() {
     private val openAiKey = { RemoteConfig.resolve(prefs, "openaiKey", "remoteOpenaiKey", DEFAULT_OPENAI_KEY) }
     private val openAiModel = {
         prefs.getString("openaiModel", "")?.ifBlank { null }
-            ?: prefs.getString("remoteOpenaiModel", "")?.ifBlank { null } ?: "gpt-5.6-terra"
+            ?: prefs.getString("remoteOpenaiModel", "")?.ifBlank { null } ?: "gpt-5.6-luna"
     }
     // Esfuerzo de razonamiento del cerebro OpenAI: "low" acelera cada turno (recomendado para
     // computer-use). Tunable desde prefs: minimal (más rápido) … xhigh (más lento y minucioso).
