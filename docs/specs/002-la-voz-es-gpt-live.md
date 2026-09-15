@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fase A1 implementada** (2026-09-14; promesas 201-217 verdes; A2 y B pendientes) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fase A1 implementada** (2026-09-14; promesas 201-217 verdes) · **fase A2 escrita en rojo** (218-229) · B pendiente · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -79,6 +79,18 @@ si cambia uno, cambia el otro en el mismo commit.
 | 215 | Por defecto el micrófono viaja siempre sin compuerta; con AEC no actúa; forzarla la activa siempre. | A1 |
 | 216 | La voz sostenida sobre la línea base dispara la interrupción; un golpe corto y el eco fuerte no disparan; tras disparar no vuelve a disparar hasta que Ü suene otra vez. | A1 |
 | 217 | Sin crédito, clave inválida (incluido HTTP 401) o modelo inexistente son fatales y se dicen con su causa; cualquier otro código, prosa o vacío se puede reintentar. | A1 |
+| 218 | Sin credencial la voz no llama a nadie y dice qué falta; un error de red al abrir se reintenta hasta 3 veces con esperas de 1 s y 2 s; un 401 del apretón de manos o una causa fatal no se reintentan. | A2 |
+| 219 | «Sesión abierta» y el mensaje de conexión se dicen una sola vez y solo al confirmarse la sesión, nunca al conectar el socket; sin sesión confirmada el micrófono no viaja. | A2 |
+| 220 | Una tanda de llamadas se contesta entera y pide respuesta una sola vez, solo cuando no queda ninguna llamada sin contestar; una llamada retirada no se ejecuta ni se contesta. | A2 |
+| 221 | Una herramienta que revienta se contesta con su error y nunca deja el turno abierto; su resultado pasa por el recorte. | A2 |
+| 222 | El turno se cierra por silencio incluso cuando llega un mensaje sin hechos; con una llamada en curso no se cierra. | A2 |
+| 223 | Una causa fatal termina la voz y se dice una sola vez, llegue por error, por cierre o por el apretón de manos; un corte de red reconecta hasta 4 veces con espera creciente, y cerrar un turno devuelve el contador a cero. | A2 |
+| 224 | Todas las vías de terminar la escucha (cierre, excepción, cancelación) pasan por la misma decisión; detener nunca reconecta ni anuncia un fatal. | A2 |
+| 225 | Cada conexión empieza con el marcador de turnos nuevo y sin la falla de antes de abrir de la anterior; los segundos de voz se suman entre conexiones y se reportan al detener. | A2 |
+| 226 | Un aviso del sistema espera a que no queden llamadas pendientes, sale una sola vez con su respuesta pedida y no abre una petición del usuario. | A2 |
+| 227 | El audio y las transcripciones del delegado nunca se escriben en el log. | A2 |
+| 228 | Al acercarse al tope de 128 items por sesión se avisa una vez en el log, sin cortar la conversación. | A2 |
+| 229 | Cuando el detector dispara, el altavoz se calla, la compuerta se reabre y el trozo viaja intacto; sin compuerta activa el detector no actúa. | A2 |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -109,6 +121,18 @@ micrófono, altavoz ni Android.
 | 215 | `activa(forzada, aec)` sin `sinCaminoDeEco`: falso. Con AEC y sin camino de eco declarado falso: no actúa. Forzada: siempre verdadero |
 | 216 | Eco 800 aprendido; voz 6000 sostenida dispara. Golpe de un trozo y ráfaga de dos no. Frase nueva de Ü a 2600 tras silencio siembra la base y no dispara. Voz 400 sobre una base de 100 no pasa el piso. Tras disparar, voz con la cola cortada no re-dispara; con Ü sonando otra vez, sí. `rms` de una onda cuadrada ±6000 es 6000 |
 | 217 | Las tres causas con sus códigos (también `type.code` y `401`) nombran su palabra y ninguna otra. Reintentables: vacío, blancos, `response_input_buffer_full`, códigos de cierre, prosa en inglés que menciona 401 o créditos |
+| 218 | Credencial nula, vacía o en blanco: ningún `abrir` y una frase con «falta». Dos `SinRed` y un `Ok`: 3 aperturas, esperas 1000 y 2000, un solo `session.start`. Tres `SinRed`: se dice que no hay conexión. `Rechazo(401)`: una apertura y ninguna espera; un `Rechazo(503)` tampoco se reintenta. Un `credit_balance_exhausted` antes de abrir: una apertura |
+| 219 | Antes de `session.started` el micrófono no sale, no se dice nada y el log no dice «sesión abierta»; al llegar, «Te escucho.» una vez aunque llegue dos veces. Tras un corte, «Sigo…» solo cuando la segunda conexión confirma |
+| 220 | Tres llamadas con el ejecutor retenido: la primera contestada no pide respuesta; la tercera, retirada, ni se ejecuta ni se contesta; el único `response.create` sale detrás de las dos salidas |
+| 221 | Un ejecutor que lanza: la salida es «la herramienta falló: …» y el turno cierra 2000 ms después. Un resultado de 40 KB viaja en ≤ 32 768 B con la marca de recorte |
+| 222 | Reloj a mano: con audio en ceros y `session.updated` como únicos mensajes, 1999 ms no cierran y 2000 sí. Con una llamada retenida, 10 s no cierran; devuelta, a los 2000 ms |
+| 223 | Fatal por `error`, por la descripción del cierre y por un 401 al reconectar: una frase «No sigo…» y ninguna reconexión; la primera causa gana. Cinco cortes: esperas 300, 600, 900 y 1200 y se deja. Un turno cerrado entre cortes vuelve a esperar 300 |
+| 224 | Un cierre normal y una excepción reconectan; `detener` con un fatal guardado y la cancelación de la corrutina terminan sin reconectar ni decir el fatal. Cada vía deja exactamente una línea «fin de la escucha» |
+| 225 | Una llamada retenida en la conexión 1 no sujeta el turno de la 3. Un error de antes de abrir en la 1 no convierte en «no pude abrir» un corte sin confirmar de la 2. Duraciones 12, 25 y luego 7: se reportan 32 s al detener |
+| 226 | Aviso con una llamada retenida: no sale nada; al contestarla, salida + aviso + un `response.create`. Sin pendientes sale ya. El contador de peticiones no se mueve |
+| 227 | Audio con voz, ceros, delta vacío, `output_text.delta` y `function_call_arguments.delta` del delegado: ni el base64 ni el texto del delegado aparecen en el log; lo que dijo Ü, una sola vez al cerrar el turno; un evento desconocido sí se vuelca |
+| 228 | Un resultado, un aviso y 117 textos: 119 items y ningún aviso; el 120 deja una línea; 15 más no dejan otra y siguen saliendo. La conexión nueva empieza en cero |
+| 229 | Compuerta activa: eco 800 y voz 6000 sostenida con Ü sonando; dispara, calla una vez, el trozo que dispara viaja idéntico y el siguiente también (reabierta, sin gracia). Sin compuerta: nunca calla y todo viaja idéntico |
 
 ---
 
@@ -138,6 +162,16 @@ descripción del cierre, HTTP del apretón de manos) y cuál gana, la reconexió
 por red (esperas 1 s y 2 s), el `response.create` una vez por tanda cuando no queda llamada sin
 contestar, y los mensajes de conexión solo al llegar `Abierta`. Promesas desde la **218**.
 
+Todo en `core/src/commonMain/kotlin/graph/core/voz/`, sin dependencias nuevas:
+
+- `CanalDeVoz.kt` — el puerto del socket (`Apertura`: `Ok`, `Rechazo(http, código)`, `SinRed`; `Recibido`:
+  `Mensaje` o `Cierre(código, motivo, porRed)`) y el `Reloj` inyectable.
+- `ConversacionViva.kt` — la máquina de estados: abre, oye el micrófono por la compuerta y el detector,
+  reacciona a cada hecho, ejecuta las herramientas por un puerto, cierra turnos y decide en un solo sitio
+  si termina, dice por qué o reconecta.
+
+Pone verdes: **218-229**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
+
 ### Fase B — el cableado en `app` (otra corrida)
 
 El socket real (cabecera `Authorization`, cierre normal «fin»), el micrófono a 24 kHz en trozos de
@@ -165,7 +199,9 @@ persona de la voz. Con la corrida a mano en el teléfono como nivel 4.
 - **Socket, micrófono, altavoz, AEC**: fase B. Esta capa se juzga sin nada de eso a propósito.
 - **La persona de la voz y las instrucciones de Ü**: viven en el cliente en Windows (deuda: pasar a
   Graph). Aquí entran por parámetro; decidir dónde viven es de la fase B.
-- **Vigilar los 128 items de la sesión**: nadie lo hace en Windows y no se inventa aquí sin medir.
+- **Cortar o compactar al llegar a los 128 items de la sesión**: nadie lo hace en Windows y no se midió
+  qué cuenta el servidor como item. A2 solo cuenta lo que la conversación crea y lo avisa en el log a los
+  120 (promesa 228); decidir qué hacer es de cuando se mida en el teléfono.
 - **GPT Realtime y Gemini**: solo GPT-Live-1.
 
 ## Riesgo
