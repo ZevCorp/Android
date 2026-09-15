@@ -1,6 +1,6 @@
 # Plan de implementación: lo hace a la primera y se puede parar — el freno y la puerta única
 
-Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **fase 3C implementada** (promesas 310-315 verdes; entró con el merge `297a2c6`) · **Nivel 4 de la 3B hecho** (2026-09-15; en el celular, la píldora y la notificación cortan la corrida sin pedir otro turno a Graph, y la tarea siguiente nace suelta) · **revisión de 3A-3C, parte 1** (2026-09-15; promesas 317-319 nuevas y 306-308, 310 y 315 endurecidas; cada una se vio ROJA con un sabotaje real) · **revisión de 3A-3C, parte 2** (2026-09-15; promesa 320 nueva y 308, 310-313, 315 y 317 endurecidas; la app comparte un tope y una cuenta por proceso; 16 sabotajes y cada uno puso ROJA su promesa) · Nace de leer el freno de `U-Windows-App`
+Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **fase 3C implementada** (promesas 310-315 verdes; entró con el merge `297a2c6`) · **Nivel 4 de la 3B hecho** (2026-09-15; en el celular, la píldora y la notificación cortan la corrida sin pedir otro turno a Graph, y la tarea siguiente nace suelta) · **revisión de 3A-3C, parte 1** (2026-09-15; promesas 317-319 nuevas y 306-308, 310 y 315 endurecidas; cada una se vio ROJA con un sabotaje real) · **revisión de 3A-3C, parte 2** (2026-09-15; promesa 320 nueva y 308, 310-313, 315 y 317 endurecidas; la app comparte un tope y una cuenta por proceso; 16 sabotajes y cada uno puso ROJA su promesa) · **revisión de 3A-3C, parte 3** (2026-09-15; 306, 308, 315 y 317-320 endurecidas; el destino del tope va al log sellado con la llave del proceso o como su tipo y su largo, y `GraphApp.run` hace lo de empezar solo si abrió la corrida; 18 sabotajes y cada uno puso ROJA su promesa) · Nace de leer el freno de `U-Windows-App`
 (`windows-client/src/Actions/Freno.cs`, promesas 21-28 y 59 de su contrato) y de un hallazgo grave
 de U que el Android no puede heredar · Rama: `yokh/precision`
 
@@ -339,6 +339,32 @@ Los sabotajes de la parte 2, uno por arreglo, aplicados sobre `8f597f2` y revert
 | S9a | `anticipate` propone sin `Ejecucion.sigue()` tras `consider` | 308 |
 | S9b | `Ejecucion.sigue()` dentro de un `runCatching` que se traga la parada | 308 |
 | S9c | un `private object Ejecucion { fun sigue() = Unit }` dentro de `GraphApp` | 308 |
+
+Los sabotajes de la parte 3, uno o más por arreglo, aplicados sobre `9cdc8bf` y revertidos con `git checkout`:
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| M1a | vuelve el FNV-1a sin sal sobre la clave entera | 315, 317 |
+| M1b | se sella con la llave del proceso la clave entera, texto visible incluido | 315, 317 |
+| M1c | la llave es la misma en todos los procesos | 317 |
+| M1d | un campo por nombre se sella en vez de ir como su tipo y su largo | 315 |
+| M1e | el candidato que elige `which` va como nombre y no con el sello de su nodo | 315 |
+| M2a | el log del tope suma `destino.legible.take(9)` | 317 |
+| M2b | lo mismo con `take(4)` | 317 |
+| M2c | `take(9)` solo en nodos, que el diccionario no ve: «(Juan Pére)» | 317 |
+| M2d | `take(4)` solo en nodos: «(Juan)» | 317 |
+| M2e | `take(4)` solo en nombres de cuatro letras o más: «(Mamá)», «(Juan)» | 317 |
+| M3 | `GraphApp.run` sin `if (Ejecucion.enCurso) return yaHayUna()` | 308 |
+| B2 | el motor no mira la tarea tras `next` | 318 |
+| B3 | `empiezaSiNoHayOtra` mira fuera del candado (en cuatro corridas más de la 319: entre 22.579 y 42.113 dobles aperturas) | 319 |
+| B4 | `val (Ejecucion) = Pair(Quieto, 0)` antes de `anticipation.consider(` | 308 |
+| B5 | `tope.let(TopeDeIntentos::nuevaPeticion)` en `Ejecucion.pasoConsciente` | 320 |
+| B6 | `trabajo =` y el log de abrir vuelven afuera del `try` | 318 |
+| B7 | `CorridaEnCurso` solo si el trabajo sigue activo; cancelada sin soltar, la segunda abre encima | 318 |
+| B8 | `dile` se traga la cancelación | 306 |
+
+M2a y M2b los ataja antes el diccionario de la 317 (el rechazo de «Ana» deja de ser el de «Eva»); M2c-M2e prueban solo el
+juez de trozos de 4 caracteres y marcas, que con las ventanas de 10 de la parte 2 dejaba pasar `take(9)`.
 
 Límites dichos:
 - El rechazo no llega al modelo: la puerta devuelve `false` y el motor lo traduce a «no se pudo
