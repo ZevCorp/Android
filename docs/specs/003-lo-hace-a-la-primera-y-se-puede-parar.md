@@ -1,6 +1,6 @@
 # Plan de implementación: lo hace a la primera y se puede parar — el freno y la puerta única
 
-Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **fase 3C implementada** (promesas 310-315 verdes; entró con el merge `297a2c6`) · **Nivel 4 de la 3B hecho** (2026-09-15; en el celular, la píldora y la notificación cortan la corrida sin pedir otro turno a Graph, y la tarea siguiente nace suelta) · **revisión de 3A-3C, parte 1** (2026-09-15; promesas 317-319 nuevas y 306-308, 310 y 315 endurecidas; cada una se vio ROJA con un sabotaje real) · **revisión de 3A-3C, parte 2** (2026-09-15; promesa 320 nueva y 308, 310-313, 315 y 317 endurecidas; la app comparte un tope y una cuenta por proceso; 16 sabotajes y cada uno puso ROJA su promesa) · **revisión de 3A-3C, parte 3** (2026-09-15; 306, 308, 315 y 317-320 endurecidas; el destino del tope va al log sellado con la llave del proceso o como su tipo y su largo, y `GraphApp.run` hace lo de empezar solo si abrió la corrida; 18 sabotajes y cada uno puso ROJA su promesa) · Nace de leer el freno de `U-Windows-App`
+Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **fase 3C implementada** (promesas 310-315 verdes; entró con el merge `297a2c6`) · **Nivel 4 de la 3B hecho** (2026-09-15; en el celular, la píldora y la notificación cortan la corrida sin pedir otro turno a Graph, y la tarea siguiente nace suelta) · **revisión de 3A-3C, parte 1** (2026-09-15; promesas 317-319 nuevas y 306-308, 310 y 315 endurecidas; cada una se vio ROJA con un sabotaje real) · **revisión de 3A-3C, parte 2** (2026-09-15; promesa 320 nueva y 308, 310-313, 315 y 317 endurecidas; la app comparte un tope y una cuenta por proceso; 16 sabotajes y cada uno puso ROJA su promesa) · **revisión de 3A-3C, parte 3** (2026-09-15; 306, 308, 315 y 317-320 endurecidas; el destino del tope va al log sellado con la llave del proceso o como su tipo y su largo, y `GraphApp.run` hace lo de empezar solo si abrió la corrida; 18 sabotajes y cada uno puso ROJA su promesa) · **integración de la ola 1** (2026-09-15, `yokh/integracion`; promesas 321-322 nuevas: la sesión de telemetría la abre quien abrió la corrida y acabar una corrida limpia siempre; 2 sabotajes y cada uno puso ROJA su promesa) · Nace de leer el freno de `U-Windows-App`
 (`windows-client/src/Actions/Freno.cs`, promesas 21-28 y 59 de su contrato) y de un hallazgo grave
 de U que el Android no puede heredar · Rama: `yokh/precision`
 
@@ -381,6 +381,28 @@ Límites dichos:
 - Sin candado (el del freno llegó con la promesa 319; el tope y la cuenta no lo tienen): dos entradas
   simultáneas desde hilos distintos podrían contarse mal. Desde la parte 2 hay uno de cada por proceso, pero una sola
   corrida de fuera toca a la vez (318) y el catálogo de la anticipación arma su puerta sin actuar.
+
+### Integración de la ola 1 — B1 y B8 (en `yokh/integracion`, 2026-09-15)
+
+Al entrar precisión (`e4ec368`) en `yokh/integracion`, junto a la voz, lo enseñado y la telemetría de la spec 005:
+
+- **B1 — la sesión de telemetría la abre quien abrió la corrida (321, decisión del Capitán, opción A).**
+  `Telemetry.promptStarted` corría antes de `Ejecucion.correr`: una corrida que se cruzaba entre mirar y abrir fijaba su id
+  como pedido en curso de la telemetría y, al rechazarse, lo dejaba en nulo con la viva corriendo. Ahora se abre dentro del
+  bloque; los cierres van por `telemetryId?.let` y el rechazo no manda sesión. Costo aceptado: la línea «freno: tarea
+  abierta» queda fuera de la sesión y la corrida rechazada deja de mandar su sesión con «error».
+- **B8 — acabar una corrida limpia siempre (322).** Desde la parte 3, una cancelación dentro del aviso de soltar sale de
+  `Freno.termine` (306). En el `finally` de `correr` se llevaba lo de detrás: `trabajo` no se limpiaba, la cuenta no
+  cerraba y su línea `peticion:` salía al abrir la corrida siguiente, dentro de otra sesión. La limpieza va ahora en un
+  `finally` interno y la cancelación sigue su curso.
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| B1 | `Telemetry.promptStarted` vuelve antes de `Ejecucion.correr` | 321 |
+| B8 | el `finally` de `correr` limpia después de `freno.termine()` sin `finally` interno | 322 |
+
+`trabajo` sin limpiar no se ve desde afuera (la corrida siguiente lo pisa y `cortaSiNoSuelta` mira el freno): la 322 juzga la
+cuenta, que es lo que sí se ve.
 
 ## Lo que NO entra, y por qué
 
