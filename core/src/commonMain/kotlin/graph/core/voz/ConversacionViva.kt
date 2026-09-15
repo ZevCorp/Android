@@ -50,6 +50,11 @@ class ConversacionViva(
     private val transcribe: (texto: String, esDeU: Boolean) -> Unit = { _, _ -> },
     /** Empezó una petición del usuario, por voz o por texto. La cuenta de la petición (fase 3C) cuelga de aquí. */
     private val alAbrirPeticion: (por: String) -> Unit = {},
+    /**
+     * Si la herramienta actúa sobre la pantalla (lo dice el catálogo de la fase 2C). Esas van al obrero de la conexión,
+     * de a una; las de control (`parar`, `como_va`, `self_*`) corren en el acto. Por defecto todas actúan: nada se cruza.
+     */
+    private val actuaEnPantalla: (nombre: String) -> Boolean = { true },
 ) {
 
     companion object {

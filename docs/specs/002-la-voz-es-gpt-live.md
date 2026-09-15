@@ -81,11 +81,11 @@ si cambia uno, cambia el otro en el mismo commit.
 | 217 | Sin crédito, clave inválida (incluido HTTP 401) o modelo inexistente son fatales y se dicen con su causa; cualquier otro código, prosa o vacío se puede reintentar. | A1 |
 | 218 | Sin credencial la voz no llama a nadie y dice qué falta; un error de red al abrir se reintenta hasta 3 veces con esperas de 1 s y 2 s; un 401 del apretón de manos o una causa fatal no se reintentan. | A2 |
 | 219 | «Sesión abierta» y el mensaje de conexión se dicen una sola vez y solo al confirmarse la sesión, nunca al conectar el socket; sin sesión confirmada el micrófono no viaja. | A2 |
-| 220 | Una tanda de llamadas se contesta entera y pide respuesta una sola vez, solo cuando no queda ninguna llamada sin contestar; una llamada retirada no se ejecuta ni se contesta. | A2 |
+| 220 | Una tanda de llamadas se contesta entera y pide respuesta una sola vez, solo cuando no queda ninguna llamada sin contestar; una llamada retirada no se ejecuta. | A2 |
 | 221 | Una herramienta que revienta se contesta con su error y nunca deja el turno abierto; su resultado pasa por el recorte. | A2 |
 | 222 | El turno se cierra por silencio incluso cuando llega un mensaje sin hechos; con una llamada en curso no se cierra. | A2 |
 | 223 | Una causa fatal termina la voz y se dice una sola vez, llegue por error, por cierre o por el apretón de manos; un corte de red reconecta hasta 4 veces con espera creciente, y cerrar un turno devuelve el contador a cero. | A2 |
-| 224 | Todas las vías de terminar la escucha (cierre, excepción, cancelación) pasan por la misma decisión; detener nunca reconecta ni anuncia un fatal. | A2 |
+| 224 | Todas las vías de terminar la escucha (cierre, excepción, cancelación) pasan por la misma decisión; detener nunca reconecta ni anuncia un fatal, y una cancelación que llega del canal con la voz viva es un corte y reconecta. | A2 |
 | 225 | Cada conexión empieza con el marcador de turnos nuevo y sin la falla de antes de abrir de la anterior; los segundos de voz se suman entre conexiones y se reportan al detener. | A2 |
 | 226 | Un aviso del sistema espera a que no queden llamadas pendientes, sale una sola vez con su respuesta pedida y no abre una petición del usuario. | A2 |
 | 227 | El audio y las transcripciones del delegado nunca se escriben en el log. | A2 |
@@ -93,6 +93,10 @@ si cambia uno, cambia el otro en el mismo commit.
 | 229 | Cuando el detector dispara, el altavoz se calla, la compuerta se reabre y el trozo viaja intacto; sin compuerta activa el detector no actúa. | A2 |
 | 230 | Cambiar de modo en plena sesión manda la delegación nueva sin reabrir, y si la sesión se corta, la reapertura ya abre en el modo vigente. | A2 |
 | 231 | Detener corta cualquier espera en curso: la voz termina enseguida, no cuando vence la espera. | A2 |
+| 232 | Una herramienta que se cancela por su cuenta o lanza un error grave se contesta con su motivo y la voz sigue atendiendo las siguientes; solo terminar la conversación la cancela, y entonces no se contesta. | A2 |
+| 233 | Al reconectar, lo que quedó corriendo de la conexión anterior se cancela, no se contesta en la nueva y no bloquea sus herramientas. | A2 |
+| 234 | Parar y las herramientas de control no esperan detrás de una herramienta que actúa en la pantalla; las que actúan en la pantalla siguen yendo de a una. | A2 |
+| 235 | Retirar una llamada la contesta como no ejecutada, para que el servidor no quede esperando su salida. | A2 |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -125,11 +129,11 @@ micrófono, altavoz ni Android.
 | 217 | Las tres causas con sus códigos (también `type.code` y `401`) nombran su palabra y ninguna otra. Reintentables: vacío, blancos, `response_input_buffer_full`, códigos de cierre, prosa en inglés que menciona 401 o créditos. «fin 401» es fatal: la palabra va separada por espacio, no solo por punto |
 | 218 | Credencial nula, vacía o en blanco: ningún `abrir` y una frase con «falta». Dos `SinRed` y un `Ok`: 3 aperturas, esperas 1000 y 2000, un solo `session.start`. Tres `SinRed`: se dice que no hay conexión. `Rechazo(401)`: una apertura y ninguna espera; un `Rechazo(503)` tampoco se reintenta. Un `credit_balance_exhausted` antes de abrir: una apertura |
 | 219 | Antes de `session.started` el micrófono no sale, no se dice nada y el log no dice «sesión abierta»; al llegar, «Te escucho.» una vez aunque llegue dos veces. Tras un corte, «Sigo…» solo cuando la segunda conexión confirma |
-| 220 | Tres llamadas con el ejecutor retenido: la primera contestada no pide respuesta; la tercera, retirada, ni se ejecuta ni se contesta; el único `response.create` sale detrás de las dos salidas |
+| 220 | Tres llamadas con el ejecutor retenido: la primera contestada no pide respuesta; la tercera, retirada, no se ejecuta y se contesta como no ejecutada (235); el único `response.create` sale detrás de las tres salidas |
 | 221 | Un ejecutor que lanza: la salida es «la herramienta falló: …» y el turno cierra 2000 ms después. Un resultado de 40 KB viaja en ≤ 32 768 B con la marca de recorte |
 | 222 | Reloj a mano: con audio en ceros y `session.updated` como únicos mensajes, 1999 ms no cierran y 2000 sí. Con una llamada retenida, 10 s no cierran; devuelta, a los 2000 ms |
 | 223 | Fatal por `error`, por la descripción del cierre y por un 401 al reconectar: una frase «No sigo…» y ninguna reconexión; la primera causa gana. Cinco cortes: esperas 300, 600, 900 y 1200 y se deja. Un turno cerrado entre cortes vuelve a esperar 300 |
-| 224 | Un cierre normal y una excepción reconectan; `detener` con un fatal guardado y la cancelación de la corrutina terminan sin reconectar ni decir el fatal. Cada vía deja exactamente una línea «fin de la escucha» |
+| 224 | Un cierre normal y una excepción reconectan; `detener` con un fatal guardado y la cancelación de la corrutina terminan sin reconectar ni decir el fatal. Cada vía deja exactamente una línea «fin de la escucha». Un canal que cancela su `Channel` en `recibir()` y al que, al reconectar, le vence un `withTimeout(0)` en `abrir()`: `conversar` no lanza, reconecta dos veces (300 y 600 ms) y la única «fin de la escucha por cancelación» es la de detener |
 | 225 | Una llamada retenida en la conexión 1 no sujeta el turno de la 3. Un error de antes de abrir en la 1 no convierte en «no pude abrir» un corte sin confirmar de la 2. Duraciones 12, 25 y luego 7: se reportan 32 s al detener |
 | 226 | Aviso con una llamada retenida: no sale nada; al contestarla, salida + aviso + un `response.create`. Sin pendientes sale ya. El contador de peticiones no se mueve |
 | 227 | Audio con voz, ceros, delta vacío, `output_text.delta` y `function_call_arguments.delta` del delegado: ni el base64 ni el texto del delegado aparecen en el log; lo que dijo Ü, una sola vez al cerrar el turno; un evento desconocido sí se vuelca |
@@ -137,6 +141,10 @@ micrófono, altavoz ni Android.
 | 229 | Compuerta activa: eco 800 y voz 6000 sostenida con Ü sonando; dispara, calla una vez, el trozo que dispara viaja idéntico y el siguiente también (reabierta, sin gracia). Sin compuerta: nunca calla y todo viaja idéntico |
 | 230 | Canal con guion: cambiar al modo aprendiz en plena sesión da `session.update` y el append, sin otro `session.start` ni otra URL. Tras un corte, el `session.start` de la reapertura lleva las instrucciones y herramientas del aprendiz; tras otro cambio y otro corte, las del último. La voz reabre siempre con su persona, y en un modo especial, confirmada la sesión y no antes, recibe el append con el prefijo de cambio de modo y las reglas vigentes. De vuelta al modo de siempre, la reapertura no manda append |
 | 231 | Un reloj cuya espera no vence sola: detener durante la espera de 1 s de un reintento de abrir, y durante la de 300 ms de una reconexión, termina la voz sin avanzar el reloj, sin reabrir y sin decir nada más. Si no termina, la prueba abre la espera y sale roja, no colgada |
+| 232 | Cuatro llamadas: una lanza `Paraste` (el freno de 3A, una `CancellationException`), otra vence un `withTimeout(0)`, otra `TODO()` y la cuarta contesta. `conversar` no lanza; las cuatro corren y se contestan en orden («se paró: …», «se paró: …», «falló: An operation is not implemented: …», su salida), sale un `response.create` y el turno cierra. Con una colgada y otra detrás, detener o cancelar la corrutina cancela la colgada, la de detrás no corre y ninguna se contesta |
+| 233 | Una llamada colgada en la conexión 1 y un corte: confirmada la 2, la colgada ya recibió su cancelación; una llamada de la 2 corre, se contesta sola (la vieja no), pide respuesta y su turno cierra a los 2000 ms |
+| 234 | `actuaEnPantalla` solo para `pulsar`. Dos `pulsar` retenidos y detrás `parar`, `como_va` y `self_mute`: las tres de control corren y se contestan con la primera de pantalla retenida, sin `response.create`; la segunda de pantalla corre solo al soltar la primera; un único `response.create` al final |
+| 235 | Una llamada retenida y otra en cola que se retira: la retirada no se ejecuta, su salida es «retirada: no se ejecutó» y el único `response.create` va detrás. Retirada antes de llegar y sola: `session.start`, su salida y un `response.create` |
 
 ---
 
