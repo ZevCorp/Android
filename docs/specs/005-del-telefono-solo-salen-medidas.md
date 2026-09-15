@@ -68,8 +68,12 @@ del test: 501-506 y 508-511 en `core/src/commonTest/kotlin/graph/core/contrato/C
 
 - **Queda tal cual:** un nombre de la lista cerrada (`EVENTOS`: acciones y herramientas del MCP, estados, proveedores), una
   frase fija de la lista cerrada (`FRASES`: `usuario dijo`, `Ü dijo`, `sesión cerrada`, `nodo sin id estructural`, `ya hay
-  una tarea en curso`…), un signo de estructura (`·`, `:`, `=`, `«»`, `→`, los marcadores `▶ ■ ✋ 🧩 👁`…), el nombre de
-  una excepción (`…Exception`, `…Error`).
+  una tarea en curso`…), un signo de estructura (`·`, `:`, `=`, `«»`, `→`, los marcadores `▶ ■ ✋ 🧩 👁`…), y el nombre de una
+  clase de excepción de la **lista cerrada** `EXCEPCIONES`: las que la app y el core loguean de verdad —`IllegalStateException`,
+  `SocketTimeoutException`, `MalformedURLException` (una URL mal escrita, `GraphTransport.causa`), `ProtocolException` (un
+  servidor que no habla HTTP o un TLS roto, `CanalOkHttp.tipo`), `ExceptionInInitializerError` (un aviso que no llegó a
+  inicializarse, `Freno.dile`)…— más las estándar que pueden llegar de OkHttp, kotlinx y coroutines. No es un sufijo: cualquier
+  otro nombre con forma de excepción (`AnaMariaError`, `JuanPerezException`) no es una clase conocida y sale como su largo `‹N›`.
 - **Queda como medida:** un número pegado a su unidad, solo `ms`, `s`, `KB`, `MB` o `%` (`1234ms`, `12s`, `3KB`, `40%`);
   con espacio, `ms`, `min`, `KB` y `MB`, y `s` hasta 3 cifras (`primera=120 ms`, `tope de 90 s`, `5 min`); un número delante
   de un sustantivo de medida (`42 caracteres`, `120 bytes`, `3 turnos`); un número detrás de un prefijo de medida (`HTTP 503`,
@@ -126,6 +130,7 @@ caracteres`»; `p_status` ∈ {running, ok, error, cancelled} y `p_source` ∈ {
 | 505 | `filasDeLog` pone el mensaje crudo | roja: el mensaje no es el de la puerta |
 | 506 | el sello pide 9 hex en vez de 8 | roja: el destino sellado cae |
 | 506 | `TopeDeIntentos.enLog` dice «etiqueta de N caracteres» (precisión cambia su formato; los casos literales siguen verdes) | roja: la línea real de peticion cae |
+| 506 | la lista cerrada de excepciones vuelve al patrón abierto `[A-Z][A-Za-z0-9]*(?:Exception\|Error)` | roja: `AnaMariaError` sale |
 | 507 | `promptStarted` vuelve a armar su JSON en `Telemetry.kt` | roja: un `http(` sin cuerpo de la puerta |
 | 508 | el sello de la puerta vuelve a aceptar 8 cifras | roja: `#12345678` sale |
 | 508 | `sello` en precisión devuelve los 8 hex del HMAC sin su letra | roja: un sello real sale todo cifras |
