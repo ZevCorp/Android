@@ -1,6 +1,6 @@
 # Plan de implementación: lo hace a la primera y se puede parar — el freno y la puerta única
 
-Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **Nivel 4 de la 3B pendiente**: el APK de este worktree no trae key de Graph · Nace de leer el freno de `U-Windows-App`
+Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **Nivel 4 de la 3B hecho** (2026-09-15; en el celular, la píldora y la notificación cortan la corrida sin pedir otro turno a Graph, y la tarea siguiente nace suelta) · Nace de leer el freno de `U-Windows-App`
 (`windows-client/src/Actions/Freno.cs`, promesas 21-28 y 59 de su contrato) y de un hallazgo grave
 de U que el Android no puede heredar · Rama: `yokh/precision`
 
@@ -123,22 +123,103 @@ Pone verdes: **301-306**. La app todavía no usa la puerta.
 - `ExecutionEngine` mira el freno también justo después de `next`: un turno que vuelve con pregunta o `done`
   tras el alto no pregunta ni celebra.
 
-### Nivel 4 de la 3B — en el teléfono (pendiente, 2026-09-14)
+### Nivel 4 de la 3B — en el teléfono (hecho, 2026-09-15)
 
-Xiaomi M2101K7BL · Android 12 · APK release 0.42 armado en este worktree (HEAD `2e18c83`), instalado con
-`adb install -r`. Primer intento, «abre la calculadora» escrito en «Pídeme algo». `adb logcat -s Graph:D`:
+Xiaomi M2101K7BL · Android 12 · MIUI 13 · APK release 0.42 armado en `297a2c6` (merge de 3B y 3C, contrato de 31
+promesas) con `apikey.properties`, instalado con `adb install -r` (`lastUpdateTime=2026-09-14 23:42:40`). Las
+tareas se escribieron en «Pídeme algo»; log con `adb logcat -v time -s Graph:D`. El primer intento (HEAD `2e18c83`,
+2026-09-14 23:29) no traía key: la corrida se cortó antes de abrir la tarea con «no hay key de graph», sin tocar
+el teléfono ni llamar a nadie.
+
+**(a) «abre la calculadora»: pasa por la puerta y termina.** Launcher → Calculadora.
 
 ```
-23:29:22.046 [app] Pídeme: abre la calculadora
-23:29:22.090 [graph] no hay key de graph: ponela en el panel de desarrollador o en apikey.properties como graphApiKey
-mCurrentFocus=Window{e5a51a5 u0 com.miui.home/com.miui.home.launcher.Launcher}
+23:43:32.877 [freno] tarea abierta «abre la calculadora»
+23:43:40.760 [graph] turno 1 · session=nuevo · HTTP 200 · 6107ms · 1 acciones
+23:43:42.261 [api] launch_app → com.miui.calculator
+23:43:42.261 [run]   ▪ MCP launch_app {app=Calculadora} → ok
+23:43:46.473 [run] ■ 2 turnos · 1 acciones · 13s · ¡Listo, calculadora abierta! 🧮
+mCurrentFocus=Window{22a6c21 u0 com.miui.calculator/com.miui.calculator.cal.CalculatorActivity}
 ```
 
-El proveedor guardado es GRAPH, pero este APK se armó sin `apikey.properties` (fuera de git; no está en este
-worktree) y prefs no tiene key: la corrida se corta antes de abrir la tarea, sin tocar el teléfono ni llamar a
-nadie. Falta, con la key puesta: (a) «abre la calculadora» pasando por la puerta, con `freno: tarea abierta` y la
-acción; (b) «abre ajustes y entra a wifi y luego a bluetooth» parada con la píldora a mitad: `freno: alto pedido
-(píldora)`, `run: ✋` y ningún `[graph] turno` después; (c) lo mismo desde la notificación.
+La puerta no escribe nada cuando deja pasar: la prueba es que la acción corrió con la tarea abierta y sin
+`[puerta] sin tarea abierta, no paso …`.
+
+**(b) La píldora a mitad.** «abre ajustes, entra a wifi, vuelve y entra a bluetooth». Se tocó la píldora negra
+«ejecutando…» del notch (arriba al centro) un segundo después de la acción del turno 1, con el turno 2 en red:
+
+```
+09:22:43.609 [graph] turno 1 · session=nuevo · HTTP 200 · 5782ms · 1 acciones
+09:22:43.637 [run]   ▪ MCP open_settings {section=wifi} → ok
+09:22:44.713 [app] ⏹ alto pedido por píldora
+09:22:44.713 [freno] alto pedido (píldora); paro «abre ajustes, entra a wifi, vuelve y entra a bluetooth»
+09:22:46.215 [freno] la corrida no soltó en 1500 ms tras el alto (un turno colgado en red): corto su trabajo
+09:22:46.406 [freno] suelto «abre ajustes, entra a wifi, vuelve y entra a bluetooth»: el control vuelve a ti
+09:22:46.407 [app] Ejecución detenida ✋
+09:22:46.408 [run] ✋ paraste tú · 2 turnos · 1 acciones · 8s · no sigo
+mCurrentFocus=Window{177cd25 u0 com.android.settings/com.android.settings.Settings$BluetoothSettingsActivity}
+```
+
+Ningún `[graph] turno` después de 09:22:44.713: el turno 2 que estaba en red se cortó sin registrarse ni ejecutar
+nada. En pantalla, toast «Detenido» y el globo «Vale, paro.» de la burbuja. El foco en Bluetooth es de antes: la
+tarea de Ajustes venía de ahí y `open_settings {section=wifi}` dio `ok` sin cambiar de pantalla.
+
+Un intento anterior (09:06) llegó tarde y enseñó otra cosa: la corrida ya había cerrado (`■ 3 turnos` a 09:06:54.788)
+pero la tarea seguía abierta durante la anticipación, que reintentaba Gemini en 429. El alto cayó ahí y la cortó:
+
+```
+09:06:54.788 [run] ■ 3 turnos · 2 acciones · 19s · Listo: abrí Wi‑Fi y luego volví a Ajustes para entrar a Bluetooth.
+09:06:59.917 [freno] alto pedido (píldora); paro «abre ajustes, entra a wifi, vuelve y entra a bluetooth»
+09:07:01.420 [freno] la corrida no soltó en 1500 ms tras el alto (un turno colgado en red): corto su trabajo
+09:07:01.818 [freno] suelto «abre ajustes, entra a wifi, vuelve y entra a bluetooth»: el control vuelve a ti
+09:07:01.820 [app] Ejecución detenida ✋
+```
+
+**(c) La notificación a mitad.** «abre ajustes, entra a wifi, vuelve, entra a bluetooth, vuelve y entra a
+pantalla». En la persiana de MIUI la notificación «Ü está ejecutando · Toca para detener» sale **colapsada**: el
+botón «⏹ Detener» no se ve sin expandirla. Se tocó el cuerpo, que manda el mismo broadcast (`setContentIntent(stop)`
+→ `StopReceiver`). El primer intento (09:25) no sirvió: con la persiana abierta el motor vio `com.android.systemui`,
+la cerró con `key back` (turno 3) y el toque cayó en la lista de Wi-Fi. El segundo (09:31) abrió la persiana, tomó
+la captura y tocó en el mismo paso, justo tras la acción del turno 1:
+
+```
+09:31:33.976 [graph] turno 1 · session=nuevo · HTTP 200 · 4575ms · 1 acciones
+09:31:34.003 [run]   ▪ MCP open_settings {section=general} → ok
+09:31:36.153 [app] ⏹ alto pedido por notificación
+09:31:36.153 [freno] alto pedido (notificación); paro «abre ajustes, entra a wifi, vuelve, entra a bluetooth, vuelv»
+09:31:37.656 [freno] la corrida no soltó en 1500 ms tras el alto (un turno colgado en red): corto su trabajo
+09:31:37.987 [freno] suelto «abre ajustes, entra a wifi, vuelve, entra a bluetooth, vuelv»: el control vuelve a ti
+09:31:37.988 [app] Ejecución detenida ✋
+09:31:37.989 [run] ✋ paraste tú · 2 turnos · 1 acciones · 9s · no sigo
+mCurrentFocus=Window{9a9cf3d u0 com.android.settings/com.android.settings.MiuiSettings}
+```
+
+Cero `[graph] turno` después del alto.
+
+**(d) La tarea siguiente nace suelta.** «abre la calculadora» después de los altos, desde Ajustes:
+
+```
+09:43:51.632 [freno] tarea abierta «abre la calculadora»
+09:44:00.689 [graph] turno 1 · session=nuevo · HTTP 200 · 6855ms · 1 acciones
+09:44:02.428 [run]   ▪ MCP launch_app {app=Calculadora} → ok
+09:44:08.673 [run] ■ 2 turnos · 1 acciones · 16s · Calculadora abierta.
+mCurrentFocus=Window{2b1ae5e u0 com.miui.calculator/com.miui.calculator.cal.CalculatorActivity}
+```
+
+Sin `[puerta] paraste tú, no paso …`: el alto de (c) no quedó armado.
+
+Pantallas recorridas: Launcher, Calculadora, Ajustes (principal, Wi-Fi, Bluetooth, Pantalla) y la persiana de
+notificaciones. Lo que el teléfono enseñó y queda fuera de la 3B:
+
+- La tarea sigue abierta, con la píldora «ejecutando…» a la vista, unos 7 s después de `■` mientras la anticipación
+  reintenta Gemini. Un alto ahí dice «Ejecución detenida ✋» sobre una tarea que ya estaba hecha.
+- Gemini responde 429 (sin crédito) en cada corrida: el destilador de memoria, la anticipación y el
+  post-proceso del workflow reintentan 3 veces cada uno (~7 s) antes de fallar.
+- La notificación de ejecución sale colapsada en MIUI: el botón «⏹ Detener» solo se ve al expandirla.
+- La enseñanza pasiva graba como paso del workflow un toque de la persona durante la corrida
+  (`[workflow] step 2: (sin etiqueta)` a 09:25:39.792, el toque que cayó en la lista de Wi-Fi).
+- `open_settings {section=wifi}` devuelve `ok` aunque la tarea de Ajustes, parada en Bluetooth, no cambie de
+  pantalla.
 
 ---
 
