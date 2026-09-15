@@ -69,6 +69,7 @@ método `promesaNN`); si cambia uno, cambia el otro en el mismo commit.
 | 12 | Cada objetivo nuevo abre un hilo nuevo en Graph: el primer turno de cada corrida viaja sin session aunque haya uno de una corrida anterior o uno reanudado. | B |
 | 13 | Un turno de Graph nunca espera más de 6 minutos en total: un fallo de conexión se reintenta, pero una lectura agotada no, porque el turno pudo haberse cobrado. | B · revisión |
 | 14 | Cancelar la corrida durante un POST no se registra como fallo de red ni reintenta. | B · revisión |
+| 15 | Las apps instaladas se consultan una sola vez por corrida y viajan en cada turno de esa corrida. | B · revisión R2 |
 
 **La que cierra el asunto es la 7.** Mientras el cliente mande prompt o catálogo, no es tonto: es
 el cerebro viejo con otro transporte. Las otras diez protegen el camino; la 7 es la que define qué
@@ -79,6 +80,10 @@ Graph siguió el hilo viejo y reabrió la calculadora en vez de los ajustes. Se 
 (`AgentLoop.cs:96`, `session = null` por objetivo). **La promesa 1 no cambia:** su test nunca fijó
 que un hilo reanudado se adopta; esa regla vivía solo en el comentario y en el `begin()` de
 `GraphBrain` («con un hilo reanudado viaja igual»), y es lo que la 12 contradice y retira.
+
+**La 15 nació de la revisión** (ronda R2): `GraphBrain` pedía las apps en cada turno, y desde
+`MainActivity` esa consulta (una llamada al `PackageManager` por paquete instalado) corría en el
+hilo principal.
 
 **La 13 y la 14 nacieron de la revisión** (ronda R1): con 30 s para conectar y 5 min para leer por
 intento, cuatro intentos podían tener el turno colgado más de 20 minutos, y una lectura agotada
@@ -107,6 +112,7 @@ Ninguna toca red, Android ni disco.
 | 12 | (a) Corrida 1 guionada hasta `done` con `session:"s-fin"`, luego `begin("abre los ajustes")` en la misma instancia → el request 3 no tiene `session` y sí `goal`. (b) `resume("s-fin")` y `begin(goal)` → el request 1 no tiene `session` y sí `goal` |
 | 13 | Reloj `TestTimeSource` que avanzan el guion y las esperas. (a) `-1` → 1 request, 0 esperas, mensaje «no respondió a tiempo … no se reintentó para no cobrar dos veces». (b) `0` → se reintenta. (c) `504` que tarda 179,5 s → 2 requests, esperas `[800]`, el turno no pasa de 6 min y el mensaje lo dice. (d) Con 200 ms de turno por delante, un transporte que se cuelga se corta en el tope (real, `withTimeout` de 3 s alrededor para que un fallo no cuelgue el juez) |
 | 14 | El transporte lanza `CancellationException` → sale tal cual de `next`, 1 request, 0 esperas y ninguna línea de log con «transitorio» |
+| 15 | Un `listApps` que cuenta sus llamadas. Corrida de 3 turnos → 1 llamada y `state.apps` en los 3 requests. `begin` de un objetivo nuevo y un turno → 2 llamadas: la cuenta es por corrida, no por cerebro |
 
 ---
 
