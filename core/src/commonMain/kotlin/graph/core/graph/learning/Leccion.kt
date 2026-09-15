@@ -421,9 +421,9 @@ class Leccion(
      * cerrar sería publicar. Windows hace lo mismo (`TeachSession.DiscardAsync` borra el mp4 sin llamar a
      * Graph). Solo tiene efecto mientras se abre o se graba: descartar después de terminar no des-publica.
      */
-    suspend fun descartar() {
+    suspend fun descartar(): Boolean {
         val a = candado.withLock {
-            if (estado != Estado.GRABANDO && estado != Estado.ABRIENDO) return
+            if (estado != Estado.GRABANDO && estado != Estado.ABRIENDO) return true
             estado = Estado.DESCARTADA
             abierta.also { abierta = null }
         }
@@ -433,6 +433,7 @@ class Leccion(
             a.lector.join()
         }
         log.log(TAG, "demostración descartada: no se publica nada" + (a?.let { " (la sesión ${it.sesion.sessionId} queda sin cerrar en graph)" } ?: ""))
+        return true
     }
 
     /**

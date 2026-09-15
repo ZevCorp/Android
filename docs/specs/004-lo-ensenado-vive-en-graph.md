@@ -68,6 +68,8 @@ otro en el mismo commit.
 | 414 | Un plan o un video procesado no se pierden por un campo raro: una opción sin value o label y una variable nula se leen como vacías, y un null en notas o preguntas se descarta. | 4A1 · r1 |
 | 415 | Un id de workflow en blanco no llama a Graph y dice por qué. | 4A1 · r1 |
 | 416 | Una respuesta a la que le falta la clave esperada es un error; una que la trae vacía es válida. | 4A1 · r1 |
+| 417 | Si el lector de pasos se muere, los pasos que no viajaron cuentan como no enviados con su motivo y la lección nunca se da por entera ni se anuncia como aprendida con pasos que no llegaron. | 4A2 · r1 |
+| 418 | Cancelar el cierre de una lección nunca la deja sin cerrar ni sin pendiente: o se cierra en Graph, o queda un pendiente que el arranque sabe cerrar. | 4A2 · r1 |
 
 **La que cierra el asunto es la 401.** Si el protocolo no es el de Windows, Graph recibe algo que
 acepta con HTTP 200 y descarta en silencio (un `actionType` que no conoce, unos `alternativeTargets`

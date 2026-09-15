@@ -28,6 +28,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -159,11 +160,20 @@ class Contrato004RespuestasDeGraph {
                 assertTrue("64 niveles" in mensaje && "[[[" !in mensaje, "$p · $caso: ${mensaje.take(200)}")
                 assertTrue(lineas.none { "[[[" in it }, "$p · $caso: el log volcó la respuesta")
             }
-            // Un error de Graph anidado de más tampoco revienta al buscarle el `error`.
-            val e = lanzaExacto<GraphException>("$p · un 500 anidado de más") {
-                cliente(TransporteGuionado(TransportReply(500, """{"error":"neo4j caído","traza":$hondo}"""))).borrar("wf-1")
+            // Un error de Graph anidado de más tampoco revienta al buscarle el `error`, ni se vuelca en el mensaje: ni el de un
+            // 500, ni el de un transitorio que se rinde tras sus reintentos.
+            val errores = listOf<Triple<String, Array<TransportReply>, suspend (LearningClient) -> Unit>>(
+                Triple("un 500 anidado de más", arrayOf(TransportReply(500, """{"error":"neo4j caído","traza":$hondo}""")), { it.borrar("wf-1") }),
+                Triple("un 503 anidado de más", Array(4) { TransportReply(503, hondo) }, { it.mandarPaso("ses-1", paso(1)) }),
+            )
+            for ((caso, guion, llamar) in errores) {
+                val lineas = mutableListOf<String>()
+                val e = lanzaExacto<GraphException>("$p · $caso") { llamar(cliente(TransporteGuionado(*guion), lineas)) }
+                assertEquals(guion.first().status, e.status, "$p · $caso")
+                val mensaje = e.message.orEmpty()
+                assertTrue("64 niveles" in mensaje && "[[[" !in mensaje, "$p · $caso: ${mensaje.take(200)}")
+                assertTrue(lineas.none { "[[[" in it }, "$p · $caso: el log volcó la respuesta")
             }
-            assertEquals(500, e.status, p)
         }
 
         // Interpretar sin video: el modelo no opinó, con el porqué, y el log no vuelca la interpretación.
@@ -268,6 +278,14 @@ class Contrato004RespuestasDeGraph {
             assertTrue(t.llamadas.isEmpty(), "$p · $caso: llamó a Graph: ${t.llamadas.map { "${it.metodo} ${it.url}" }}")
             val mensaje = e.message.orEmpty()
             assertTrue("id" in mensaje && "en blanco" in mensaje && "graph" in mensaje, "$p · $caso: no dice por qué: «$mensaje»")
+        }
+        // Alinear es best-effort: con el id en blanco devuelve false, no llama a Graph y el log dice por qué.
+        for (id in listOf("", "  ")) {
+            val lineas = mutableListOf<String>()
+            val t = TransporteGuionado(ok("{}"))
+            assertFalse(cliente(t, lineas).prependAlignment(id), "$p · alinear «$id» dijo que alineó")
+            assertTrue(t.llamadas.isEmpty(), "$p · alinear «$id» llamó a Graph: ${t.llamadas.map { "${it.metodo} ${it.url}" }}")
+            assertTrue(lineas.any { "id" in it && "en blanco" in it && "graph" in it }, "$p · alinear «$id»: el log no dice por qué: $lineas")
         }
 
         // Un id que Graph manda como número se lee como su texto: no es un id en blanco y se puede borrar.

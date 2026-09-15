@@ -1,5 +1,6 @@
 package graph.core.contrato
 
+import graph.core.domain.GraphLog
 import graph.core.graph.TransportReply
 import graph.core.graph.TurnTransport
 import graph.core.graph.learning.Almacen
@@ -16,9 +17,16 @@ import graph.core.graph.learning.StepRequest
 import graph.core.graph.learning.VideoParaReprocesar
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.TimeoutCancellationException
+import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.job
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
 import kotlinx.serialization.json.Json
@@ -38,7 +46,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 
 /**
- * CONTRATO 004 · LA LECCIÓN (docs/specs/004-lo-ensenado-vive-en-graph.md, fase 4A2).
+ * CONTRATO 004 · LA LECCIÓN (docs/specs/004-lo-ensenado-vive-en-graph.md, fase 4A2 y su revisión: 417-418).
  *
  * Cada `promesaNNN` es una fila de la tabla de la spec, con el enunciado literal en [PROMESAS]. Juzgan el
  * orquestador de una enseñanza con el [LearningClient] REAL encima de un transporte que responde por ruta y
@@ -57,6 +65,8 @@ class Contrato004LeccionEnGraph {
             410 to "La nota de contexto viaja antes de cerrar la sesión; sin nota, la sesión se cierra igual.",
             411 to "Si cerrar la sesión no sale por un fallo transitorio, queda pendiente en disco y se reintenta al arrancar hasta que sale; una lectura agotada no deja pendiente automático.",
             412 to "Si procesar el video falla, la sesión se cierra igual y el video queda para reprocesar; una demostración descartada no publica nada.",
+            417 to "Si el lector de pasos se muere, los pasos que no viajaron cuentan como no enviados con su motivo y la lección nunca se da por entera ni se anuncia como aprendida con pasos que no llegaron.",
+            418 to "Cancelar el cierre de una lección nunca la deja sin cerrar ni sin pendiente: o se cierra en Graph, o queda un pendiente que el arranque sabe cerrar.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -157,13 +167,17 @@ class Contrato004LeccionEnGraph {
         almacen: Almacen,
         esperas: MutableList<Long> = mutableListOf(),
         avisos: MutableList<String> = mutableListOf(),
-        key: String = "miracle_k",
+        key: () -> String = { "miracle_k" },
         topeDeVaciado: Duration = Leccion.TOPE_DE_VACIADO,
+        /** Donde vive el lector de pasos: el de la prueba, o uno que la prueba cancela para matarlo. */
+        scope: CoroutineScope = this,
+        lineas: MutableList<String> = mutableListOf(),
+        ahoraMs: () -> Long = { AHORA },
     ): Leccion {
         val reloj = TestTimeSource()
         val cliente = LearningClient(
             transport = transporte,
-            credentials = { key },
+            credentials = key,
             baseUrl = { "$BASE/" },
             email = { null },
             deviceId = { "dev-1" },
@@ -173,9 +187,10 @@ class Contrato004LeccionEnGraph {
         return Leccion(
             cliente = cliente,
             almacen = almacen,
-            scope = this,
+            scope = scope,
             appId = "dev-1",
-            ahoraMs = { AHORA },
+            ahoraMs = ahoraMs,
+            log = GraphLog { tag, m -> lineas += "[$tag] $m" },
             avisar = { avisos += it },
             topeDeVaciado = topeDeVaciado,
         )
@@ -290,7 +305,7 @@ class Contrato004LeccionEnGraph {
             val cronica = Cronica()
             val t = TransporteDeRutas(cronica) { sano(it) }
             val almacen = AlmacenEnMemoria(cronica)
-            val l = leccion(t, almacen, key = " ")
+            val l = leccion(t, almacen, key = { " " })
             val no = assertIs<Arranque.NoSePuede>(l.empezar(registro, "Registrar paciente"), "$p · sin key: empezó a enseñar")
             assertTrue("key" in no.motivo && '\n' !in no.motivo, "$p · sin key: «${no.motivo}»")
             assertTrue(t.llamadas.isEmpty(), "$p · sin key: llamó a Graph")
@@ -307,13 +322,29 @@ class Contrato004LeccionEnGraph {
             assertTrue(l.pasoObservado(paso(1)), p)
             assertEquals(Cierre.CERRADA, l.terminar(listo, sinVideo).cierre, p)
         }
+        // Cancelar empezar cuando Graph ya abrió no deja la lección abierta ni trabada: vuelve a nueva y se puede empezar.
+        // La cancelación llega en el último instante de empezar, cuando lee la hora para anotar cuándo empezó.
+        run {
+            val cronica = Cronica()
+            val t = TransporteDeRutas(cronica) { sano(it) }
+            val abriendo = Job(coroutineContext.job)
+            var primeraHora = true
+            val l = leccion(t, AlmacenEnMemoria(cronica), ahoraMs = { if (primeraHora) { primeraHora = false; abriendo.cancel() }; AHORA })
+            val intento = launch(abriendo) { l.empezar(registro, "Registrar paciente") }
+            intento.join()
+            assertTrue(intento.isCancelled, "$p · cancelado al abrir: empezar no salió cancelado")
+            assertFalse(l.pasoObservado(paso(1)), "$p · cancelado al abrir: quedó enseñando y aceptó un paso")
+            assertIs<Arranque.Ensenando>(l.empezar(registro, "Registrar paciente"), "$p · cancelado al abrir: no se pudo volver a empezar")
+            assertTrue(l.pasoObservado(paso(1)), p)
+            assertEquals(Cierre.CERRADA, l.terminar(listo, sinVideo).cierre, p)
+        }
     }
 
     private suspend fun nadaAbierto(donde: String, l: Leccion, t: TransporteDeRutas, almacen: AlmacenEnMemoria, cronica: Cronica) {
         assertFalse(l.pasoObservado(paso(1)), "$donde: aceptó un paso sin sesión")
         l.nota("esto no va a ningún lado")
         lanzaExacto<IllegalStateException>("$donde: terminar una enseñanza que no empezó") { l.terminar(listo) { cronica += "video"; null } }
-        l.descartar()
+        assertFalse(l.descartar(), "$donde: dijo que descartó una enseñanza que no empezó")
         assertTrue(t.llamadas.all { it.esSesion }, "$donde: sin sesión, habló igual con Graph: ${t.llamadas}")
         assertTrue(almacen.escrituras.isEmpty(), "$donde: sin sesión, escribió en disco: ${almacen.escrituras}")
         assertFalse("video" in cronica.eventos, "$donde: sin sesión, procesó el video")
@@ -406,6 +437,7 @@ class Contrato004LeccionEnGraph {
             assertEquals("/api/v1/learning/sessions/ses-1/context-notes", notas.single().ruta, p)
             val dicho = transcript(notas.single())
             assertTrue("es para pacientes nuevos" in dicho && "siempre en Colombia" in dicho, "$p · la nota no viajó entera: «$dicho»")
+            assertTrue(dicho.indexOf("es para pacientes nuevos") < dicho.indexOf("siempre en Colombia"), "$p · los trozos de la nota viajaron fuera de orden: «$dicho»")
             assertEquals(Cierre.CERRADA, r.cierre, p)
         }
         // Sin nota, ni hablada ni del video: no hay context-notes y la sesión se cierra igual.
@@ -513,6 +545,60 @@ class Contrato004LeccionEnGraph {
             assertEquals(0, r.siguen, "$p · HTTP ${alReintentar.status} al reintentar: sigue pendiente")
             assertTrue(almacen.en(Leccion.CARPETA_PENDIENTES).isEmpty(), "$p · HTTP ${alReintentar.status} al reintentar: el pendiente se quedó para siempre")
         }
+        // Al arrancar, un solo intento por pendiente, como Windows (`PendingFinish.cs:69`): los tres del cierre, con sus 3 s y
+        // 8 s y un post-procesado de LLM cada uno, se repetirían en cada arranque y para siempre.
+        run {
+            val disco = AlmacenEnMemoria(Cronica())
+            for (s in listOf("ses-a", "ses-b")) {
+                disco.escribirEntero(Leccion.ruta(Leccion.CARPETA_PENDIENTES, s), LeccionJson.encodeToString(CierrePendiente.serializer(), CierrePendiente(s, "wf-$s", AHORA)))
+            }
+            val esperas = mutableListOf<Long>()
+            val t = TransporteDeRutas(Cronica()) { vercel }
+            val r = leccion(t, disco, esperas = esperas).reintentarPendientes()
+            assertEquals(
+                listOf("POST /api/v1/learning/sessions/ses-a/finish", "POST /api/v1/learning/sessions/ses-b/finish"), t.llamadas.map { it.toString() },
+                "$p · al arrancar, un pendiente se intentó más de una vez",
+            )
+            assertTrue(esperas.isEmpty(), "$p · al arrancar se esperó entre intentos: $esperas")
+            assertEquals(0 to 2, r.cerrados to r.siguen, p)
+            assertEquals(2, disco.en(Leccion.CARPETA_PENDIENTES).size, "$p · un pendiente que sigue sin salir se borró")
+        }
+        // Sin key, o con una key que no vale, el cierre también queda pendiente: una key mal puesta se arregla y la sesión no
+        // murió por eso. Es el mismo criterio del arranque, que los conserva hasta que haya una key que valga.
+        run {
+            val disco = AlmacenEnMemoria(Cronica())
+            var clave = "miracle_k"
+            val alCerrar = listOf(
+                "ses-k401" to TransportReply(401, """{"error":"invalid api key"}"""),
+                "ses-k403" to TransportReply(403, """{"error":"forbidden"}"""),
+                "ses-sinkey" to null,
+            )
+            for ((sesion, respuesta) in alCerrar) {
+                clave = "miracle_k"
+                val t = TransporteDeRutas(Cronica()) { l -> if (l.esCierre && respuesta != null) respuesta else sano(l, sesion) }
+                val l = leccion(t, disco, key = { clave })
+                assertIs<Arranque.Ensenando>(l.empezar(registro, "Registrar paciente"), p)
+                if (respuesta == null) clave = " "
+                val caso = respuesta?.let { "HTTP ${it.status}" } ?: "sin key"
+                val r = l.terminar(listo, sinVideo)
+                assertEquals(Cierre.PENDIENTE, r.cierre, "$p · $caso al cerrar: ${r.mensaje}")
+                assertTrue(Leccion.ruta(Leccion.CARPETA_PENDIENTES, sesion) in disco.archivos, "$p · $caso al cerrar no dejó pendiente: ${disco.archivos.keys}")
+            }
+            val arranques = listOf(
+                Triple("HTTP 401", TransportReply(401, """{"error":"invalid api key"}"""), "miracle_k"),
+                Triple("HTTP 403", TransportReply(403, """{"error":"forbidden"}"""), "miracle_k"),
+                Triple("sin key", ok("{}"), " "),
+            )
+            for ((caso, respuesta, llave) in arranques) {
+                val t = TransporteDeRutas(Cronica()) { respuesta }
+                val r = leccion(t, disco, key = { llave }).reintentarPendientes()
+                assertEquals(Triple(0, 3, 0), Triple(r.cerrados, r.siguen, r.descartados), "$p · $caso al arrancar: cerrados, siguen y descartados")
+                assertEquals(3, disco.en(Leccion.CARPETA_PENDIENTES).size, "$p · $caso al arrancar: se borró un pendiente que espera una key")
+                if (caso == "sin key") assertTrue(t.llamadas.isEmpty(), "$p · sin key al arrancar: llamó a Graph")
+            }
+            assertEquals(3, leccion(TransporteDeRutas(Cronica()) { sano(it) }, disco).reintentarPendientes().cerrados, "$p · con la key arreglada, los pendientes no salieron")
+            assertTrue(disco.en(Leccion.CARPETA_PENDIENTES).isEmpty(), p)
+        }
     }
 
     @Test
@@ -563,13 +649,13 @@ class Contrato004LeccionEnGraph {
             for (n in 1..3) l.pasoObservado(paso(n))
             l.nota("me equivoqué de pantalla")
             enVuelo.await()
-            l.descartar()
+            assertTrue(l.descartar(), "$p · descartar mientras se graba no dijo que descartó")
             val publicado = listOf("POST /api/v1/learning/sessions", "POST /api/v1/learning/sessions/ses-1/steps")
             assertEquals(publicado, t.llamadas.map { it.toString() }, "$p · descartada, siguió publicando")
             assertFalse(l.pasoObservado(paso(4)), "$p · descartada, aceptó un paso")
             l.nota("y otra cosa")
             lanzaExacto<IllegalStateException>("$p · terminar una demostración descartada") { l.terminar(listo) { cronica += "video"; null } }
-            l.descartar()
+            assertTrue(l.descartar(), "$p · descartar dos veces: dejó de estar descartada")
             assertEquals(publicado, t.llamadas.map { it.toString() }, "$p · después de descartar, algo salió")
             assertTrue(almacen.escrituras.isEmpty(), "$p · descartada, escribió en disco: ${almacen.escrituras}")
             assertFalse("video" in cronica.eventos, "$p · descartada, procesó el video")
@@ -583,9 +669,192 @@ class Contrato004LeccionEnGraph {
             l.empezar(registro, "Registrar paciente")
             l.pasoObservado(paso(1))
             l.pasoObservado(paso(2))
-            l.descartar()
+            assertTrue(l.descartar(), p)
             assertEquals(listOf("POST /api/v1/learning/sessions"), t.llamadas.map { it.toString() }, "$p · descartada antes de mandar, mandó")
             assertTrue(almacen.escrituras.isEmpty(), "$p · descartada, escribió en disco: ${almacen.escrituras}")
+        }
+        // Descartar mientras se cierra no descarta: dice que no, y el cierre sigue entero, con el paso que estaba en vuelo.
+        run {
+            val cronica = Cronica()
+            val enVuelo = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            val t = TransporteDeRutas(cronica) { l -> if (l.esPaso && l.selector.endsWith("/b2")) { enVuelo.complete(Unit); soltar.await(); sano(l) } else sano(l) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val l = leccion(t, almacen)
+            l.empezar(registro, "Registrar paciente")
+            for (n in 1..3) l.pasoObservado(paso(n))
+            l.nota("es para pacientes nuevos")
+            enVuelo.await()
+            // terminar corre hasta quedarse esperando el paso en vuelo: ya está cerrando.
+            val cerrando = async(start = CoroutineStart.UNDISPATCHED) { l.terminar(listo, sinVideo) }
+            assertFalse(l.descartar(), "$p · descartar durante el cierre dijo que descartó")
+            soltar.complete(Unit)
+            val r = cerrando.await()
+            assertEquals(listOf(true, true, true), r.pasos.map { it.enviado }, "$p · descartar durante el cierre cortó pasos: ${r.pasos.map { it.motivo }}")
+            assertEquals(1 to 1, t.llamadas.count { it.esNota } to t.llamadas.count { it.esCierre }, "$p · descartar durante el cierre se llevó la nota o el cierre: ${t.llamadas}")
+            assertEquals(Cierre.CERRADA, r.cierre, p)
+            assertNotNull(r.leccion, "$p · descartar durante el cierre dejó la lección sin disco")
+        }
+    }
+
+    @Test
+    fun promesa417() = demo(promesa(417)) {
+        val p = promesa(417)
+        // El scope del lector se cancela con un paso mandado, otro en vuelo y dos en cola: los tres no viajan, y cuentan.
+        run {
+            val cronica = Cronica()
+            val enVuelo = CompletableDeferred<Unit>()
+            val t = TransporteDeRutas(cronica) { l -> if (l.esPaso && l.selector.endsWith("/b2")) { enVuelo.complete(Unit); awaitCancellation() } else sano(l) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val pantalla = CoroutineScope(coroutineContext + Job(coroutineContext.job))
+            val l = leccion(t, almacen, scope = pantalla)
+            assertIs<Arranque.Ensenando>(l.empezar(registro, "Registrar paciente"), p)
+            for (n in 1..4) assertTrue(l.pasoObservado(paso(n)), "$p · el paso $n no se aceptó")
+            enVuelo.await()
+            pantalla.cancel()
+            assertFalse(l.pasoObservado(paso(5)), "$p · con el lector muerto, aceptó un paso que no va a ningún lado")
+            val r = l.terminar(listo, sinVideo)
+            assertEquals(listOf(true, false, false, false), r.pasos.map { it.enviado }, "$p · los pasos que no viajaron no cuentan como no enviados")
+            assertTrue(r.pasos.drop(1).all { "no llegó a enviarse" in it.motivo.orEmpty() && "lector" in it.motivo.orEmpty() }, "$p · motivos: ${r.pasos.map { it.motivo }}")
+            assertEquals(listOf("b1", "b2"), t.llamadas.filter { it.esPaso }.map { it.selector.substringAfterLast('/') }, p)
+            val motivo = leida(almacen, r.leccion).motivo.orEmpty()
+            assertTrue("3 de 4" in motivo, "$p · la lección se dio por entera: «$motivo»")
+            assertFalse("aprendí" in r.mensaje, "$p · se anunció como aprendida con pasos que no llegaron: ${r.mensaje}")
+            assertTrue("incomplet" in r.mensaje, "$p · el mensaje no dice que quedó incompleta: ${r.mensaje}")
+        }
+        // El paso llega cuando el lector espera en la cola vacía, y el scope se cancela antes de que lo tome: la cola ya se lo
+        // entregó, y sin más se perdería sin rastro.
+        run {
+            val cronica = Cronica()
+            val t = TransporteDeRutas(cronica) { sano(it) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val pantalla = CoroutineScope(coroutineContext + Job(coroutineContext.job))
+            val l = leccion(t, almacen, scope = pantalla)
+            assertIs<Arranque.Ensenando>(l.empezar(registro, "Registrar paciente"), p)
+            yield() // el lector arranca y se queda esperando en la cola vacía
+            assertTrue(l.pasoObservado(paso(1)), p)
+            pantalla.cancel()
+            val r = l.terminar(listo, sinVideo)
+            assertEquals(listOf("b1" to false), r.pasos.map { it.paso.selector.substringAfterLast('/') to it.enviado }, "$p · el paso que la cola entregó al lector cancelado se perdió")
+            assertTrue(t.llamadas.none { it.esPaso }, "$p · viajó un paso: ${t.llamadas}")
+            assertFalse("aprendí" in r.mensaje, "$p · se anunció como aprendida: ${r.mensaje}")
+        }
+        // Se muere sin nada pendiente: lo que se observe después no va a ningún lado, y la lección lo dice.
+        run {
+            val cronica = Cronica()
+            val t = TransporteDeRutas(cronica) { sano(it) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val pantalla = CoroutineScope(coroutineContext + Job(coroutineContext.job))
+            val l = leccion(t, almacen, scope = pantalla)
+            assertIs<Arranque.Ensenando>(l.empezar(registro, "Registrar paciente"), p)
+            pantalla.cancel()
+            for (n in 1..3) assertFalse(l.pasoObservado(paso(n)), "$p · con el lector muerto, aceptó el paso $n")
+            val r = l.terminar(listo, sinVideo)
+            assertTrue(t.llamadas.none { it.esPaso }, "$p · con el lector muerto, viajó un paso: ${t.llamadas}")
+            val motivo = leida(almacen, r.leccion).motivo.orEmpty()
+            assertTrue("lector" in motivo, "$p · la lección no dice que el lector se detuvo: «$motivo»")
+            assertFalse("aprendí" in r.mensaje, "$p · se anunció como aprendida: ${r.mensaje}")
+        }
+        // Con el scope ya cancelado al empezar: no se enseña, se dice por qué y no se abre nada en Graph.
+        run {
+            val cronica = Cronica()
+            val t = TransporteDeRutas(cronica) { sano(it) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val pantalla = CoroutineScope(coroutineContext + Job(coroutineContext.job)).apply { cancel() }
+            val l = leccion(t, almacen, scope = pantalla)
+            val no = assertIs<Arranque.NoSePuede>(l.empezar(registro, "Registrar paciente"), "$p · con el scope cancelado, empezó a enseñar")
+            assertTrue("cancelad" in no.motivo && '\n' !in no.motivo, "$p · el motivo no dice por qué en una línea: «${no.motivo}»")
+            assertTrue(t.llamadas.isEmpty(), "$p · con el scope cancelado, abrió una sesión en Graph: ${t.llamadas}")
+            nadaAbierto("$p · scope cancelado", l, t, almacen, cronica)
+        }
+        // El scope se cancela mientras Graph abre la sesión: tampoco se enseña, con un lector que nació muerto.
+        run {
+            val cronica = Cronica()
+            val pantalla = CoroutineScope(coroutineContext + Job(coroutineContext.job))
+            val t = TransporteDeRutas(cronica) { l -> if (l.esSesion) pantalla.cancel(); sano(l) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val l = leccion(t, almacen, scope = pantalla)
+            val no = assertIs<Arranque.NoSePuede>(l.empezar(registro, "Registrar paciente"), "$p · el scope se canceló mientras Graph abría y empezó a enseñar")
+            assertTrue("cancelad" in no.motivo && '\n' !in no.motivo, "$p · «${no.motivo}»")
+            nadaAbierto("$p · scope cancelado al abrir", l, t, almacen, cronica)
+        }
+    }
+
+    @Test
+    fun promesa418() = demo(promesa(418)) {
+        val p = promesa(418)
+        val vercel = TransportReply(504, """{"error":"FUNCTION_INVOCATION_TIMEOUT"}""")
+        // Cancelado mientras se procesa el video, que tarda minutos (un viewModelScope se cancela al salir de la pantalla): la
+        // nota y el cierre salen igual, el video queda para reprocesar y la cancelación sigue su curso.
+        run {
+            val cronica = Cronica()
+            val t = TransporteDeRutas(cronica) { sano(it) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val lineas = mutableListOf<String>()
+            val l = leccion(t, almacen, lineas = lineas)
+            l.empezar(registro, "Registrar paciente")
+            l.pasoObservado(paso(1))
+            l.nota("es para pacientes nuevos")
+            val videoEmpezo = CompletableDeferred<Unit>()
+            val cerrando = launch { l.terminar(listo) { cronica += "video"; videoEmpezo.complete(Unit); awaitCancellation() } }
+            videoEmpezo.await()
+            cerrando.cancelAndJoin()
+            assertTrue(cerrando.isCancelled, "$p · la cancelación no siguió su curso")
+            assertEquals(1, t.llamadas.count { it.esNota }, "$p · cancelado en el video, la nota no viajó: ${t.llamadas}")
+            assertEquals(1, t.llamadas.count { it.esCierre }, "$p · cancelado en el video, la sesión quedó sin cerrar: ${t.llamadas}")
+            assertTrue(t.llamadas.indexOfFirst { it.esNota } < t.llamadas.indexOfFirst { it.esCierre }, "$p · la nota viajó después del cierre: ${t.llamadas}")
+            assertTrue(Leccion.ruta(Leccion.CARPETA_LECCIONES, "ses-1") in almacen.archivos, "$p · la lección no llegó a disco")
+            val marca = LeccionJson.decodeFromString(VideoParaReprocesar.serializer(), assertNotNull(almacen.en(Leccion.CARPETA_VIDEOS).values.singleOrNull(), "$p · el video cancelado no quedó para reprocesar"))
+            assertTrue("cancel" in marca.motivo, "$p · la marca no dice por qué: «${marca.motivo}»")
+            val otra = lanzaExacto<IllegalStateException>("$p · terminar dos veces") { l.terminar(listo, sinVideo) }
+            assertTrue("terminada" in otra.message.orEmpty(), "$p · la lección quedó trabada: ${otra.message}")
+            assertTrue(lineas.any { "■" in it && "aprendí" in it }, "$p · el cierre no dejó su resultado en el log: $lineas")
+        }
+        // Cancelado mientras Graph cierra, y Graph no alcanza: los tres intentos terminan y queda el pendiente, que el arranque cierra.
+        run {
+            val cronica = Cronica()
+            val almacen = AlmacenEnMemoria(cronica)
+            val cierreEmpezo = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            val esperas = mutableListOf<Long>()
+            val t = TransporteDeRutas(cronica) { l -> if (l.esCierre) { cierreEmpezo.complete(Unit); soltar.await(); vercel } else sano(l) }
+            val l = leccion(t, almacen, esperas = esperas)
+            l.empezar(registro, "Registrar paciente")
+            l.pasoObservado(paso(1))
+            val cerrando = launch { l.terminar(listo, sinVideo) }
+            cierreEmpezo.await()
+            cerrando.cancel()
+            soltar.complete(Unit)
+            cerrando.join()
+            assertTrue(cerrando.isCancelled, "$p · la cancelación no siguió su curso")
+            assertEquals(3, t.llamadas.count { it.esCierre }, "$p · cancelado al cerrar, el cierre no terminó sus intentos: ${t.llamadas}")
+            assertEquals(listOf(3_000L, 8_000L), esperas, p)
+            assertEquals(1, almacen.en(Leccion.CARPETA_PENDIENTES).size, "$p · cancelado al cerrar, no quedó pendiente: ${almacen.archivos.keys}")
+            val arranque = leccion(TransporteDeRutas(cronica) { sano(it) }, almacen).reintentarPendientes()
+            assertEquals(1, arranque.cerrados, "$p · el arranque no supo cerrar el pendiente")
+        }
+        // Cancelado mientras se vacía la cola, con un paso colgado: lo que no salió cuenta como no enviado, la lección llega a
+        // disco, el video ni se empieza (queda para reprocesar) y la sesión se cierra.
+        run {
+            val cronica = Cronica()
+            val enVuelo = CompletableDeferred<Unit>()
+            val t = TransporteDeRutas(cronica) { l -> if (l.esPaso && l.selector.endsWith("/b2")) { enVuelo.complete(Unit); awaitCancellation() } else sano(l) }
+            val almacen = AlmacenEnMemoria(cronica)
+            val l = leccion(t, almacen)
+            l.empezar(registro, "Registrar paciente")
+            for (n in 1..3) l.pasoObservado(paso(n))
+            enVuelo.await()
+            // terminar corre hasta quedarse esperando la cola: ya está cerrando cuando llega la cancelación.
+            val cerrando = launch(start = CoroutineStart.UNDISPATCHED) { l.terminar(listo) { cronica += "video"; ResumenDeVideo("registra pacientes", null) } }
+            cerrando.cancelAndJoin()
+            assertTrue(cerrando.isCancelled, "$p · la cancelación no siguió su curso")
+            assertEquals(1, t.llamadas.count { it.esCierre }, "$p · cancelado al vaciar la cola, la sesión quedó sin cerrar: ${t.llamadas}")
+            assertTrue(t.llamadas.indexOfLast { it.esPaso } < t.llamadas.indexOfFirst { it.esCierre }, "$p · un paso viajó después de cerrar: ${t.llamadas}")
+            assertFalse("video" in cronica.eventos, "$p · cancelado antes del video, lo empezó igual")
+            assertEquals(1, almacen.en(Leccion.CARPETA_VIDEOS).size, "$p · el video que no se procesó no quedó para reprocesar")
+            val enDisco = leida(almacen, Leccion.ruta(Leccion.CARPETA_LECCIONES, "ses-1"))
+            assertEquals(listOf(true, false, false), enDisco.pasos.map { it.enviado }, "$p · pasos en disco")
+            assertTrue(enDisco.pasos.drop(1).all { "cancel" in it.motivo.orEmpty() }, "$p · motivos: ${enDisco.pasos.map { it.motivo }}")
         }
     }
 }
