@@ -295,7 +295,8 @@ class Contrato002VozGptLive {
                 .filterIsInstance<Hecho.Pide>().singleOrNull()?.llamadas?.singleOrNull()
 
         val errorHondo = """{"type":"error","error":{"type":"invalid_request_error","code":"x_y","detalle":""" + "{\"a\":".repeat(998) + "1" + "}".repeat(998) + "}}"
-        // Los `{` DENTRO DE UNA LISTA también son niveles: medir solo los de una raíz objeto dejaba esto al parser.
+        // Los `{` DENTRO DE UNA LISTA también son niveles. El parser aguanta objetos hondos; lo que revienta es lo que viene
+        // detrás de leerlos: el `toString` del valor de un argumento y el vuelco del mensaje al log.
         val objetosEnLista = "[" + "{\"a\":".repeat(4000) + "1" + "}".repeat(4000) + "]"
         for ((que, hondo) in listOf(
             "«[» × 4000" to "[".repeat(4000),
@@ -310,7 +311,7 @@ class Contrato002VozGptLive {
         // comillas escapadas: medir el mensaje sin respetar textos y escapes lo daría por anidado y perdería la llamada.
         assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon("""{"a":${anidados(999)}}"""), promesa(203) + " · argumentos de 1000 niveles")
         assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon("[".repeat(4000)), promesa(203) + " · argumentos «[» × 4000")
-        assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon(objetosEnLista), promesa(203) + " · argumentos de 4000 objetos dentro de una lista")
+        assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon("""{"a":$objetosEnLista}"""), promesa(203) + " · un argumento que es una lista de 4000 objetos")
         // El borde es el de U: 64 niveles se leen, 65 no.
         assertEquals(mapOf("a" to anidados(63)), pideCon("""{"a":${anidados(63)}}""")?.args, promesa(203) + " · 64 niveles se leen")
         assertEquals(emptyMap<String, String>(), pideCon("""{"a":${anidados(64)}}""")?.args, promesa(203) + " · 65 niveles ya no")
@@ -327,7 +328,7 @@ class Contrato002VozGptLive {
         sinReventar("la conversación") {
             corre {
                 val v = Voz()
-                v.guion(llega(sesionAbierta), llega("[".repeat(4000)), llega(errorHondo), llega(usuario("sigo aquí")))
+                v.guion(llega(sesionAbierta), llega("[".repeat(4000)), llega(errorHondo), llega(objetosEnLista), llega(usuario("sigo aquí")))
                 v.conv.conversar()
                 assertEquals(1, v.conv.peticiones, promesa(203) + " · la voz siguió oyendo: ${v.log.map { it.take(120) }}")
                 assertTrue(v.log.none { "[[[[" in it || "{\"a\":{\"a\":" in it }, promesa(203) + " · el mensaje anidado no se vuelca")
