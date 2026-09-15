@@ -2,8 +2,10 @@ package graph.core.voz
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
@@ -11,6 +13,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.supervisorScope
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -134,6 +137,9 @@ class ConversacionViva(
         var confirmada = false
         var acabada = false
 
+        /** Los cambios de modo que llevaba su `session.start`: si al confirmar hay más, el servidor abrió con uno viejo. */
+        var cambiosAlAbrir = -1
+
         /** Lo primero que dijo el servidor antes de confirmar: si el socket muere sin confirmar, eso es por qué no abrió. */
         var fallaAntesDeAbrir = ""
 
@@ -178,6 +184,9 @@ class ConversacionViva(
 
     /** El modo vigente no es el de siempre: una sesión que abre en él se lo tiene que repetir a la voz. */
     private var modoEspecial = false
+
+    /** Cuántas veces se cambió de modo en esta conversación: lo que compara la confirmación con su `session.start`. */
+    private var cambiosDeModo = 0
 
     /** Se lee desde cualquier hilo; se escribe solo en [hilo]. */
     @Volatile
@@ -391,13 +400,19 @@ class ConversacionViva(
 
     /**
      * Otro modo sin reabrir la sesión: otro `session.start` sería otra conversación. Se recuerda, y una reconexión
-     * abre ya en este modo: la delegación en el `session.start` y, al confirmarse, el append a la voz.
+     * abre ya en este modo: la delegación en el `session.start` y, al confirmarse, el append a la voz. Con la sesión
+     * abierta y SIN CONFIRMAR, su `session.start` ya salió con el modo de antes: al confirmarse sale este entero.
      */
     suspend fun cambiarModo(instrucciones: String, utensilios: List<Utensilio>, vuelve: Boolean): Unit = confinado {
         delegado = instrucciones
         herramientas = utensilios
         modoEspecial = !vuelve
+        cambiosDeModo++
         val c = conexion
+        if (viva && !detenida && c != null && !c.confirmada && !c.acabada) {
+            log(TAG, "modo guardado: sale entero cuando se confirme la sesión")
+            return@confinado
+        }
         if (!viva || detenida || c == null || !c.confirmada || c.acabada) {
             log(TAG, "modo guardado para la próxima apertura: no hay sesión confirmada a la que cambiárselo")
             return@confinado
@@ -466,7 +481,11 @@ class ConversacionViva(
                         return false
                     }
                     try {
-                        escribiendo { canal.enviar(protocolo.apertura(instruccionesVoz, delegado, herramientas)) }
+                        escribiendo {
+                            // Anotado con el mensaje armado, sin suspender entre medias: un cambio de modo después ya no viaja en él.
+                            c.cambiosAlAbrir = cambiosDeModo
+                            canal.enviar(protocolo.apertura(instruccionesVoz, delegado, herramientas))
+                        }
                     } catch (e: Exception) {
                         if (e is CancellationException) relanzarSiEsNuestra(e)
                         log(TAG, "no pude mandar la apertura: ${motivoSaneado(e)}")
@@ -554,9 +573,10 @@ class ConversacionViva(
     }
 
     /**
-     * UNA CANCELACIÓN AJENA NO PARA LA VOZ. Un `withTimeout` del adaptador, su `Channel` cancelado o el freno de la fase
-     * 3A (`Paraste`) lanzan `CancellationException` con la voz viva. Solo si ESTA corrutina está cancelada la excepción es
-     * nuestra, y se relanza; si no, quien la atrapa la trata como el fallo que es.
+     * UNA CANCELACIÓN AJENA NO PARA LA VOZ. Un `withTimeout` del adaptador o su `Channel` cancelado lanzan
+     * `CancellationException` con la voz viva. Solo si ESTA corrutina está cancelada la excepción es nuestra, y se relanza;
+     * si no, quien la atrapa la trata como el fallo que es. Vale para los puertos del canal; una herramienta puede cancelar
+     * su propio contexto, y esa se decide en [atender].
      */
     private suspend fun relanzarSiEsNuestra(e: CancellationException) {
         if (!currentCoroutineContext().isActive) throw e
@@ -573,7 +593,7 @@ class ConversacionViva(
             log(TAG, "se cortó la conexión sin trama de cierre (${r.codigo})")
             return
         }
-        log(TAG, "el servidor cerró la conexión: ${r.codigo} «${r.motivo}»")
+        log(TAG, "el servidor cerró la conexión: ${r.codigo} «${saneado(r.motivo)}»")
         c.anotar(causaFatal(r.motivo), r.motivo)
     }
 
@@ -649,7 +669,7 @@ class ConversacionViva(
 
             // La primera puerta de la causa: el code, nunca la prosa, que está en inglés y cambia de redacción.
             is Hecho.Falla -> {
-                log(TAG, "el servidor dice: ${hecho.que}")
+                log(TAG, "el servidor dice: ${saneado(hecho.que)}")
                 if (!c.confirmada && c.fallaAntesDeAbrir.isEmpty()) c.fallaAntesDeAbrir = hecho.que
                 c.anotar(causaFatal(hecho.codigo), hecho.que)
             }
@@ -657,13 +677,18 @@ class ConversacionViva(
             // LA SESIÓN ABRIÓ DE VERDAD: lo único que afirma «sesión abierta», y una vez por conexión.
             // EN UN MODO ESPECIAL LA VOZ LO OYE OTRA VEZ: el `session.start` abre con su persona, y sin el append el
             // delegado reabría en un modo y la voz en el de siempre. Antes de confirmar el servidor aún no escucha.
+            // Y SI EL MODO CAMBIÓ DESPUÉS DEL START, el servidor abrió con el de antes: solo el append dejaba a la voz en un
+            // modo y al delegado, con sus instrucciones y herramientas, en el otro. Sale el cambio entero.
             Hecho.Abierta -> if (!c.confirmada) {
                 c.confirmada = true
                 algunaConfirmada = true
                 log(TAG, "sesión abierta con «${protocolo.modelo}»: el servidor la confirmó")
                 dice(c.alConfirmar)
                 enviando("el modo vigente") {
-                    if (modoEspecial) {
+                    if (c.cambiosAlAbrir != cambiosDeModo) {
+                        for (m in protocolo.cambiarDeModo(delegado, herramientas, vuelve = !modoEspecial, instruccionesVoz)) canal.enviar(m)
+                        log(TAG, "el modo cambió después de abrir: se manda entero al confirmar (${herramientas.size} herramienta(s), instrucciones de ${delegado.length} car.)")
+                    } else if (modoEspecial) {
                         canal.enviar(protocolo.recordarModo(delegado))
                         log(TAG, "la sesión abrió en un modo especial: se le repite a la voz (instrucciones de ${delegado.length} car.)")
                     }
@@ -697,7 +722,7 @@ class ConversacionViva(
     /**
      * Una tanda, llamada por llamada y en orden. La retirada no se ejecuta y se contesta como tal. Lo que revienta o se
      * para solo se contesta con su motivo, y la tanda sigue. Y la devolución al marcador va en finally: sin ella, la
-     * herramienta que saca una excepción de la tanda (la que cancela su propia corrutina) dejaba el turno abierto.
+     * cancelación de la voz a mitad de una tanda dejaba el turno abierto.
      */
     private suspend fun atender(tanda: Tanda) {
         val c = tanda.conexion
@@ -726,14 +751,20 @@ class ConversacionViva(
                 }
                 log(TAG, "ejecutando «${llamada.nombre}»…")
                 val salida = try {
-                    ejecutar(llamada)
+                    // CADA LLAMADA EN SU PROPIA CORRUTINA. La que cancela su contexto cancelaba el del obrero o el de la de
+                    // control que la corría: el obrero moría, y la de control se iba sin salida y dejaba en el servidor un
+                    // function_call huérfano que rechaza cada response.create. Arranca en el acto, como una llamada directa.
+                    supervisorScope { async(start = CoroutineStart.UNDISPATCHED) { ejecutar(llamada) }.await() }
                 } catch (e: Throwable) {
                     // NO SE ESCAPA NADA salvo la cancelación de la voz. Una cancelación ajena (`withTimeout`, el freno de
                     // 3A) mataba al obrero en silencio y la cola ya no se atendía; un Error (`TODO()`) tumbaba la voz.
                     // Al log, SOLO EL TIPO: el mensaje de una herramienta puede traer lo que se escribió, y el log acaba en
                     // la telemetría remota. Al modelo, el motivo: es quien tiene que saber por qué.
                     if (e is CancellationException) {
-                        relanzarSiEsNuestra(e)
+                        // ES DE LA VOZ SI LA VOZ TERMINÓ: la conexión se acabó, se detuvo, o se canceló ESTA corrutina. El
+                        // contexto de aquí sí es de la voz (la herramienta corre en el suyo), y hace falta: cancelar
+                        // conversar() le llega al obrero antes de que acabar() marque la conexión.
+                        if (c.acabada || detenida || !currentCoroutineContext().isActive) throw e
                         log(TAG, "«${llamada.nombre}» se paró (${tipoDe(e)}); el motivo va solo al modelo")
                         "la herramienta se paró: ${e.message ?: tipoDe(e)}"
                     } else {
@@ -837,12 +868,13 @@ class ConversacionViva(
 
         val (veredicto, frase) = when {
             !sigue -> "termina" to null
-            causa != null -> "no se reintenta, $causa («${c.dichoDeLaCausa}»): con la misma cuenta, clave y modelo fallaría igual" to
+            // Al log, lo dicho por el servidor saneado; al usuario, tal cual: es quien tiene que leer por qué.
+            causa != null -> "no se reintenta, $causa («${saneado(c.dichoDeLaCausa)}»): con la misma cuenta, clave y modelo fallaría igual" to
                 "No sigo con la voz en vivo: $causa («${c.dichoDeLaCausa}»)."
             c.faltaCredencial -> "no hay credencial para abrir otra vez: no se llama a nadie" to SIN_CREDENCIAL
             c.errorAlAbrir != null -> "abrir falló sin ser la red (${c.errorAlAbrir}): no se reintenta" to
                 "No pude abrir la voz en vivo: ${c.errorAlAbrir}."
-            noAbrio -> "no llegó a abrir: el servidor contestó «${c.fallaAntesDeAbrir}» en vez de confirmarla" to
+            noAbrio -> "no llegó a abrir: el servidor contestó «${saneado(c.fallaAntesDeAbrir)}» en vez de confirmarla" to
                 "No pude abrir la voz en vivo. El servidor dice: ${c.fallaAntesDeAbrir}"
             c.cayoSolo -> "se cortó ${RECONEXIONES + 1} veces seguidas: se deja" to NO_VUELVE
             else -> "termina" to null
@@ -879,17 +911,22 @@ private val ENTRE_COMILLAS = Regex("«[^»]*»|“[^”]*”|\"[^\"]*\"|(?<![\\p
 private val CON_FORMA_DE_CLAVE = Regex("(?i)\\bbearer\\s+\\S+|\\b(?:sk|rk|pk|ek)-\\S+|[\\p{L}\\p{N}_\\-]{20,}")
 
 /**
- * LO QUE DE UN ERROR DEL CANAL PUEDE IR AL LOG, que `LogBus` reenvía a la telemetría remota: el tipo y la primera línea
- * del mensaje sin lo que va entre comillas (lo citado es contenido), sin nada con forma de clave o de token, sin
- * caracteres de control y recortada. De una herramienta, ni eso: solo [tipoDe].
+ * LO QUE DE UN TEXTO AJENO PUEDE IR AL LOG, que `LogBus` reenvía a la telemetría remota: la primera línea sin lo que va
+ * entre comillas (lo citado es contenido), sin nada con forma de clave o de token, sin caracteres de control y recortada.
+ * Para el mensaje de un error del canal y para lo que dice el servidor, que repite los valores que se le mandaron
+ * («Invalid value: 'voz_que_no_existe'») y la cola de la clave («sk-proj-****0000»).
  */
-private fun motivoSaneado(e: Throwable): String {
-    val linea = e.message?.lineSequence()?.firstOrNull().orEmpty()
+private fun saneado(texto: String?): String {
+    val linea = texto?.lineSequence()?.firstOrNull().orEmpty()
         .replace(ENTRE_COMILLAS, "«…»")
         .replace(CON_FORMA_DE_CLAVE, "…")
         .filterNot { it.isISOControl() }
         .trim()
-    if (linea.isEmpty()) return tipoDe(e)
-    val corta = if (linea.length > ConversacionViva.LARGO_DEL_MOTIVO) linea.take(ConversacionViva.LARGO_DEL_MOTIVO).trimEnd() + "…" else linea
-    return "${tipoDe(e)}: $corta"
+    return if (linea.length > ConversacionViva.LARGO_DEL_MOTIVO) linea.take(ConversacionViva.LARGO_DEL_MOTIVO).trimEnd() + "…" else linea
+}
+
+/** Lo que de un error del canal puede ir al log: el tipo y su mensaje [saneado]. De una herramienta, ni eso: solo [tipoDe]. */
+private fun motivoSaneado(e: Throwable): String {
+    val linea = saneado(e.message)
+    return if (linea.isEmpty()) tipoDe(e) else "${tipoDe(e)}: $linea"
 }
