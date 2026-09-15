@@ -5,6 +5,8 @@ import graph.core.domain.BrainTurn
 import graph.core.domain.ScreenState
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import kotlin.io.encoding.Base64
+import kotlin.io.encoding.ExperimentalEncodingApi
 
 /*
  * Contrato JSON con Graph (`POST /api/v1/agent/turn`). Espejo EXACTO de
@@ -89,17 +91,46 @@ val TurnJson: Json = Json {
 }
 
 /** Traduce una acción de Graph a la acción local equivalente; un `kind` desconocido queda como [AgentAction.Unknown]. */
-fun TurnAction.toAgentAction(): AgentAction = TODO("pendiente")
+fun TurnAction.toAgentAction(): AgentAction = when (kind) {
+    "tap" -> AgentAction.Tap(x, y)
+    "type" -> AgentAction.Type(x, y, text ?: "")
+    "scroll" -> AgentAction.Scroll(down)
+    "swipe" -> AgentAction.Swipe(x1, y1, x2, y2, ms.toLong())
+    "key" -> AgentAction.Key(key ?: "")
+    "wait" -> AgentAction.Wait(ms.toLong())
+    "mcp" -> AgentAction.Mcp(tool ?: "", args ?: emptyMap())
+    else -> AgentAction.Unknown(kind)
+}
 
 /** El turno tal cual lo entiende el motor: acciones traducidas y el resto de campos sin tocar. */
-fun TurnResponse.toBrainTurn(): BrainTurn = TODO("pendiente")
+fun TurnResponse.toBrainTurn(): BrainTurn = BrainTurn(
+    actions = actions.map { it.toAgentAction() },
+    question = question,
+    done = done,
+    text = text,
+    needsScreenshot = needsScreenshot,
+    narration = narration,
+    speech = speech,
+    intents = intents,
+)
 
 /**
  * El estado local en el formato del contrato. `withScreenshot` decide si el PNG viaja (base64, sin
  * prefijo data-uri): el cerebro solo lo adjunta cuando el turno anterior lo pidió.
  */
+@OptIn(ExperimentalEncodingApi::class)
 fun ScreenState.toTurnState(
     apps: List<String>?,
     surface: Surface?,
     withScreenshot: Boolean = true,
-): TurnScreenState = TODO("pendiente")
+): TurnScreenState = TurnScreenState(
+    screen = screen,
+    uiContext = uiContext,
+    width = width,
+    height = height,
+    screenshot = screenshotPng?.takeIf { withScreenshot }?.let { Base64.encode(it) },
+    apps = apps,
+    surfaceId = surface?.id,
+    surfaceOrigin = surface?.origin,
+    surfacePathname = surface?.pathname,
+)

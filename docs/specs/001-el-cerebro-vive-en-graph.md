@@ -1,6 +1,6 @@
 # Plan de implementación: el cerebro vive en Graph — Android pasa a ser cliente tonto
 
-Estado: **fase A en curso** (2026-09-14) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
+Estado: **fase A implementada** (2026-09-14; promesas 1-11 verdes) · fase B pendiente · Nace de leer el cliente Windows (`U-Windows-App`) que ya
 habla con Graph · Rama: `yokh/cliente-graph`
 
 Hoy el Android piensa solo: `OpenAiBrain` y `GeminiBrain` (en `app/…/platform/`) arman el system

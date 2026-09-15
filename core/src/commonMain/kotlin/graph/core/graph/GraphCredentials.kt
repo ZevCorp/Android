@@ -13,5 +13,8 @@ sealed interface Credential {
 object GraphCredentials {
     const val FALTA = "no hay key de graph: ponela en el panel de desarrollador o en apikey.properties como graphApiKey"
 
-    fun resolve(userPref: String?, compiled: String?): Credential = TODO("pendiente")
+    fun resolve(userPref: String?, compiled: String?): Credential {
+        val key = userPref?.trim()?.ifEmpty { null } ?: compiled?.trim()?.ifEmpty { null }
+        return if (key != null) Credential.Ok(key) else Credential.Falta(FALTA)
+    }
 }

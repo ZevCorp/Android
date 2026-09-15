@@ -181,7 +181,10 @@ class Contrato001CerebroEnGraph {
         assertIs<AgentAction.Tap>(a[0], promesa(4)).let { assertEquals(10 to 20, it.x to it.y, promesa(4)) }
         assertIs<AgentAction.Type>(a[1], promesa(4)).let { assertEquals(Triple(30, 40, "hola"), Triple(it.x, it.y, it.text), promesa(4)) }
         assertIs<AgentAction.Scroll>(a[2], promesa(4)).let { assertTrue(it.down, promesa(4)) }
-        assertIs<AgentAction.Swipe>(a[3], promesa(4)).let { assertEquals(listOf(1, 2, 3, 4, 500L), listOf(it.x1, it.y1, it.x2, it.y2, it.ms), promesa(4)) }
+        assertIs<AgentAction.Swipe>(a[3], promesa(4)).let {
+            assertEquals(listOf(1, 2, 3, 4), listOf(it.x1, it.y1, it.x2, it.y2), promesa(4))
+            assertEquals(500L, it.ms, promesa(4))
+        }
         assertIs<AgentAction.Key>(a[4], promesa(4)).let { assertEquals("back", it.key, promesa(4)) }
         assertIs<AgentAction.Wait>(a[5], promesa(4)).let { assertEquals(250L, it.ms, promesa(4)) }
         assertIs<AgentAction.Mcp>(a[6], promesa(4)).let { assertEquals("set_alarm" to mapOf("hour" to "7", "minute" to "30"), it.tool to it.args, promesa(4)) }
