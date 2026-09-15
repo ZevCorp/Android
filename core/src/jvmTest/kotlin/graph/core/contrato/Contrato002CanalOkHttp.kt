@@ -5,6 +5,7 @@ import graph.core.voz.Apertura
 import graph.core.voz.CanalOkHttp
 import graph.core.voz.Recibido
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancel
@@ -218,13 +219,15 @@ class Contrato002CanalOkHttp {
 
             // Esperas que se cancelan en plena llegada no se llevan ningún mensaje. Lo leído se anota DENTRO de la corrutina,
             // sin suspender entre recibir y anotar: con `withTimeoutOrNull` el tope puede vencer con el mensaje ya devuelto y
-            // tirarlo, y eso lo perdería el juez, no el canal.
+            // tirarlo, y eso lo perdería el juez, no el canal. La espera arranca sin despacho y se cancela en cuanto suspende
+            // (una vuelta de cada dos, tras 1 ms): un canal que saca el mensaje y suspende antes de devolverlo lo pierde siempre.
             canal.enviar("ráfaga")
             val leidos: MutableList<Recibido> = Collections.synchronizedList(mutableListOf())
             val fin = System.nanoTime() + TOPE_MS * 1_000_000
+            var vuelta = 0
             while (leidos.size < RAFAGA && System.nanoTime() < fin) {
-                val espera = fuera.launch { leidos += canal.recibir() }
-                delay(1)
+                val espera = fuera.launch(start = CoroutineStart.UNDISPATCHED) { leidos += canal.recibir() }
+                if (vuelta++ % 2 == 1) delay(1)
                 espera.cancelAndJoin()
             }
             assertEquals(List<Recibido>(RAFAGA) { Recibido.Mensaje("r$it") }, synchronized(leidos) { leidos.toList() }, "$p · con recibir cancelado a mitad se perdió o se desordenó algo")
