@@ -2,6 +2,8 @@ package graph.core.application
 
 import graph.core.domain.*
 import graph.core.precision.Freno
+import graph.core.precision.PARASTE_TU
+import graph.core.precision.Paraste
 import kotlinx.coroutines.delay
 import kotlin.time.TimeSource
 
@@ -17,6 +19,11 @@ private val NO_VOICE = object : Voice {
  * El usuario pide algo (texto o voz) y Gemini 3.5 Flash lo ejecuta eligiendo, en cada turno, la vía
  * más adecuada: un gesto MCP (herramienta declarada, limpia y rápida) o computer-use (mirar la
  * pantalla y tocar por coordenadas, flexible). No hay modos separados: es un solo bucle.
+ *
+ * SE PUEDE PARAR (spec 003). Una [Paraste] en cualquier punto —la lanza la puerta al tocar con el freno
+ * echado— termina la corrida como cancelación: no ejecuta el resto, no pide otro turno, devuelve
+ * «paraste: …» y lo narra una vez. Con [freno], además, las esperas del motor se cortan al pedir el alto
+ * y no se pide turno a Graph con el alto echado: la puerta ya impide tocar, esto impide pagar un turno.
  */
 class ExecutionEngine(
     private val brain: () -> Brain,
@@ -30,7 +37,7 @@ class ExecutionEngine(
     private val mode: ExecutionMode? = null,
     /** Pausa entre steps enviados juntos en un mismo turno (ajustable desde la app). */
     private val stepDelay: () -> Long = { 350 },
-    /** El freno de la tarea en curso (spec 003). Esqueleto: todavía no se usa. */
+    /** El freno de la tarea en curso. Sin él, el motor solo reacciona a la [Paraste] de la puerta. */
     private val freno: Freno? = null,
 ) {
     /**
@@ -50,41 +57,51 @@ class ExecutionEngine(
         var turns = 0
         var actions = 0
         var wantShot = false // el screenshot solo se adjunta cuando el modelo va a usar computer-use
-        while (turns < maxTurns) {
-            turns++
-            val turnStart = TimeSource.Monotonic.markNow()
-            val state = phone.state(withScreenshot = wantShot)
-            val turn = b.next(state, results)
-            wantShot = turn.needsScreenshot
-            val ms = turnStart.elapsedNow().inWholeMilliseconds
-            val via = if (state.screenshotPng != null) "👁 imagen" else "📝 texto"
-            val decided = when {
-                turn.actions.isNotEmpty() -> turn.actions.joinToString(", ") { describe(it) }
-                turn.question != null -> "pregunta"
-                else -> "fin"
-            }
-            log.log("run", "turno $turns · ${ms}ms · $via · \"${state.screen.take(36)}\" · decide: $decided")
+        try {
+            while (turns < maxTurns) {
+                sigue()
+                turns++
+                val turnStart = TimeSource.Monotonic.markNow()
+                val state = phone.state(withScreenshot = wantShot)
+                val turn = b.next(state, results)
+                wantShot = turn.needsScreenshot
+                val ms = turnStart.elapsedNow().inWholeMilliseconds
+                val via = if (state.screenshotPng != null) "👁 imagen" else "📝 texto"
+                val decided = when {
+                    turn.actions.isNotEmpty() -> turn.actions.joinToString(", ") { describe(it) }
+                    turn.question != null -> "pregunta"
+                    else -> "fin"
+                }
+                log.log("run", "turno $turns · ${ms}ms · $via · \"${state.screen.take(36)}\" · decide: $decided")
 
-            if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
-            if (turn.speech != null) { voice.speak(turn.speech); log.log("run", "🗣 ${turn.speech}") }
-            if (turn.text.isNotBlank()) summary = turn.text
-            if (turn.done) break
+                if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
+                if (turn.speech != null) { voice.speak(turn.speech); log.log("run", "🗣 ${turn.speech}") }
+                if (turn.text.isNotBlank()) summary = turn.text
+                if (turn.done) break
 
-            val out = mutableListOf<String>()
-            turn.actions.forEachIndexed { i, action ->
-                turn.intents.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { voice.narrate(it) }
-                out += execute(action)
-                actions++
-                if (turn.actions.size > 1) delay(stepDelay()) // deja asentar la UI entre gestos encadenados
-            }
-            results = out
+                val out = mutableListOf<String>()
+                turn.actions.forEachIndexed { i, action ->
+                    sigue()
+                    turn.intents.getOrNull(i)?.takeIf { it.isNotBlank() }?.let { voice.narrate(it) }
+                    out += execute(action)
+                    actions++
+                    if (turn.actions.size > 1) espera(stepDelay()) // deja asentar la UI entre gestos encadenados
+                }
+                results = out
 
-            turn.question?.let { q ->
-                log.log("run", "❓ $q")
-                voice.speak(q)
-                b.inform(user?.ask(q)?.ifBlank { "usa tu mejor criterio" } ?: "No hay usuario; usa tu mejor criterio.")
+                turn.question?.let { q ->
+                    log.log("run", "❓ $q")
+                    voice.speak(q)
+                    b.inform(user?.ask(q)?.ifBlank { "usa tu mejor criterio" } ?: "No hay usuario; usa tu mejor criterio.")
+                }
+                espera(400)
             }
-            delay(400)
+        } catch (p: Paraste) {
+            // Parada, no fallo: ni resumen en voz alta ni "¡Listo!". Una sola narración, y el control vuelve.
+            val secs = started.elapsedNow().inWholeSeconds
+            log.log("run", "✋ ${p.motivo} · $turns turnos · $actions acciones · ${secs}s · no sigo")
+            voice.narrate("✋ Paré, como pediste.")
+            return "paraste: paré en el turno $turns tras $actions acciones y no hice el resto"
         }
 
         val secs = started.elapsedNow().inWholeSeconds
@@ -101,6 +118,18 @@ class ExecutionEngine(
         return summary.ifBlank { "Hecho" }
     }
 
+    /** Con el alto echado no se sigue: ni otra acción ni otro turno. */
+    private fun sigue() {
+        if (freno?.pedido == true) throw Paraste(PARASTE_TU)
+    }
+
+    /** Una espera del motor: con freno, a trozos y cortada por el alto; sin él, de un tirón como siempre. */
+    private suspend fun espera(ms: Long) {
+        val f = freno
+        if (f == null) delay(ms)
+        else if (f.duerme(ms)) throw Paraste(PARASTE_TU)
+    }
+
     private suspend fun execute(action: AgentAction): String {
         // Aviso de vía: MCP = subconsciente, computer-use = consciente (Wait no cambia de vía).
         if (action !is AgentAction.Wait && action !is AgentAction.Unknown) mode?.executing(action is AgentAction.Mcp)
@@ -114,7 +143,7 @@ class ExecutionEngine(
             is AgentAction.Scroll -> phone.scroll(action.down).asResult()
             is AgentAction.Swipe -> phone.swipe(action.x1, action.y1, action.x2, action.y2, action.ms).asResult()
             is AgentAction.Key -> phone.pressKey(action.key).asResult()
-            is AgentAction.Wait -> { delay(action.ms); "ok" }
+            is AgentAction.Wait -> { espera(action.ms); "ok" }
             is AgentAction.Unknown -> "acción desconocida: ${action.kind}"
         }
         log.log("run", "  ▪ ${describe(action)} → $result")

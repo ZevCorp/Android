@@ -1,6 +1,6 @@
 # Plan de implementación: lo hace a la primera y se puede parar — el freno y la puerta única
 
-Estado: **fase 3A en curso** (2026-09-14; promesas 301-306) · Nace de leer el freno de `U-Windows-App`
+Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real; la app todavía no usa la puerta: eso es 3B) · Nace de leer el freno de `U-Windows-App`
 (`windows-client/src/Actions/Freno.cs`, promesas 21-28 y 59 de su contrato) y de un hallazgo grave
 de U que el Android no puede heredar · Rama: `yokh/precision`
 
@@ -63,7 +63,7 @@ lo avanza en vez de dormir.
 | 303 | El `ExecutionEngine` real con la puerta como teléfono y MCP. (a) El alto se pide durante el primer `tap` de un turno de cuatro acciones: el teléfono graba un solo `tap`, gestos y sistema nada, el cerebro dio un solo turno, `run` devuelve «paraste: …» y se narra una sola vez, sin «¡Listo!». (b) El alto se pide dentro de `next`: ninguna entrada llega. (c) El alto se pide en la última acción de un turno: no se pide otro turno. La entrada rechazada lanza `Paraste` (tipo exacto) con el mensaje «paraste tú» |
 | 304 | `empezar` + `pide` ×10 → un aviso y una línea «freno: alto pedido (…); paro «…»». `termine()` → «Listo, tienes el control de vuelta.» una vez; otro `termine()` no lo repite; una tarea sin alto no lo dice |
 | 305 | `duerme(3000)` con reloj de prueba y el alto pedido a los 120 ms → devuelve `true`, pasó menos de 200 ms y ningún trozo pasó de 40 ms. Sin alto, `duerme(100)` devuelve `false` tras 100 ms en trozos `[40, 40, 20]`. Y con el reloj y la espera reales, un alto a los 120 ms corta un `duerme(3000)` antes de 1 s |
-| 306 | `enTarea { error("revienta") }` → la excepción sale tal cual, `abierta` y `pedido` son `false`. Con un alto pedido dentro también, y la frase de devolver el control se dice. Después, un `tap` por la puerta no pasa y lo dice el log |
+| 306 | `enTarea { throw Reventon("revienta") }` (una excepción que no es cancelación, para que una `Paraste` no cuente como reventón) → sale tal cual, `abierta` y `pedido` son `false`. Con un alto pedido dentro también, y la frase de devolver el control se dice. Después, un `tap` por la puerta no pasa y lo dice el log |
 
 ---
 
