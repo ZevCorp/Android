@@ -60,7 +60,8 @@ for spec in "$repo"/docs/specs/*.md; do
     dentro && /^\|[-:| ]+$/   { next }
     dentro && !/^\|/          { dentro = 0; next }
     dentro {
-      split($0, c, "|"); n = c[2]; texto = c[3]
+      nf = split($0, c, "|"); n = c[2]; texto = c[3]
+      for (i = 4; i < nf - 1; i++) texto = texto "|" c[i]
       gsub(/^ +| +$/, "", n); gsub(/^ +| +$/, "", texto)
       if (texto == "") texto = "-"
       if (n ~ /^[0-9]+$/) printf "%s\t%d\t%s\n", spec, n, texto
@@ -88,6 +89,9 @@ if [ ! -s "$juzgadas" ]; then
   exit 99
 fi
 
+# Fallas crudas del XML (failure/error, sin filtrar retiradas): explican un gradle ≠ 0 legítimo.
+fallas_xml=$(awk -F'\t' '$3 == "rota" || $3 == "pendiente" { c++ } END { print c + 0 }' "$juzgadas")
+
 # El cruce spec ↔ contrato. Una línea por veredicto, sin campos vacíos en medio (read los fundiría):
 #   ok|rota|pendiente|silenciada|sinjuez <TAB> N <TAB> enunciado <TAB> mensaje
 #   huerfana|doble|repetida <TAB> N o «-» <TAB> detalle
@@ -100,8 +104,13 @@ veredictos="$(awk -F'\t' '
     next
   }
   NF >= 3 {
-    clase = $1; sub(/.*\./, "", clase)
+    clase_completa = $1
+    clase = clase_completa; sub(/.*\./, "", clase)
     nombre = $2; sub(/\[[A-Za-z0-9]+\]$/, "", nombre)   # KMP le pega el target: «promesa07[jvm]»
+    if (clase_completa !~ /^graph\.core\.contrato\./) {
+      if ($3 != "ok") printf "fallounit\t-\t%s.%s\n", clase, nombre
+      next
+    }
     if (nombre !~ /^promesa[0-9]+$/) { printf "huerfana\t-\t%s.%s\n", clase, nombre; next }
     n = sprintf("%d", substr(nombre, 8))
     if (!(n in spec)) { printf "huerfana\t%s\t%s.%s\n", n, clase, nombre; next }
@@ -112,8 +121,8 @@ veredictos="$(awk -F'\t' '
     for (n in repetida) printf "repetida\t%s\t%s\n", n, repetida[n]
     for (i = 1; i <= filas; i++) {
       n = orden[i]
-      if (n in estado)           printf "%s\t%s\t%s\t%s\n", estado[n], n, texto[n], mensaje[n]
-      else if (texto[n] ~ /^~~/) continue
+      if (texto[n] ~ /^~~/)      continue
+      else if (n in estado)      printf "%s\t%s\t%s\t%s\n", estado[n], n, texto[n], mensaje[n]
       else                       printf "sinjuez\t%s\t%s\t\n", n, texto[n]
     }
   }' "$filas" "$juzgadas")"
@@ -122,9 +131,10 @@ total=0; rotas=0; errores=()
 while IFS=$'\t' read -r estado n texto msg; do
   [ -n "$estado" ] || continue
   case "$estado" in
-    huerfana) errores+=("✘ $texto no es fila de ninguna tabla de promesas en docs/specs/*.md"); continue ;;
-    doble)    errores+=("✘ la promesa $n la juzgan dos tests: $texto"); continue ;;
-    repetida) errores+=("✘ la promesa $n está en dos specs: $texto"); continue ;;
+    huerfana)  errores+=("✘ $texto no es fila de ninguna tabla de promesas en docs/specs/*.md"); continue ;;
+    doble)     errores+=("✘ la promesa $n la juzgan dos tests: $texto"); continue ;;
+    repetida)  errores+=("✘ la promesa $n está en dos specs: $texto"); continue ;;
+    fallounit) rotas=$((rotas + 1)); rojo "  ✘ test unitario $texto falló"; continue ;;
   esac
   total=$((total + 1))
   # Los mensajes vienen escapados en XML; se muestran cortos y legibles.
@@ -153,9 +163,13 @@ fi
 
 echo
 if [ "$rotas" -eq 0 ]; then
+  if [ "$codigo_gradle" -ne 0 ] && [ "$fallas_xml" -eq 0 ]; then
+    rojo "NO SE PUDO JUZGAR: gradle salió con $codigo_gradle sin promesas rotas"
+    exit 99
+  fi
   verde "CONTRATO INTACTO: $total promesas."
   exit 0
 else
   rojo "CONTRATO ROTO: $rotas promesa(s) incumplida(s). El cambio no puede entrar así."
-  exit "$rotas"
+  exit $(( rotas > 98 ? 98 : rotas ))
 fi
