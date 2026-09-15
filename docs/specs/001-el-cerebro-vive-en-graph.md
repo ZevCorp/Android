@@ -1,6 +1,6 @@
 # Plan de implementación: el cerebro vive en Graph — Android pasa a ser cliente tonto
 
-Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · **promesa 12 verde** (2026-09-14; el hallazgo del Nivel 4, corregido y medido otra vez en el teléfono) · **revisión R1: promesas 13-14 verdes y el juez endurecido** (2026-09-14; cada test nuevo se vio ROJO con un sabotaje real; la corrida en el teléfono va en R2) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
+Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · **promesa 12 verde** (2026-09-14; el hallazgo del Nivel 4, corregido y medido otra vez en el teléfono) · **revisión R1: promesas 13-14 verdes y el juez endurecido** (2026-09-14; cada test nuevo se vio ROJO con un sabotaje real; la corrida en el teléfono va en R2) · **revisión R2: promesa 15 verde, el portero juzga lo que se empuja y corrida en el teléfono** (2026-09-14) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
 habla con Graph · Rama: `yokh/cliente-graph`
 
 Hoy el Android piensa solo: `OpenAiBrain` y `GeminiBrain` (en `app/…/platform/`) arman el system
@@ -226,6 +226,31 @@ mCurrentFocus=Window{55a6616 u0 com.android.settings/com.android.settings.MiuiSe
 
 Con hilo nuevo, la corrida 2 abrió Ajustes en 2 turnos y 10 s (antes: 5 turnos, 39 s y la calculadora
 otra vez). El hilo se sigue usando dentro de cada corrida (`session=continúa` en el turno 2).
+
+**Corrida R2 (2026-09-14, mismo teléfono, APK release 0.42 con la ronda R2: apps una vez por corrida
+en `Dispatchers.IO`, campo de key sin precarga, conexión liberada en toda salida).** Mismo guion: dos
+prompts seguidos, `am start` entre uno y otro.
+
+```
+22:33:42.353 [run] ▶ "abre la calculadora"
+22:33:48.645 [graph] turno 1 · session=nuevo · HTTP 200 · 4840ms · 1 acciones
+22:33:48.646 [run] turno 1 · 6292ms · 📝 texto · "com.miui.home · Launcher del sistema" · decide: MCP launch_app {app=Calculadora}
+22:33:50.122 [api] launch_app → com.miui.calculator
+22:33:53.678 [graph] turno 2 · session=continúa · HTTP 200 · 3051ms · 0 acciones
+22:33:53.681 [run] ■ 2 turnos · 1 acciones · 11s · ¡Calculadora abierta! 🧮
+
+22:34:44.770 [run] ▶ "abre los ajustes"
+22:34:48.366 [graph] turno 1 · session=nuevo · HTTP 200 · 3108ms · 1 acciones
+22:34:48.367 [run] turno 1 · 3597ms · 📝 texto · "com.miui.calculator" · decide: MCP open_settings {section=general}
+22:34:48.393 [api] Intent android.settings.SETTINGS → lanzado
+22:34:51.716 [graph] turno 2 · session=continúa · HTTP 200 · 2818ms · 0 acciones
+22:34:51.723 [run] ■ 2 turnos · 1 acciones · 6s · Listo, ajustes abiertos.
+mCurrentFocus=Window{55a6616 u0 com.android.settings/com.android.settings.MiuiSettings}
+```
+
+Graph resolvió `launch_app {app=Calculadora}` con las apps consultadas una sola vez en la corrida, y
+cada objetivo abrió hilo nuevo. No medido: el `-1` real de `HttpURLConnection` en Android (la lectura
+se agota a los 5 min; no hay forma barata de provocarlo sin un build de prueba).
 
 Efecto colateral visto, fuera de esta spec: el destilador de memoria y la anticipación siguen
 llamando a Gemini y hoy devuelven `HTTP 429` (créditos agotados). No afectan al turno de Graph;
