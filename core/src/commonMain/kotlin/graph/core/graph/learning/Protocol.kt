@@ -11,8 +11,12 @@ import kotlinx.serialization.descriptors.nullable
 import kotlinx.serialization.encoding.Decoder
 import kotlinx.serialization.encoding.Encoder
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonDecoder
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 
 /*
  * Contrato JSON de aprendizaje y workflows con Graph. Espejo de
@@ -36,14 +40,28 @@ val LearningJson: Json = Json {
 }
 
 /** `""` (o solo blancos) es ausente: `null`. La trampa medida en Windows, en una función. */
-fun String?.vacioEsAusente(): String? = TODO()
+fun String?.vacioEsAusente(): String? = this?.takeIf { it.isNotBlank() }
 
-/** Lee un texto de Graph con [vacioEsAusente]: `""`, blancos y `null` llegan como `null`. */
+/** El texto de un elemento JSON si es un texto no vacío; si no, `null`. */
+internal fun JsonElement?.textoNoVacio(): String? =
+    (this as? JsonPrimitive)?.takeIf { it.isString }?.content.vacioEsAusente()
+
+/**
+ * Lee un texto de Graph con [vacioEsAusente]: `""`, blancos y `null` llegan como `null`. Un número donde
+ * iba un texto se lee como su texto; un objeto o una lista, como ausente.
+ */
 object VacioEsAusente : KSerializer<String?> {
     override val descriptor: SerialDescriptor =
         PrimitiveSerialDescriptor("graph.core.graph.learning.VacioEsAusente", PrimitiveKind.STRING).nullable
 
-    override fun deserialize(decoder: Decoder): String? = TODO()
+    override fun deserialize(decoder: Decoder): String? {
+        val json = decoder as? JsonDecoder ?: return decoder.decodeString().vacioEsAusente()
+        return when (val e = json.decodeJsonElement()) {
+            is JsonNull -> null
+            is JsonPrimitive -> e.content.vacioEsAusente()
+            else -> null
+        }
+    }
 
     @OptIn(ExperimentalSerializationApi::class)
     override fun serialize(encoder: Encoder, value: String?) =
@@ -54,7 +72,12 @@ object VacioEsAusente : KSerializer<String?> {
 object JsonVacioEsAusente : KSerializer<JsonElement?> {
     override val descriptor: SerialDescriptor = JsonElement.serializer().descriptor.nullable
 
-    override fun deserialize(decoder: Decoder): JsonElement? = TODO()
+    override fun deserialize(decoder: Decoder): JsonElement? =
+        when (val e = (decoder as JsonDecoder).decodeJsonElement()) {
+            is JsonNull -> null
+            is JsonPrimitive -> if (e.isString && e.content.isBlank()) null else e
+            else -> e
+        }
 
     @OptIn(ExperimentalSerializationApi::class)
     override fun serialize(encoder: Encoder, value: JsonElement?) =
@@ -146,7 +169,14 @@ object SurfaceHint {
     const val NODE_PATH = "nodePath"
 
     /** Como `BuildHints` de Windows: lo vacío no viaja, y sin nada que decir, `null` (`surfaceHints` no viaja). */
-    fun build(alternativeTargets: List<String> = emptyList(), pistas: Map<String, String> = emptyMap()): JsonObject? = TODO()
+    fun build(alternativeTargets: List<String> = emptyList(), pistas: Map<String, String> = emptyMap()): JsonObject? {
+        val hints = buildMap<String, JsonElement> {
+            alternativeTargets.filter { it.isNotBlank() }.takeIf { it.isNotEmpty() }
+                ?.let { put(ALTERNATIVE_TARGETS, JsonArray(it.map { t -> JsonPrimitive(t) })) }
+            pistas.forEach { (k, v) -> if (k != ALTERNATIVE_TARGETS && v.isNotBlank()) put(k, JsonPrimitive(v)) }
+        }
+        return if (hints.isEmpty()) null else JsonObject(hints)
+    }
 }
 
 @Serializable
@@ -248,22 +278,32 @@ class PlanStep(
     @Serializable(with = VacioEsAusente::class) val bindTo: String? = null,
 ) {
     /** La superficie donde se grabó el paso (`observedSurface`), o `null` en grabaciones viejas. */
-    fun observedSurface(): String? = TODO()
+    fun observedSurface(): String? = pista(SurfaceHint.OBSERVED_SURFACE).textoNoVacio()
 
     /** Elementos interactivos listos al grabar (número o texto); 0 = sin métrica. */
-    fun readiness(): Int = TODO()
+    fun readiness(): Int =
+        (pista(SurfaceHint.READINESS) as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content?.trim()?.toIntOrNull() ?: 0
 
     /** La huella estructural de la pantalla al grabar, o `null`. */
-    fun fingerprint(): String? = TODO()
+    fun fingerprint(): String? = pista(SurfaceHint.FINGERPRINT).textoNoVacio()
 
     /** La posición del toque `"relX,relY"`, o `null` si no se grabó o no se lee. */
-    fun clickPos(): Pair<Int, Int>? = TODO()
+    fun clickPos(): Pair<Int, Int>? {
+        val xy = pista(SurfaceHint.CLICK_POS).textoNoVacio()?.split(',') ?: return null
+        if (xy.size != 2) return null
+        val x = xy[0].trim().toIntOrNull() ?: return null
+        val y = xy[1].trim().toIntOrNull() ?: return null
+        return x to y
+    }
 
     /** Los selectores de respaldo: solo textos no vacíos, en su orden. */
-    fun alternativeTargets(): List<String> = TODO()
+    fun alternativeTargets(): List<String> =
+        (pista(SurfaceHint.ALTERNATIVE_TARGETS) as? JsonArray).orEmpty().mapNotNull { it.textoNoVacio() }
 
     /** El campo propio primero y, si no, `surfaceHints.nodePath`. */
-    fun nodePathOrHint(): String? = TODO()
+    fun nodePathOrHint(): String? = nodePath ?: pista(SurfaceHint.NODE_PATH).textoNoVacio()
+
+    private fun pista(nombre: String): JsonElement? = (surfaceHints as? JsonObject)?.get(nombre)
 }
 
 /* ────────────────────────── Enseñanza por video (/teach/…) ────────────────────────── */
@@ -339,9 +379,42 @@ class WorkflowResumen(
      * Lo que se muestra: la descripción si es de verdad; si es relleno, lo que se sabe del workflow
      * (ver [NombreDeWorkflow]). [desfaseMs] da el desfase de la zona local para un instante.
      */
-    fun nombre(desfaseMs: (Long) -> Long): String = TODO()
+    fun nombre(desfaseMs: (Long) -> Long): String {
+        val propia = description?.trim()
+        if (propia != null && !NombreDeWorkflow.esRelleno(propia)) return propia
+        return NombreDeWorkflow.derivar(NombreDeWorkflow.appDe(sourceOrigin), sourceTitle.orEmpty(), creadoEnMs, totalSteps, desfaseMs)
+    }
 
     companion object {
-        fun desdeJson(e: JsonElement): WorkflowResumen = TODO()
+        fun desdeJson(e: JsonElement): WorkflowResumen {
+            val o = e as? JsonObject ?: JsonObject(emptyMap())
+            fun texto(vararg claves: String) = claves.firstNotNullOfOrNull { o[it].textoNoVacio() }
+            fun entero(vararg claves: String) = claves.firstNotNullOfOrNull {
+                (o[it] as? JsonPrimitive)?.takeUnless { p -> p.isString || p is JsonNull }?.content?.toIntOrNull()
+            }
+            return WorkflowResumen(
+                id = texto("id", "workflowId", "workflow_id").orEmpty(),
+                description = texto("description", "title", "name"),
+                sourceOrigin = texto("sourceOrigin", "source_origin"),
+                sourceTitle = texto("sourceTitle", "source_title"),
+                totalSteps = entero("totalSteps", "stepCount", "step_count") ?: (o["steps"] as? JsonArray)?.size ?: 0,
+                creadoEnMs = creadoEn(o["createdAt"] ?: o["created_at"]),
+            )
+        }
+
+        /**
+         * El `createdAt` como llega de Graph: entero Neo4j `{low, high}` (lo normal) o un número llano de
+         * milisegundos. Neo4j parte el int64 en dos int32: el valor es `high·2³² + low` con `low` SIN signo.
+         */
+        private fun creadoEn(v: JsonElement?): Long? = when (v) {
+            is JsonObject -> {
+                val low = (v["low"] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toLongOrNull()
+                val high = (v["high"] as? JsonPrimitive)?.takeUnless { it.isString }?.content?.toLongOrNull()
+                if (low == null || high == null) null else (high shl 32) or (low and 0xFFFFFFFFL)
+            }
+            is JsonNull -> null
+            is JsonPrimitive -> if (v.isString) null else v.content.toLongOrNull()
+            else -> null
+        }
     }
 }

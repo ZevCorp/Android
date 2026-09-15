@@ -9,9 +9,11 @@ import kotlinx.coroutines.withContext
 import java.net.HttpURLConnection
 import java.net.SocketTimeoutException
 import java.net.URL
+import kotlin.time.Duration
 
 /**
- * La puerta a la red del cerebro Graph: un POST JSON con `HttpURLConnection`, mismas garantías que
+ * La puerta a la red de Graph: JSON por `HttpURLConnection` (POST del turno; GET, POST, PUT y DELETE del
+ * aprendizaje, spec 004), mismas garantías que
  * `oaHttpOnce` (OpenAiBrain): cancelable de verdad (`disconnect()` al cancelar el Job) y con los
  * timeouts del cliente Windows (30 s para conectar, 5 min para leer: un turno de Graph puede tardar
  * lo que tarde el modelo). No reintenta: eso lo decide `GraphBrain` según el status.
@@ -30,26 +32,33 @@ import java.net.URL
 class GraphTransport : TurnTransport {
 
     override suspend fun post(url: String, body: String, headers: Map<String, String>): TransportReply =
+        send("POST", url, body, headers)
+
+    /**
+     * Cualquier método: GET y DELETE sin cuerpo, POST y PUT con JSON. [timeout] es el tope de lectura de
+     * esta llamada (el cliente de aprendizaje manda lo que le queda a su tope); sin él, los 5 min del turno.
+     */
+    override suspend fun send(method: String, url: String, body: String?, headers: Map<String, String>, timeout: Duration?): TransportReply =
         withContext(Dispatchers.IO) {
-            try { once(url, body.toByteArray(Charsets.UTF_8), headers) }
+            try { once(method, url, body?.toByteArray(Charsets.UTF_8), headers, lectura(timeout)) }
             catch (e: CancellationException) { throw e }
             catch (e: Exception) { TransportReply(TransportReply.NOT_CONNECTED, causa(e)) }
         }
 
-    private suspend fun once(url: String, body: ByteArray, headers: Map<String, String>): TransportReply =
+    private suspend fun once(method: String, url: String, body: ByteArray?, headers: Map<String, String>, readTimeoutMs: Int): TransportReply =
         suspendCancellableCoroutine { cont ->
             val c = URL(url).openConnection() as HttpURLConnection
             cont.invokeOnCancellation { runCatching { c.disconnect() } }
             var connected = false
             val result = try {
-                c.requestMethod = "POST"
+                c.requestMethod = method
                 c.connectTimeout = CONNECT_TIMEOUT_MS
-                c.readTimeout = READ_TIMEOUT_MS
+                c.readTimeout = readTimeoutMs
                 headers.forEach { (k, v) -> c.setRequestProperty(k, v) }
-                c.doOutput = true
+                c.doOutput = body != null
                 c.connect() // el connectTimeout salta aquí y solo aquí
                 connected = true
-                c.outputStream.use { it.write(body) }
+                if (body != null) c.outputStream.use { it.write(body) }
                 val code = c.responseCode
                 val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
                 val retryAfter = c.getHeaderField("Retry-After")?.trim()?.toIntOrNull()
@@ -63,6 +72,10 @@ class GraphTransport : TurnTransport {
             }
             if (cont.isActive) cont.resumeWith(result)
         }
+
+    /** El tope de lectura en ms: el de la llamada, entre 1 ms (0 sería «sin tope») y los 5 min del turno. */
+    private fun lectura(timeout: Duration?): Int =
+        timeout?.inWholeMilliseconds?.coerceIn(1L, READ_TIMEOUT_MS.toLong())?.toInt() ?: READ_TIMEOUT_MS
 
     /** La causa en una línea: tipo y mensaje de la excepción (`MalformedURLException: no protocol: …`). */
     private fun causa(e: Throwable): String = e.javaClass.simpleName + (e.message?.let { ": $it" } ?: "")

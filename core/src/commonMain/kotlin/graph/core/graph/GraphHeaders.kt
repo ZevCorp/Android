@@ -14,7 +14,7 @@ object GraphHeaders {
     fun build(apiKey: String, email: String?, deviceId: String?, feature: String? = FEATURE_CEREBRO): Map<String, String> = buildMap {
         put("X-API-Key", apiKey)
         put("X-Miracle-App", "android_app")
-        put("X-Miracle-Feature", "conscious_bridge")
+        feature?.takeIf { it.isNotBlank() }?.let { put("X-Miracle-Feature", it) }
         email?.takeIf { it.isNotBlank() }?.let { put("X-Miracle-User-Email", it) }
         deviceId?.takeIf { it.isNotBlank() }?.let { put("X-Miracle-Device-Id", it) }
         put("Content-Type", "application/json")

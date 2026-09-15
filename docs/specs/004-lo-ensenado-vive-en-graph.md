@@ -1,6 +1,7 @@
 # Plan de implementación: lo enseñado vive en Graph — el protocolo y el cliente de aprendizaje
 
-Estado: **fase 4A1 en curso** (2026-09-14; promesas 401-406 escritas) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
+Estado: **fase 4A1 implementada** (2026-09-14; promesas 401-406 verdes; cada una se vio ROJA con un
+sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
 workflows en Graph · Rama: `yokh/aprendizaje-graph`
 
 Hoy el Android aprende solo: `ActiveLearning`, `GeminiLearning`, `GeminiWorkflow` y `WorkflowRepo`
@@ -73,6 +74,23 @@ esperas; un `TestTimeSource` que avanzan el guion y las esperas. Ninguna toca re
 | 404 | Graph lista viejo → nuevo (con `createdAt` Neo4j) → el cliente devuelve nuevo → viejo; sin fecha, por id descendente. `nombre()` de «Workflow sin descripción», «User workflow summary:», `""` y «No description» no contiene el relleno y sí la app, «2 sep 13:42» (con desfase de -5 h) y «6 pasos»; una descripción de verdad se respeta tal cual |
 | 405 | `borrar` con `404` → no lanza, 1 llamada `DELETE`; con `500` → `GraphException` tipo exacto. `prependAlignment` con `500 {"error":…}` o con un transporte que lanza → no lanza, devuelve `false` y una línea del log trae el id y la causa; con `200` → `true` y ninguna línea de fallo; cancelar sale tal cual |
 | 406 | `interpretSteps` con `503×4`, `-1`, transporte que lanza, cuerpo ilegible, `{}`, `interpretation:null` e `interpretation:""`, sin key y sin pasos → `null` sin excepción, y el log dice «el modelo no opinó» con la causa; con `interpretation` de verdad → el JSON crudo idéntico; cancelar sale tal cual |
+
+### Verificación (2026-09-14)
+
+El contrato nació rojo contra un esqueleto con `TODO()` (401-406 `⧗ PENDIENTE`, 1-14 intactas) y la
+implementación lo dejó en `CONTRATO INTACTO: 20 promesas.` Después, un sabotaje por promesa sobre el
+código real, revertido con copia y sha256; cada uno rompió **solo** su promesa:
+
+| # | Sabotaje | Lo que dijo el juez |
+|---|---|---|
+| 401 | `createdAt` con `low` con signo: `(high shl 32) or low` | `createdAt {low negativo, high} expected:<1789054200000> but was:<-1947162432>` |
+| 402 | `X-Miracle-Feature` en todas las llamadas | `POST …/learning/sessions · X-Miracle-Feature solo en /teach/* expected:<null> but was:<conscious_bridge>` |
+| 403 | el cierre trata la lectura agotada como transitorio | `-1` en `terminar` → «no lanzó»: se reintentó y el segundo intento cerró |
+| 404 | sin ordenar la lista | `expected:<[wf_nuevo, wf_medio, wf_viejo]> but was:<[wf_viejo, wf_medio, wf_nuevo]>` |
+| 405 | `borrar` sin aceptar el 404 | `GraphException: Workflow not found (HTTP 404 en DELETE /api/v1/workflows/wf_ido)` |
+| 406 | `interpretSteps` relanza lo que falla | `GraphException: graph no respondió (HTTP 503) en POST /api/v1/teach/interpret-steps tras 4 intentos` |
+
+`./gradlew :app:compileReleaseKotlin -q` → exit 0 (con `GraphTransport.send`).
 
 ---
 

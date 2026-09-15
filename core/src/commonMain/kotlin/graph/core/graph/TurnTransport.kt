@@ -39,5 +39,7 @@ interface TurnTransport {
         body: String?,
         headers: Map<String, String>,
         timeout: Duration? = null,
-    ): TransportReply = TODO()
+    ): TransportReply =
+        if (method == "POST" && body != null) post(url, body, headers)
+        else throw UnsupportedOperationException("este transporte solo sabe POST con cuerpo; $method necesita implementar send()")
 }
