@@ -1,9 +1,14 @@
 package graph.core.voz
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
+import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -20,7 +25,8 @@ import kotlin.math.roundToLong
  *
  * TODO VIVE EN UN SOLO HILO O CORRUTINA CONFINADA: [TurnosSinMarca] no tiene candado. Quien la cablea (fase B) llama
  * a [conversar], [oirMicrofono], [escribir], [avisar] y [detener] desde el mismo despachador de un hilo. Las
- * herramientas corren en una corrutina hija del mismo despachador, así que una acción que tarda no frena la escucha.
+ * herramientas corren en corrutinas hijas de la CONEXIÓN, en el mismo despachador: las que actúan en la pantalla de a
+ * una, las de control en el acto. Una acción que tarda no frena la escucha, y la conexión que muere se las lleva.
  *
  * LO QUE ANTES FALLABA EN SILENCIO, y por eso está aquí y no en el cableado:
  *  - «sesión abierta» se escribía al conectar el socket, y sin crédito salió en el mismo segundo que el error (U, 2026-09-12);
@@ -82,11 +88,17 @@ class ConversacionViva(
         const val AVISO_DE_ITEMS = 120
 
         const val AVISO_DEL_SISTEMA = "[aviso del sistema] "
+
+        /** La salida de una llamada retirada: el servidor la espera igual, y sin ella rechaza el siguiente `response.create`. */
+        const val RETIRADA = "retirada: no se ejecutó"
     }
 
     /** Lo que es de UNA conexión, y por eso muere con ella: la sesión del servidor que abre es otra. */
-    private class Conexion(reloj: Reloj, val alConfirmar: String) {
+    private class Conexion(reloj: Reloj, val alConfirmar: String, val trabajo: CoroutineScope) {
         val turnos = TurnosSinMarca({ reloj.ahora() })
+
+        /** Las tandas que actúan en la pantalla, para el obrero de esta conexión y de ninguna otra. */
+        val tandas = Channel<Tanda>(Channel.UNLIMITED)
 
         /** Pedidas y sin contestar, por instancia: un call_id puede venir vacío. */
         val sinContestar = mutableListOf<Llamada>()
@@ -109,6 +121,15 @@ class ConversacionViva(
             if (porque == null || causa != null) return
             causa = porque
             dichoDeLaCausa = dicho
+        }
+
+        /**
+         * SE ACABÓ: lo que corría por ella —el obrero y las de control— se cancela. Con un obrero para toda la conversación,
+         * una herramienta colgada en una conexión muerta dejaba en cola para siempre las de la siguiente.
+         */
+        fun acabar() {
+            tandas.close()
+            trabajo.cancel()
         }
     }
 
@@ -135,7 +156,6 @@ class ConversacionViva(
     private var conexiones = 0
     private var reconexiones = 0
     private var segundosAnteriores = 0.0
-    private var tandas = Channel<Tanda>(Channel.UNLIMITED)
 
     /** Una tanda que contesta y un aviso que sale no se cruzan: si no, el `response.create` podía salir dos veces. */
     private val envio = Mutex()
@@ -173,23 +193,26 @@ class ConversacionViva(
         conexion = null
         retiradas.clear()
         avisos.clear()
-        val cola = Channel<Tanda>(Channel.UNLIMITED).also { tandas = it }
 
         coroutineScope {
-            // UNA TANDA DETRÁS DE OTRA, en el orden en que llegaron: dos manos sobre la pantalla a la vez no se cruzan.
-            val obrero = launch { for (tanda in cola) atender(tanda) }
             try {
                 var reconectando = false
                 while (true) {
-                    val c = empiezaUnaConexion(if (reconectando) AL_VOLVER else AL_ARRANCAR)
+                    val c = empiezaUnaConexion(if (reconectando) AL_VOLVER else AL_ARRANCAR, this)
                     var via = "apertura"
                     var reconecta = false
                     try {
                         if (reconectando) esperar(ESPERA_DE_RECONEXION_MS * reconexiones)
                         if (!detenida && conectar(c, clave, reconectando)) via = escuchar(c)
                     } catch (e: CancellationException) {
-                        via = "cancelación"
-                        throw e
+                        if (!currentCoroutineContext().isActive) {
+                            via = "cancelación"
+                            throw e
+                        }
+                        // Se escapó de un puerto con la voz viva: no es la nuestra, es un corte.
+                        log(TAG, "se cortó la escucha: ${e.message}")
+                        c.cayoSolo = true
+                        via = "corte"
                     } finally {
                         reconecta = alTerminarLaEscucha(c, via)
                     }
@@ -197,8 +220,7 @@ class ConversacionViva(
                     reconectando = true
                 }
             } finally {
-                cola.close()
-                obrero.cancel()
+                conexion?.acabar()
                 terminar()
             }
         }
@@ -248,9 +270,8 @@ class ConversacionViva(
         }
         try {
             canal.enviar(protocolo.audio(trozo))
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Exception) {
+            if (e is CancellationException) relanzarSiEsNuestra(e)
             // Un trozo perdido no tira la sesión, pero perderlo en silencio sería un mensaje mudo: una línea por motivo.
             if (e.message != ultimoFalloDeEnvio) {
                 ultimoFalloDeEnvio = e.message.orEmpty()
@@ -290,7 +311,12 @@ class ConversacionViva(
         enviando("el aviso del sistema") { pedirRespuestaSiToca(c) }
     }
 
-    /** Llamadas que ya no hay que hacer: ni se ejecutan ni se contestan. Contestarlas es lo que las hacía repetirse. */
+    /**
+     * Llamadas que ya no hay que hacer: no se ejecutan, pero SE CONTESTAN con [RETIRADA]. En U las retiraba el modelo al
+     * hablarle encima, y contestarlas las hacía repetirse (ConversacionEnVivo.cs:1688). GPT-Live nunca retira: la retirada
+     * viene de afuera (la tarea de la fase 2C), el servidor sigue esperando la salida y sin ella rechaza el siguiente
+     * `response.create` con `function_call_outputs_required`.
+     */
     fun retirar(ids: List<String>) {
         val validos = ids.filter { it.isNotEmpty() }
         if (validos.isEmpty()) return
@@ -324,12 +350,17 @@ class ConversacionViva(
      * Cada conexión nace con su marcador de turnos, sin causa, sin falla y sin confirmar: lo dicho —o una llamada sin
      * devolver— en la anterior no cierra ni sujeta un turno de esta (W5 en U). Sus segundos se apartan para sumarlos.
      */
-    private fun empiezaUnaConexion(alConfirmar: String): Conexion {
+    private fun empiezaUnaConexion(alConfirmar: String, alcance: CoroutineScope): Conexion {
         conexion?.let { segundosAnteriores += it.segundos }
         fraseU.clear()
         fraseUsuario.clear()
         conexiones++
-        return Conexion(reloj, alConfirmar).also { conexion = it }
+        val trabajo = CoroutineScope(alcance.coroutineContext + Job(alcance.coroutineContext.job))
+        val c = Conexion(reloj, alConfirmar, trabajo)
+        // UNA TANDA DETRÁS DE OTRA, en el orden en que llegaron: dos manos sobre la pantalla a la vez no se cruzan.
+        trabajo.launch { for (tanda in c.tandas) atender(tanda) }
+        conexion = c
+        return c
     }
 
     /** Abre el socket y manda el único `session.start`. Verdadero si hay algo que escuchar. */
@@ -338,10 +369,10 @@ class ConversacionViva(
         while (true) {
             val apertura = try {
                 canal.abrir(protocolo.url, protocolo.cabeceras(clave))
-            } catch (e: CancellationException) {
-                throw e
             } catch (e: Exception) {
                 // El canal traduce lo que sabe; lo que no traduce no trae HTTP, y sin HTTP lo único que cabe es la red.
+                // Tampoco lo trae el `withTimeout` del adaptador que vence: su cancelación no es la de la voz.
+                if (e is CancellationException) relanzarSiEsNuestra(e)
                 Apertura.SinRed(e.message ?: "error al abrir")
             }
             when (apertura) {
@@ -352,9 +383,8 @@ class ConversacionViva(
                     }
                     try {
                         canal.enviar(protocolo.apertura(instruccionesVoz, delegado, herramientas))
-                    } catch (e: CancellationException) {
-                        throw e
                     } catch (e: Exception) {
+                        if (e is CancellationException) relanzarSiEsNuestra(e)
                         log(TAG, "no pude mandar la apertura: ${e.message}")
                         c.cayoSolo = true
                         return false
@@ -418,9 +448,8 @@ class ConversacionViva(
                 when (val r = canal.recibir()) {
                     is Recibido.Mensaje -> try {
                         procesar(c, r.texto)
-                    } catch (e: CancellationException) {
-                        throw e
                     } catch (e: Exception) {
+                        if (e is CancellationException) relanzarSiEsNuestra(e)
                         log(TAG, "no pude reaccionar a un mensaje del servidor: ${e.message}")
                     }
 
@@ -430,13 +459,22 @@ class ConversacionViva(
                     }
                 }
             }
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Exception) {
+            // Un adaptador que cancela su Channel o vence un `withTimeout` en recibir() también es un corte.
+            if (e is CancellationException) relanzarSiEsNuestra(e)
             log(TAG, "se cortó la escucha: ${e.message}")
             c.cayoSolo = true
             return "corte"
         }
+    }
+
+    /**
+     * UNA CANCELACIÓN AJENA NO PARA LA VOZ. Un `withTimeout` del adaptador, su `Channel` cancelado o el freno de la fase
+     * 3A (`Paraste`) lanzan `CancellationException` con la voz viva. Solo si ESTA corrutina está cancelada la excepción es
+     * nuestra, y se relanza; si no, quien la atrapa la trata como el fallo que es.
+     */
+    private suspend fun relanzarSiEsNuestra(e: CancellationException) {
+        if (!currentCoroutineContext().isActive) throw e
     }
 
     /**
@@ -505,10 +543,14 @@ class ConversacionViva(
             }
 
             // SE ANOTAN ANTES DE LANZARLAS: la siguiente de la tanda ya las cuenta aunque esta termine enseguida.
+            // Las que actúan en la pantalla van al obrero, de a una; las de control corren ya: «para» no puede esperar a
+            // que acabe lo que se está parando.
             is Hecho.Pide -> {
                 log(TAG, "llamada recibida: " + hecho.llamadas.joinToString { it.nombre })
                 for (l in hecho.llamadas) if (c.sinContestar.none { it === l }) c.sinContestar += l
-                tandas.trySend(Tanda(c, hecho.llamadas))
+                val (enPantalla, deControl) = hecho.llamadas.partition { actuaEnPantalla(it.nombre) }
+                if (enPantalla.isNotEmpty()) c.tandas.trySend(Tanda(c, enPantalla))
+                for (l in deControl) c.trabajo.launch { atender(Tanda(c, listOf(l))) }
             }
 
             is Hecho.Retira -> retirar(hecho.ids)
@@ -563,9 +605,9 @@ class ConversacionViva(
     // ── Contestar ────────────────────────────────────────────────────────────
 
     /**
-     * Una tanda, llamada por llamada y en orden. La retirada se salta sin contestar. Lo que revienta se contesta con su
-     * error. Y la devolución al marcador va en finally: sin ella, tras la primera herramienta que falla, el turno no se
-     * cerraría nunca.
+     * Una tanda, llamada por llamada y en orden. La retirada no se ejecuta y se contesta como tal. Lo que revienta o se
+     * para solo se contesta con su motivo, y la tanda sigue. Y la devolución al marcador va en finally: sin ella, tras la
+     * primera herramienta que falla, el turno no se cerraría nunca.
      */
     private suspend fun atender(tanda: Tanda) {
         val c = tanda.conexion
@@ -573,7 +615,8 @@ class ConversacionViva(
         try {
             for (llamada in tanda.llamadas) {
                 if (llamada.id.isNotEmpty() && llamada.id in retiradas) {
-                    log(TAG, "«${llamada.nombre}» no se ejecuta ni se contesta: se retiró")
+                    log(TAG, "«${llamada.nombre}» no se ejecuta: se retiró; se contesta como no ejecutada")
+                    hechas += Resultado(llamada.id, RETIRADA)
                     continue
                 }
                 // Una sesión nueva no sabe de esta llamada: ejecutarla sería actuar por una petición que ya nadie recuerda.
@@ -584,11 +627,17 @@ class ConversacionViva(
                 log(TAG, "ejecutando «${llamada.nombre}»…")
                 val salida = try {
                     ejecutar(llamada)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (e: Exception) {
-                    log(TAG, "«${llamada.nombre}» reventó: ${e.message}")
-                    "la herramienta falló: ${e.message ?: e::class.simpleName}"
+                } catch (e: Throwable) {
+                    // NO SE ESCAPA NADA salvo la cancelación de la voz. Una cancelación ajena (`withTimeout`, el freno de
+                    // 3A) mataba al obrero en silencio y la cola ya no se atendía; un Error (`TODO()`) tumbaba la voz.
+                    if (e is CancellationException) {
+                        relanzarSiEsNuestra(e)
+                        log(TAG, "«${llamada.nombre}» se paró: ${e.message}")
+                        "la herramienta se paró: ${e.message ?: e::class.simpleName}"
+                    } else {
+                        log(TAG, "«${llamada.nombre}» reventó: ${e.message}")
+                        "la herramienta falló: ${e.message ?: e::class.simpleName}"
+                    }
                 }
                 hechas += Resultado(llamada.id, salida)
             }
@@ -633,9 +682,8 @@ class ConversacionViva(
     private suspend fun enviando(que: String, cuerpo: suspend () -> Unit) {
         try {
             envio.withLock { cuerpo() }
-        } catch (e: CancellationException) {
-            throw e
         } catch (e: Exception) {
+            if (e is CancellationException) relanzarSiEsNuestra(e)
             log(TAG, "no pude mandar $que: ${e.message}")
         }
     }
@@ -648,6 +696,9 @@ class ConversacionViva(
      * código es la más precisa, «no abrió» va después, y reconectar solo si cayó solo. Devuelve si se reconecta.
      */
     private fun alTerminarLaEscucha(c: Conexion, via: String): Boolean {
+        // La sesión de esta conexión ya no existe: lo que corría por ella no tiene a quién contestar.
+        if (c.sinContestar.isNotEmpty()) log(TAG, "se cancelan ${c.sinContestar.size} llamada(s) sin contestar de la conexión que se acabó")
+        c.acabar()
         val cancelada = detenida || via == "cancelación"
         val sigue = viva && !cancelada
         val causa = c.causa

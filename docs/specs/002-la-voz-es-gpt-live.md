@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1 y A2 implementadas** (2026-09-14; promesas 201-231 verdes; B pendiente) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1 y A2 implementadas** (2026-09-14; promesas 201-235 verdes; B pendiente) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -141,7 +141,7 @@ micrófono, altavoz ni Android.
 | 229 | Compuerta activa: eco 800 y voz 6000 sostenida con Ü sonando; dispara, calla una vez, el trozo que dispara viaja idéntico y el siguiente también (reabierta, sin gracia). Sin compuerta: nunca calla y todo viaja idéntico |
 | 230 | Canal con guion: cambiar al modo aprendiz en plena sesión da `session.update` y el append, sin otro `session.start` ni otra URL. Tras un corte, el `session.start` de la reapertura lleva las instrucciones y herramientas del aprendiz; tras otro cambio y otro corte, las del último. La voz reabre siempre con su persona, y en un modo especial, confirmada la sesión y no antes, recibe el append con el prefijo de cambio de modo y las reglas vigentes. De vuelta al modo de siempre, la reapertura no manda append |
 | 231 | Un reloj cuya espera no vence sola: detener durante la espera de 1 s de un reintento de abrir, y durante la de 300 ms de una reconexión, termina la voz sin avanzar el reloj, sin reabrir y sin decir nada más. Si no termina, la prueba abre la espera y sale roja, no colgada |
-| 232 | Cuatro llamadas: una lanza `Paraste` (el freno de 3A, una `CancellationException`), otra vence un `withTimeout(0)`, otra `TODO()` y la cuarta contesta. `conversar` no lanza; las cuatro corren y se contestan en orden («se paró: …», «se paró: …», «falló: An operation is not implemented: …», su salida), sale un `response.create` y el turno cierra. Con una colgada y otra detrás, detener o cancelar la corrutina cancela la colgada, la de detrás no corre y ninguna se contesta |
+| 232 | Cuatro llamadas: una lanza `Paraste` (el freno de 3A, una `CancellationException`), otra vence un `withTimeout(0)`, otra `TODO()` y la cuarta contesta. `conversar` no lanza; las cuatro corren y se contestan en orden («se paró: …», «se paró: …», «falló: An operation is not implemented: …», su salida), lo último que sale es un `response.create` y el turno cierra. Con una colgada y otra detrás, detener o cancelar la corrutina cancela la colgada, la de detrás no corre y ninguna se contesta |
 | 233 | Una llamada colgada en la conexión 1 y un corte: confirmada la 2, la colgada ya recibió su cancelación; una llamada de la 2 corre, se contesta sola (la vieja no), pide respuesta y su turno cierra a los 2000 ms |
 | 234 | `actuaEnPantalla` solo para `pulsar`. Dos `pulsar` retenidos y detrás `parar`, `como_va` y `self_mute`: las tres de control corren y se contestan con la primera de pantalla retenida, sin `response.create`; la segunda de pantalla corre solo al soltar la primera; un único `response.create` al final |
 | 235 | Una llamada retenida y otra en cola que se retira: la retirada no se ejecuta, su salida es «retirada: no se ejecutó» y el único `response.create` va detrás. Retirada antes de llegar y sola: `session.start`, su salida y un `response.create` |
@@ -183,7 +183,7 @@ Todo en `core/src/commonMain/kotlin/graph/core/voz/`, sin dependencias nuevas:
   reacciona a cada hecho, ejecuta las herramientas por un puerto, cierra turnos y decide en un solo sitio
   si termina, dice por qué o reconecta.
 
-Pone verdes: **218-231**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
+Pone verdes: **218-235**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
 
 ### Fase B — el cableado en `app` (otra corrida)
 
@@ -207,12 +207,14 @@ Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer �
 | Default de la compuerta | `CompuertaActiva(..., sinCaminoDeEco = false)` y la variable `U_SIN_ECO` lo invierte | `sinCaminoDeEco = true` en la firma | en el teléfono no hay variables de entorno: el default de la decisión del dueño lo dice el código |
 | `PaseParaVolver`, `Consumo`, `Fotograma` | existen para otros protocolos | no existen | GPT-Live nunca los produce y `mira = false`; se añaden cuando haya un protocolo que los use |
 | Concurrencia de `TurnosSinMarca` | `lock` interno | sin candado | commonMain no tiene `synchronized`; A2 lo confina a un solo hilo o corrutina |
-| Varias tandas de llamadas | cada `Pide` corre en su propio `Task.Run`, en paralelo | un solo obrero, en el orden en que llegaron | dos manos sobre la pantalla del teléfono a la vez no se cruzan; la escucha sigue libre igual |
-| La última llamada pendiente se retira | nunca pide respuesta, y el delegado queda esperando | pide respuesta si ya se habían mandado salidas sin pedirla | la regla es «sin pendientes, se pide», no «la tanda que acaba pide» |
+| Varias tandas de llamadas | cada `Pide` corre en su propio `Task.Run`, en paralelo | las que actúan en la pantalla, un obrero por conexión en el orden en que llegaron; las de control (`parar`, `como_va`, `self_*`, según `actuaEnPantalla`) corren aparte, en el acto | dos manos sobre la pantalla del teléfono a la vez no se cruzan, y «para» no puede esperar a que acabe lo que para (promesa 234); la escucha sigue libre igual |
+| Una llamada retirada | la retira el modelo al hablarle encima; ni se ejecuta ni se contesta, porque contestarla la hacía repetirse (`ConversacionEnVivo.cs:1688, 2035`) | no se ejecuta y se contesta «retirada: no se ejecutó»; como toda salida, sin pendientes pide respuesta | GPT-Live nunca emite la retirada: viene de afuera (fase 2C), el servidor no se enteró y sin la salida rechaza el siguiente `response.create` con `function_call_outputs_required` (promesa 235). Que el delegado no la vuelva a pedir se mide en la fase B |
+| Una herramienta que se cancela sola o lanza un `Error` | `catch (Exception)`, que en .NET también atrapa la cancelación: se contesta «falló» (`ConversacionEnVivo.cs:2061`) | cancelación ajena: «la herramienta se paró: …»; `Error`: «la herramienta falló: …»; la tanda sigue. Solo la cancelación de la voz la cancela, y entonces no se contesta | en Kotlin un `withTimeout` o el freno de 3A (`Paraste`) lanzan la misma excepción que cancelar la corrutina, y un `TODO()` no es `Exception`: sin distinguirlos, el obrero moría en silencio o la voz caía (promesa 232) |
+| Una cancelación que sale del socket | la recepción toma toda `OperationCanceledException` por el fin (`ConversacionEnVivo.cs:1375`) | con la voz viva es un corte y reconecta; solo si la corrutina de la voz está cancelada es cancelación | un adaptador que cancela su `Channel` o vence un `withTimeout` lanza `CancellationException` sin que nadie detuviera la voz (promesa 224) |
 | Un 401 al abrir la primera vez | «No pude abrir la voz en vivo: {causa} (…)» dicho desde `ArrancarAsync` | pasa por la decisión única: «No sigo con la voz en vivo: {causa} («HTTP 401 …»).» | un solo sitio dice los fatales, llegue por la puerta que llegue (promesa 223) |
 | Reconectar con un modo especial puesto | la apertura vuelve a las instrucciones normales | la apertura lleva el modo en curso | quien estaba enseñando sigue enseñando tras un corte |
 | Lo dicho antes de un corte | la frase sigue acumulando en la conexión nueva | se descarta con el marcador | la sesión nueva no lo recuerda, y el log no debe pegarlo a lo siguiente |
-| Llamadas de una conexión ya cerrada | se ejecutan y sus salidas van al socket nuevo | ni se ejecutan ni se contestan | el call_id es de una sesión que ya no existe |
+| Llamadas de una conexión ya cerrada | se ejecutan y sus salidas van al socket nuevo | ni se ejecutan ni se contestan, y las que corrían se cancelan al acabar la conexión | el call_id es de una sesión que ya no existe, y una colgada no puede dejar en cola las de la conexión nueva (promesa 233) |
 | Transcripción | por `Dice`, que también lleva los avisos | por `transcribe`, aparte de `dice` | en el teléfono `dice` puede acabar anunciado en voz alta |
 | Reabrir tras un cambio de modo | `ReconectarAsync` manda la apertura y no le repite el modo a la voz | recuerda el modo vigente: la delegación va en el `session.start` y, confirmada la sesión, la voz recibe otra vez el append del cambio de modo | sin él el delegado reabría en un modo y la voz en el de siempre (promesa 230) |
 | Vuelco crudo de `response.event` | el mensaje entero salvo los `.delta` | solo el tipo del evento | el contenido es del delegado, y la promesa 227 dice que no se escribe |

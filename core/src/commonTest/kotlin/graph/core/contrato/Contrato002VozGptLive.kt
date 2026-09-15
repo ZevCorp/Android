@@ -1534,8 +1534,7 @@ class Contrato002VozGptLive {
         assertTrue(vencida.startsWith("la herramienta se paró: "), promesa(232) + " · un withTimeout que vence: «$vencida»")
         assertEquals("la herramienta falló: An operation is not implemented: sin manos todavía", todo, promesa(232) + " · un Error")
         assertEquals("hecho: que_veo", mirar, promesa(232))
-        assertEquals(1, v.cuenta("response.create"), promesa(232) + " · ${v.tipos()}")
-        assertEquals("response.create", v.tipos().last(), promesa(232))
+        assertEquals("response.create", v.tipos().last(), promesa(232) + " · sin nada pendiente se pide la respuesta: ${v.tipos()}")
         assertEquals(1, v.enLog("usuario dijo: para eso, espera, hazlo y mira"), promesa(232) + " · el turno se cerró: ${v.log}")
         assertEquals(listOf("Te escucho."), v.dicho, promesa(232) + " · la voz no terminó ni dijo nada más")
 
