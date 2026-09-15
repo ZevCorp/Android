@@ -100,7 +100,7 @@ class ExecutionEngine(
 
     private suspend fun execute(action: AgentAction): String {
         // Aviso de vía: MCP = subconsciente, computer-use = consciente (Wait no cambia de vía).
-        if (action !is AgentAction.Wait) mode?.executing(action is AgentAction.Mcp)
+        if (action !is AgentAction.Wait && action !is AgentAction.Unknown) mode?.executing(action is AgentAction.Mcp)
         // Las MCP devuelven su propio detalle de fallo (p.ej. qué taps de una aprendida no salieron):
         // se conserva tal cual para el log y para que el modelo pueda corregir en el siguiente turno.
         val result = when (action) {
@@ -112,6 +112,7 @@ class ExecutionEngine(
             is AgentAction.Swipe -> phone.swipe(action.x1, action.y1, action.x2, action.y2, action.ms).asResult()
             is AgentAction.Key -> phone.pressKey(action.key).asResult()
             is AgentAction.Wait -> { delay(action.ms); "ok" }
+            is AgentAction.Unknown -> "acción desconocida: ${action.kind}"
         }
         log.log("run", "  ▪ ${describe(action)} → $result")
         return result
@@ -129,5 +130,6 @@ class ExecutionEngine(
         is AgentAction.Swipe -> "computer-use swipe(${a.x1},${a.y1}→${a.x2},${a.y2})"
         is AgentAction.Key -> "computer-use key ${a.key}"
         is AgentAction.Wait -> "wait ${a.ms}ms"
+        is AgentAction.Unknown -> "desconocida ${a.kind}"
     }
 }

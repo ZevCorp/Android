@@ -14,5 +14,9 @@ kotlin {
             api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.1")
             api("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.1")
         }
+        // El contrato (docs/specs + commonTest/…/contrato): promesas escritas antes que el código.
+        commonTest.dependencies {
+            implementation(kotlin("test"))
+        }
     }
 }

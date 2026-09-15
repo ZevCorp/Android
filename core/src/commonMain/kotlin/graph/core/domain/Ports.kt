@@ -65,6 +65,13 @@ sealed interface AgentAction {
 
     /** Llamada a una herramienta MCP (gesto declarado). */
     class Mcp(val tool: String, val args: Map<String, String>) : AgentAction
+
+    /**
+     * Una acción que el cerebro remoto conoce y este cliente no (un `kind` nuevo de Graph). No se
+     * ejecuta nada: su resultado es "acción desconocida: <kind>" y la corrida sigue, para que el
+     * modelo se entere y elija otra vía. Igual que el `_ =>` del bucle de Windows.
+     */
+    class Unknown(val kind: String) : AgentAction
 }
 
 /** Lo que el cerebro devuelve en un turno: acciones + narración/voz/pregunta, o fin con texto. */
