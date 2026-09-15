@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1, A2 y B1a implementadas** (2026-09-15; promesas 201-243 verdes; el cableado en `app` pendiente) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -290,6 +290,9 @@ Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer �
 | Base64, `call_id` o argumentos inválidos | lanza | lista vacía, id vacío o mapa vacío | mejora: un mensaje raro no se lleva el socket |
 | Orden de la compuerta | `CompuertaActiva(aecDelSistema, forzada, sinCaminoDeEco)` | `ModoDeCaptura.activa(forzada, aec, sinCaminoDeEco)` | invertido: dos `Boolean` seguidos se cruzan sin error, así que todos los llamadores usan parámetros nombrados y así debe seguir |
 | `seconds` de la duración | cualquier número | solo finito y no negativo | un `NaN` envenenaba el acumulado, y un negativo o un infinito no son una duración (promesa 206) |
+| La cola del altavoz | `BufferedWaveProvider` de NAudio (`LiveAudio.cs:498-501`); aparte guarda el pico del volumen que sale | `ColaDeReproduccion` pura en `core`, en muestras enteras; `sonando()` son sus bytes y no hay nivel de salida | se juzga sin altavoz (promesa 244), y un byte suelto desalineaba la voz; la llave de la compuerta es el estado, nunca el volumen |
+| Lo que de la voz sale a la telemetría | — | `LogBus` reenvía a Supabase; de los tags `voz-`, una transcripción sale como su largo, un JSON volcado como su tipo y el `toString` de un hecho como su nombre | una frase dicha puede ser una clave, y la tabla remota no es de este teléfono (promesa 245) |
+| Salida de audio | `WaveOutEvent` | `AudioTrack` con `USAGE_MEDIA`, sin tocar el modo de audio del teléfono | con `USAGE_VOICE_COMMUNICATION` y sin `MODE_IN_COMMUNICATION` la voz puede salir por el auricular, y cambiar el modo pide `MODIFY_AUDIO_SETTINGS` en el manifiesto de todos los usuarios. Si el AEC no aguanta el eco del altavoz, lo dice el nivel 4 |
 
 ---
 

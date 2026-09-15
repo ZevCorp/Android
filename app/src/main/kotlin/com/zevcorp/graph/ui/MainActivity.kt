@@ -32,6 +32,7 @@ import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.Release
 import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.platform.UsageU
+import com.zevcorp.graph.voice.live.VozEnVivoDev
 import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
 import graph.core.domain.Workflow
@@ -66,6 +67,11 @@ class MainActivity : Activity(), UserChannel {
     private val secretTapTimes = mutableListOf<Long>()
     /** Acceso a estadísticas de uso con el que se dibujó la gráfica (para recrear al concederlo). */
     private var builtWithAccess = false
+    /**
+     * Lo que se para cuando la pantalla deja de verse o se destruye: la voz en vivo de prueba, que corre en su propio
+     * alcance. Fuera de la pantalla Android silencia el micrófono, y la sesión seguiría abierta gastando segundos.
+     */
+    private val alOcultar = mutableListOf<() -> Unit>()
 
     /* Actualizaciones */
     private var updStatus: TextView? = null
@@ -472,6 +478,37 @@ class MainActivity : Activity(), UserChannel {
             setOnTouchListener { v, _ -> v.parent.requestDisallowInterceptTouchEvent(true); false }
         }
         dev.addView(logScroll, LinearLayout.LayoutParams(-1, dp(260)))
+        // VOZ EN VIVO DE PRUEBA (docs/specs/002, fase B1b): SOLO en el panel de desarrollador hasta pasar el nivel 4. La
+        // rama es explícita a propósito: la promesa 246 la lee. Al ocultar la pantalla la voz se detiene en su alcance.
+        if (mode == MODE_DEV) {
+            val voz = VozEnVivoDev(applicationContext)
+            val vozLinea = caption(voz.estado.value.linea).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val vozBoton = button("Voz en vivo (prueba)") {
+                when {
+                    voz.estado.value.fase != VozEnVivoDev.Fase.PARADA -> voz.stop()
+                    checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+                        android.content.pm.PackageManager.PERMISSION_GRANTED -> {
+                        requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQ_VOZ_EN_VIVO)
+                        vozLinea.text = "Voz en vivo: falta el permiso del micrófono; concédelo y vuelve a tocar"
+                    }
+                    else -> voz.start()
+                }
+            }
+            dev.gap(dp(10))
+            dev.addView(vozBoton)
+            dev.gap(dp(4))
+            dev.addView(vozLinea)
+            alOcultar += { voz.stop() }
+            scope.launch {
+                voz.estado.collect { e ->
+                    vozLinea.text = e.linea
+                    vozBoton.text = if (e.fase == VozEnVivoDev.Fase.PARADA) "Voz en vivo (prueba)" else "Parar la voz en vivo"
+                }
+            }
+        }
         root.addView(dev)
         root.gap(dp(14))
 
@@ -721,6 +758,12 @@ class MainActivity : Activity(), UserChannel {
         }
         if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
         if (::workflowPanel.isInitialized) refreshWorkflowPanel()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Se para al dejar de verse, no al perder el foco: el diálogo del permiso del micrófono pausa pero no detiene.
+        alOcultar.forEach { it() }
     }
 
     override fun onPause() {
@@ -1498,6 +1541,7 @@ class MainActivity : Activity(), UserChannel {
     override fun onDestroy() {
         super.onDestroy()
         recognizer?.destroy(); recognizer = null
+        alOcultar.forEach { it() }; alOcultar.clear()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -1539,5 +1583,7 @@ class MainActivity : Activity(), UserChannel {
         const val MODE_CLOUD = "cloud"
         const val MODE_USER = "user"
         const val MODE_DEV = "dev"
+        /** Pedido del permiso del micrófono desde el botón de la voz en vivo de prueba. */
+        const val REQ_VOZ_EN_VIVO = 7
     }
 }
