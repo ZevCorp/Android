@@ -29,7 +29,23 @@ object PuertaDeTelemetria {
 
     /** Un número que solo sostiene su prefijo (`HTTP 503`, `intento 2`) es chico; con unidad o sustantivo, una medida larga. */
     private const val CIFRAS_CON_PREFIJO = 4
-    private const val CIFRAS_CON_UNIDAD = 9
+    private const val CIFRAS_CON_UNIDAD = 6
+
+    /** `paso` y `turno` cuentan de a poco: cuatro cifras detrás de ellos ya son un pin (510). */
+    private const val CIFRAS_DE_PASO = 3
+    private val PREFIJOS_DE_PASO = setOf("paso", "turno")
+
+    /** Una `s` suelta es una letra: solo sostiene lo que cabe en un tope o en una cola (`tope de 90 s`, `Reintentos.corto`). */
+    private const val CIFRAS_CON_S_SUELTA = 3
+
+    /** Números seguidos cuyas cifras juntas llegan a esto son un teléfono o una cédula partidos, no medidas (510). */
+    private const val CIFRAS_EN_SERIE = 7
+
+    /** Un segmento numérico de una ruta de la API es un id de Graph; con más cifras, un teléfono (509). */
+    private const val CIFRAS_EN_RUTA = 6
+
+    /** La marca más larga: un tramo de más caracteres se marca con ella, y así la marca vuelve a pasar como marca (511). */
+    private const val MARCA_MAXIMA = 99_999
 
     /* ---------- Las listas cerradas ---------- */
 
@@ -62,7 +78,7 @@ object PuertaDeTelemetria {
 
     /** Lo que va detrás de un número y lo vuelve medida: `42 caracteres`, `120 bytes`, `3 turnos`. */
     val SUSTANTIVOS: Set<String> = setOf(
-        "caracteres", "carácter", "car.", "bytes", "B", "KB", "MB", "ms", "s", "segundos", "min", "minutos", "turnos", "acciones",
+        "caracteres", "carácter", "car.", "bytes", "KB", "MB", "ms", "segundos", "min", "minutos", "turnos", "acciones",
         "llamadas", "intentos", "reintentos", "pasos", "steps", "prompts", "tokens", "niveles", "elementos", "clics", "señales",
         "notas", "subconscientes", "conscientes", "cierres", "veces", "px", "dp", "candidatos", "herramientas", "filas",
         "workflows", "apps", "errores",
@@ -98,20 +114,38 @@ object PuertaDeTelemetria {
         "`", "_", "️", "‍",
     )
 
+    /** Lo que puede partir un número sin cortar la serie (510): las letras de unidad que no sostienen nada y la puntuación. */
+    private val UNIDADES_SUELTAS = setOf("s", "B", "h", "GB")
+    private val PARTEN_UN_NUMERO = setOf(".", ",", "-", "/", "+")
+
     private val ESTADOS = setOf("running", "ok", "error", "cancelled")
     private val VIAS = setOf("app", "burbuja")
 
     /* ---------- Las formas ---------- */
 
     private val UUID = Regex("[0-9A-Fa-f]{8}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{4}-[0-9A-Fa-f]{12}")
-    private val MARCA = Regex("‹\\d+›")
-    /** El sello HMAC de precisión (`TopeDeIntentos.enLog`): `#` y 8 hex. */
-    private val SELLO = Regex("#[0-9a-f]{8}")
-    private val CELDA = Regex("celda:-?\\d+,-?\\d+")
-    private val COORDENADAS = Regex("\\(-?\\d+,-?\\d+(?:→-?\\d+,-?\\d+)?\\)")
-    private val ID_CON_PREFIJO = Regex("(?:call|item|msg|resp|sess|ses|wf|evt|req|files?)[-_/]([A-Za-z0-9]+)")
-    private val NUMERO = Regex("-?\\d+(?:[.,]\\d+)?(?:/\\d+)?(?:ms|min|KB|MB|GB|B|s|h|%)?")
-    private val CON_UNIDAD = Regex("-?\\d+(?:[.,]\\d+)?(?:ms|min|KB|MB|GB|B|s|h|%)")
+    /** Coordenadas, celdas y marcas: a lo más 5 cifras por componente; con más, un teléfono escrito entre signos (511). */
+    private val MARCA = Regex("‹\\d{1,5}›")
+    /** El sello HMAC de precisión (`TopeDeIntentos.enLog`): `#` y 8 hex con al menos una letra. Ocho cifras son un número (508). */
+    private val SELLO = Regex("#(?=[0-9]*[a-f])[0-9a-f]{8}")
+    private val CELDA = Regex("celda:-?\\d{1,5},-?\\d{1,5}(?!\\d)")
+    private val COORDENADAS = Regex("\\(-?\\d{1,5},-?\\d{1,5}(?:→-?\\d{1,5},-?\\d{1,5})?\\)")
+    /** Un id con prefijo se parte entero: lo que no tiene la forma de su productor cae entero, no deja su número suelto. */
+    private val ID_CON_PREFIJO = Regex("(?:call|item|msg|resp|sess|ses|wf|evt|req|files?)[-_/][A-Za-z0-9]+")
+
+    // Los ids con prefijo, con la forma y el largo de quien los produce (509). Un prefijo sin productor (`ses-`, `evt_`…) no da id.
+    /** Graph: `wf_` y `Date.now()` (`WorkflowLearner.js`), el id de la sesión de aprendizaje y del workflow. */
+    private val ID_DE_GRAPH = Regex("wf_1\\d{12}")
+    /** GPT-Live: la llamada a una herramienta (spec 002) y la delegación, en base62. */
+    private val ID_DE_GPT_LIVE = Regex("call_[A-Za-z0-9]{24}|item_[A-Za-z0-9]{21}")
+    /** OpenAI Responses: la respuesta y el mensaje, medidos en el teléfono. */
+    private val ID_DE_OPENAI = Regex("(?:resp|msg)_[0-9a-f]{50}")
+    /** Gemini Files API: el nombre del video subido (`GeminiVideo.kt`). */
+    private val ID_DE_GEMINI = Regex("files/[a-z0-9]{12}")
+
+    private val NUMERO = Regex("-?\\d+(?:[.,]\\d+)?(?:/\\d+)?(?:ms|s|KB|MB|%)?")
+    /** Las unidades pegadas que escriben los logs de verdad. `B` y `h` no: `301B` es un portal y `1234h` un pin (510). */
+    private val CON_UNIDAD = Regex("-?\\d+(?:[.,]\\d+)?(?:ms|s|KB|MB|%)")
     private val EXCEPCION = Regex("[A-Z][A-Za-z0-9]*(?:Exception|Error)")
     private val VERSION = Regex("\\d{1,4}(?:\\.\\d{1,4}){0,3}(?:-(?:debug|release|beta\\d*|rc\\d*|alpha\\d*))?")
     private val TAG_DE_VOZ = Regex("voz-[a-z]{1,16}")
@@ -208,25 +242,35 @@ object PuertaDeTelemetria {
         else -> if (esIdConPrefijo(t)) Clase.QUEDA else Clase.CAE
     }
 
-    private fun esIdConPrefijo(t: String) = ID_CON_PREFIJO.matchEntire(t)?.groupValues?.get(1)?.any { it.isDigit() } == true
+    /**
+     * Un id con prefijo, solo con la forma de su productor: una palabra con una cifra (`wf-anapaula1`), un número
+     * (`ses-3001234567`) u otro largo no lo son. Base62 de verdad trae mayúsculas y minúsculas; un nombre de Gemini, letras y cifras.
+     */
+    private fun esIdConPrefijo(t: String) = when {
+        ID_DE_GRAPH.matches(t) || ID_DE_OPENAI.matches(t) -> true
+        ID_DE_GPT_LIVE.matches(t) -> t.substringAfter('_').let { id -> id.any { it.isUpperCase() } && id.any { it.isLowerCase() } }
+        ID_DE_GEMINI.matches(t) -> t.substringAfter('/').let { id -> id.any { it.isDigit() } && id.any { it.isLetter() } }
+        else -> false
+    }
 
     private fun esRutaConocida(ruta: String) = ruta.split('/').drop(1).all { s ->
-        s in RUTAS || UUID.matches(s) || (s.length in 1..20 && s.all { it.isDigit() }) || esIdConPrefijo(s)
+        s in RUTAS || UUID.matches(s) || (s.length in 1..CIFRAS_EN_RUTA && s.all { it.isDigit() }) || esIdConPrefijo(s)
     }
 
     /** Un número queda solo junto a lo que lo vuelve medida, y eso que lo sostiene queda con él. */
     private fun medidas(trozos: List<Trozo>) {
         val visibles = trozos.filterNot { esEspacio(it.texto) }
         fun en(k: Int) = visibles.getOrNull(k)
+        val tapados = enSerie(visibles)
         for ((k, numero) in visibles.withIndex()) {
-            if (!NUMERO.matches(numero.texto)) continue
-            val cifras = numero.texto.count { it.isDigit() }
+            if (!NUMERO.matches(numero.texto) || k in tapados) continue
+            val cifras = cifras(numero.texto)
             val fraccion = '/' in numero.texto
             val anterior = en(k - 1)
             val prefijo = if (anterior?.texto == "=" || anterior?.texto == ":") en(k - 2) else anterior
             var queda = false
             val siguiente = en(k + 1)
-            if (!fraccion && cifras <= CIFRAS_CON_UNIDAD && siguiente != null && siguiente.texto in SUSTANTIVOS) {
+            if (!fraccion && cifras <= CIFRAS_CON_UNIDAD && siguiente != null && sostiene(siguiente.texto, cifras)) {
                 queda = true
                 siguiente.clase = Clase.QUEDA
                 val descriptor = en(k - 2)
@@ -236,7 +280,8 @@ object PuertaDeTelemetria {
                 }
             }
             if (!fraccion && cifras <= CIFRAS_CON_UNIDAD && CON_UNIDAD.matches(numero.texto)) queda = true
-            if (prefijo != null && prefijo.texto in PREFIJOS && (queda || cifras <= CIFRAS_CON_PREFIJO)) {
+            val topeDelPrefijo = if (prefijo?.texto in PREFIJOS_DE_PASO) CIFRAS_DE_PASO else CIFRAS_CON_UNIDAD
+            if (prefijo != null && prefijo.texto in PREFIJOS && cifras <= topeDelPrefijo && (queda || cifras <= CIFRAS_CON_PREFIJO)) {
                 queda = true
                 prefijo.clase = Clase.QUEDA
             }
@@ -248,6 +293,34 @@ object PuertaDeTelemetria {
         for ((k, clave) in visibles.withIndex()) {
             if (clave.texto in PREFIJOS && en(k + 1)?.texto.let { it == "=" || it == ":" } && en(k + 2)?.texto == "—") clave.clase = Clase.QUEDA
         }
+    }
+
+    /** Lo que va detrás de un número y lo vuelve medida; la `s` suelta, solo detrás de un número chico. */
+    private fun sostiene(t: String, cifras: Int) = t in SUSTANTIVOS || (t == "s" && cifras <= CIFRAS_CON_S_SUELTA)
+
+    private fun cifras(t: String) = t.count { it.isDigit() }
+
+    /**
+     * Los números de cada serie —números seguidos, con sus unidades, sus sustantivos y la puntuación que los parte— cuyas cifras
+     * juntas llegan a [CIFRAS_EN_SERIE]: `300 s 123 s 4567 s` es un teléfono, no tres medidas, y `12.345.678 caracteres` una
+     * cédula. Un signo o un prefijo cortan la serie, porque así se escriben las medidas de verdad (`llamadas=5 distintas=3`,
+     * `3 turnos · 12s`).
+     */
+    private fun enSerie(visibles: List<Trozo>): Set<Int> {
+        val tapados = mutableSetOf<Int>()
+        var k = 0
+        while (k < visibles.size) {
+            val numeros = mutableListOf<Int>()
+            while (k < visibles.size) {
+                val t = visibles[k].texto
+                if (NUMERO.matches(t)) numeros += k
+                else if (numeros.isEmpty() || !(t in SUSTANTIVOS || t in UNIDADES_SUELTAS || t in PARTEN_UN_NUMERO)) break
+                k++
+            }
+            if (numeros.sumOf { cifras(visibles[it].texto) } >= CIFRAS_EN_SERIE) tapados += numeros
+            if (numeros.isEmpty()) k++
+        }
+        return tapados
     }
 
     /** Lo que queda, tal cual; cada tramo que cae, con lo suelto de adentro, como su largo. */
@@ -263,15 +336,20 @@ object PuertaDeTelemetria {
                     suelto.clear()
                 }
                 Clase.QUEDA -> {
-                    if (tramo >= 0) sale.append('‹').append(tramo).append('›')
+                    if (tramo >= 0) marca(sale, tramo)
                     tramo = -1
                     sale.append(suelto).append(t.texto)
                     suelto.clear()
                 }
             }
         }
-        if (tramo >= 0) sale.append('‹').append(tramo).append('›')
+        if (tramo >= 0) marca(sale, tramo)
         return sale.append(suelto).toString()
+    }
+
+    /** `‹N›`, con N hasta [MARCA_MAXIMA]: una marca más larga no volvería a pasar como marca. */
+    private fun marca(sale: StringBuilder, tramo: Int) {
+        sale.append('‹').append(minOf(tramo, MARCA_MAXIMA)).append('›')
     }
 
     /** A lo más [TOPE_DE_MENSAJE] caracteres, sin partir un carácter ni una marca `‹N›`. */

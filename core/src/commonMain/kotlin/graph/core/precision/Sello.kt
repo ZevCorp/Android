@@ -9,6 +9,13 @@ package graph.core.precision
  *
  * Solo se sella lo estructural (ver [TopeDeIntentos.enLog]): sellar el texto visible seguiría siendo una huella de lo que la
  * pantalla muestra. Cada plataforma pone su HMAC y su azar seguro, como el [Candado]: common no los trae sin dependencia.
- * Devuelve 8 hex: sin la llave, 32 bits bastan para seguir un destino dentro de una petición.
+ * Devuelve 8 hex y el primero es siempre [LETRA_DEL_SELLO]: la telemetría no deja salir `#` con ocho cifras, que son un
+ * pedido o una cédula (spec 005, promesa 508), y 8 hex al azar salen todo cifras una vez de cada ~43. Quedan 28 bits del HMAC:
+ * sin la llave, sobran para seguir un destino dentro de una petición.
  */
-internal expect fun sello(texto: String): String
+internal fun sello(texto: String): String = LETRA_DEL_SELLO + hmacDelProceso(texto).substring(1)
+
+internal const val LETRA_DEL_SELLO = "a"
+
+/** 8 hex del HMAC de [texto] con la llave del proceso. El formato del sello lo decide common, no la plataforma. */
+internal expect fun hmacDelProceso(texto: String): String
