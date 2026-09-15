@@ -46,6 +46,12 @@ el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato003FrenoYPu
 | 304 | El alto se avisa una sola vez por tarea aunque se pida diez veces, y al soltar se dice «Listo, tienes el control de vuelta.» una vez. | 3A |
 | 305 | Una espera se corta en cuanto se pide el alto, no al agotar el plazo. | 3A |
 | 306 | Terminar suelta el freno siempre, aunque la tarea reviente; después la puerta vuelve a exigir tarea abierta. | 3A |
+| 310 | Dos intentos y no tres: en una misma petición, la tercera entrada hacia un destino que ya falló dos veces no toca el teléfono y dice qué salió en cada una. | 3C |
+| 311 | El destino es el nodo realmente tocado, se pida como se pida; sin nodo bajo el punto, la misma celda de 48 dp es el mismo destino; al escribir, el campo cuenta tal como se pidió. | 3C |
+| 312 | Un intento se logra si la acción se dio y escribió o cambió la pantalla, textos incluidos; tocar tres veces un botón que cambia el texto visible nunca se bloquea; una lista de homónimos no es intento. | 3C |
+| 313 | Elegir por número solo vale con una lista previa de ese nombre y se compara como número; sin lista, el número no abre un destino nuevo. | 3C |
+| 314 | Una petición nueva devuelve el tope a cero; un aviso del sistema o una llamada retirada no. | 3C |
+| 315 | Cada petición deja una línea `peticion:` con su medida; lo rechazado y lo retirado también cuentan; sin llamadas no se emite. | 3C |
 
 **La que cierra el asunto es la 301.** Es la que U no tiene: en U un freno sin `Empezar` es un
 freno que no frena y nadie se entera. Aquí una puerta sin tarea abierta no deja pasar nada y lo dice.
@@ -64,6 +70,12 @@ lo avanza en vez de dormir.
 | 304 | `empezar` + `pide` ×10 → un aviso y una línea «freno: alto pedido (…); paro «…»». `termine()` → «Listo, tienes el control de vuelta.» una vez; otro `termine()` no lo repite; una tarea sin alto no lo dice |
 | 305 | `duerme(3000)` con reloj de prueba y el alto pedido a los 120 ms → devuelve `true`, pasó menos de 200 ms y ningún trozo pasó de 40 ms. Sin alto, `duerme(100)` devuelve `false` tras 100 ms en trozos `[40, 40, 20]`. Y con el reloj y la espera reales, un alto a los 120 ms corta un `duerme(3000)` antes de 1 s |
 | 306 | `enTarea { throw Reventon("revienta") }` (una excepción que no es cancelación, para que una `Paraste` no cuente como reventón) → sale tal cual, `abierta` y `pedido` son `false`. Con un alto pedido dentro también, y la frase de devolver el control se dice. Después, un `tap` por la puerta no pasa y lo dice el log |
+| 310 | `TopeDeIntentos` puro: un toque que se dio sin cambiar la pantalla y otro que revienta hacia «Guardar» → el tercero se rechaza con «no lo intento una tercera vez: «Guardar» ya falló dos veces en esta petición — 1) … · 2) …» y «Cambia de vía…»; otro destino pasa. Y la `Puerta` de verdad: `tap`, `type` y `tapLabel` fallidos dos veces → el tercero devuelve `false`, el teléfono falso grabó dos entradas y el log dice `tope: no paso «…»: no lo intento…` |
+| 311 | Puerta con `nodoEn`: dos puntos distintos (y de celdas distintas) del mismo nodo son un destino; dos nodos pequeños dentro de la misma celda son dos. Sin nodo bajo el punto, dos puntos de la misma celda de 48 dp son un destino y la celda vecina es otro; sin `nodoEn`, la celda. `celdaPx(3f)` = 144 y `celdaPx(2.75f)` = 132. Al escribir cuenta el punto pedido, no el nodo que lo resuelve: el mismo campo pedido en otra celda es otro destino |
+| 312 | Calculadora: cinco toques al mismo nodo «7», cada uno cambia solo el texto del display (la huella sin textos es idéntica antes y después) → cinco entradas y cero rechazos; el cambio aparece solo después de `asentar`. «Guardar»: tres toques sin cambio → el tercero no llega. Escribir tres veces con éxito no se bloquea; un toque que no se dio cuenta como fallo aunque la pantalla cambie; tres listas de homónimos no son intento. Sin `huella`, tres toques sin juzgar no bloquean y el log lo dice una vez |
+| 313 | Sin lista: dos fallos a «Descargas» → `which=1` y `which=2` se rechazan y el rechazo no nombra `which`. Con lista de «Descargas»: dos fallos al 1 → «01» y «+1» se rechazan, el 2 pasa y el rechazo dice «prueba OTRO candidato con which» con la lista; fallos a «2» frenan «02» y «+2»; una lista de «Documentos» no habilita `which` en «Descargas»; el selector del candidato tocado por coordenada es ese candidato |
+| 314 | Tope con dos fallos: `abrePeticion(SISTEMA, …)` y `retirada` lo dejan rechazando y la cuenta no emite; `abrePeticion(PERSONA, …)` lo vacía (fallos y listas), emite la línea de la anterior, y por la puerta el tercer toque vuelve a llegar |
+| 315 | `CuentaDePeticion` con `TestTimeSource`: línea exacta `llamadas=5 distintas=3 intentos_max=3 «celda:1,1» primera=800 ms ultima=1400 ms desde_peticion=1000 ms rechazadas=1 retiradas=1` y en el log como `peticion: …`; sin acción que actuó, `primera=— ultima=—`; un resultado sin llamada no cuenta; sin llamadas ni `cerrar` ni `nuevaPeticion` emiten. Por la puerta: tres toques a «Guardar» (uno rechazado) y un scroll dejan `llamadas=4 … rechazadas=1` |
 
 ---
 
@@ -92,6 +104,67 @@ Pone verdes: **301-306**. La app todavía no usa la puerta.
 notificación llaman `freno.pide("botón")`, y cada corrida entra por `freno.enTarea`.
 
 ---
+
+### Fase 3C — el tope de dos intentos y la cuenta por petición (promesas 310-315)
+
+Estado: implementada en `yokh/precision-tope` (310-315 verdes; cada una se vio ROJA primero y con un
+sabotaje real). Nace de `U-Windows-App/windows-client/src/Voice/TopeDeIntentos.cs` y `CuentaDelTurno.cs`
+(spec 017 de U, promesas 204, 205 y 207). Se copió el comportamiento y el porqué, no el archivo. La app
+todavía no la cablea: eso es 3E.
+
+En `core/src/commonMain/kotlin/graph/core/precision/`:
+
+- `TopeDeIntentos.kt` — puro, `MAXIMO = 2` por petición. Vigila tocar y escribir; mirar no cuenta.
+  - **El destino** de un toque es el `selector` del nodo bajo el punto (el que se toca de verdad); sin
+    nodo, la celda de 48 dp `celda:<x div celdaPx>,<y div celdaPx>`, con `celdaPx` sacado de la densidad
+    (`TopeDeIntentos.celdaPx(densidad)`). Al escribir cuenta el campo tal como se pidió: por nombre, el
+    nombre; por coordenada (la puerta), la celda del punto pedido y no el nodo que lo resuelve. Tocar y
+    escribir en el mismo sitio son destinos distintos. Por nombre (`tapLabel`, la voz), el nombre aplanado
+    (minúsculas, sin tildes, espacios juntos).
+  - **`which`** solo cuenta si en la petición hubo una lista de homónimos de ese nombre, y se lee como
+    número (`"02"` y `"+2"` son el 2). Con candidatos, el número lleva al selector del candidato: es el
+    mismo destino que tocar ese nodo por coordenada. Sin lista, o fuera de rango, no abre destino nuevo.
+  - **Fallo** es una excepción o un intento sin logro. **Logro** es que la acción se dio y escribió o
+    cambió la huella. Una lista de homónimos no es intento. Un toque que se dio sin huella con que
+    juzgar no cuenta como fallo: el tope nunca frena por adivinar.
+  - **La tercera** al mismo destino no se ejecuta: «no lo intento una tercera vez: «X» ya falló dos veces
+    en esta petición — 1) … · 2) …», y la vía: con lista, «prueba OTRO candidato con which»; sin lista,
+    «Cambia de vía: mira la pantalla y toca otra cosa, o dile al usuario qué está pasando.» (al escribir,
+    «escribe en otro campo»).
+- `CuentaDePeticion.kt` — pura, reloj `TimeSource` inyectado. Emite en el log
+  `peticion: llamadas=N distintas=N intentos_max=N «destino» primera=X ms ultima=Y ms desde_peticion=Z ms rechazadas=N retiradas=N`.
+  El denominador es lo pedido: lo rechazado y lo retirado también son llamadas. «Actuó» es lo que se
+  sabe: sin acción que actuó, `primera=— ultima=—`; sin llamadas no se emite. `abrePeticion(quien, tope,
+  cuenta)` es el único sitio que decide qué abre una petición: la persona sí; un aviso del sistema no
+  (en U el eco del altavoz vaciaba el tope a mitad de una petición).
+- `Puerta.kt`, aditivo y con defaults `null`: `nodoEn`, `huella`, `tope`, `cuenta` y `asentar`. En `tap`,
+  `type` y `tapLabel`, después del freno: se consulta el tope; si rechaza, no se toca el teléfono, se
+  devuelve `false` y el log dice `tope: no paso «…»: <rechazo>`. Si pasa: huella antes, se actúa,
+  `asentar()`, huella después, y el resultado va al tope y a la cuenta. Las demás entradas solo cuentan
+  como llamadas (actuó = devolvió `true`). Sin tope ni cuenta, la puerta es la de 3A.
+
+**Diferencia deliberada con U: el tope también frena los toques por coordenada de Graph, y la huella
+que decide «cambió» incluye los textos visibles de la ventana activa.** U solo aplica el tope a sus
+herramientas por etiqueta (`map_take`, `map_type`) y su «Guardar» que no cambia la pantalla se frena a la
+tercera. En Android Graph toca por coordenada, así que el tope tiene que estar en la puerta; y con una
+huella sin textos (paquete, ventana, ids, etiquetas accionables), apretar tres veces el «7» de la
+calculadora —cambia el display, no los botones— contaría como tercer intento fallido y bloquearía a la
+persona. Un falso «cambió» solo afloja la protección; un falso «no cambió» bloquea, que es el lado
+peligroso. La huella la construye la app (3D/3E) con los textos dentro; la 312 lo juzga con una
+calculadora cuya huella sin textos no cambia.
+
+**No se espera con sleeps fijos.** `asentar: suspend () -> Unit = {}` se llama antes de la huella de
+después; esperar a que la pantalla se asiente (dos lecturas iguales con techo, promesa 169 de U) lo
+cablea 3E.
+
+Límites dichos:
+- El rechazo no llega al modelo: la puerta devuelve `false` y el motor lo traduce a «no se pudo
+  ejecutar la acción» (mismo límite que 3A). El texto queda en el log.
+- `tapLabel` cuenta por el nombre pedido, no por el nodo que resuelve el reproductor: la puerta no ve
+  ese nodo. Tocar «Guardar» por etiqueta y por coordenada son dos destinos hasta que 3D lo resuelva.
+- Sin `huella`, un toque que se dio no se juzga: ni fallo para el tope ni «actuó» para la cuenta.
+- Como el freno, sin compare-and-set ni candados (common no los trae): dos entradas simultáneas desde
+  hilos distintos podrían contarse mal. Hoy una sola corrida toca a la vez.
 
 ## Lo que NO entra, y por qué
 
