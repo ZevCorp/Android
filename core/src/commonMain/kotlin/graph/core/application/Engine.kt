@@ -64,6 +64,7 @@ class ExecutionEngine(
                 val turnStart = TimeSource.Monotonic.markNow()
                 val state = phone.state(withScreenshot = wantShot)
                 val turn = b.next(state, results)
+                sigue() // el alto pudo llegar mientras Graph pensaba: ese turno ni se narra, ni pregunta, ni celebra
                 wantShot = turn.needsScreenshot
                 val ms = turnStart.elapsedNow().inWholeMilliseconds
                 val via = if (state.screenshotPng != null) "👁 imagen" else "📝 texto"

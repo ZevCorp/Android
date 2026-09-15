@@ -73,8 +73,17 @@ class Freno(
         }
     }
 
-    /** Corre [bloque] como la tarea [nombre]: la abre y la termina en `finally`, aunque reviente o la paren. */
+    /**
+     * Corre [bloque] como la tarea [nombre]: la abre y la termina en `finally`, aunque reviente o la paren.
+     *
+     * SOLO CIERRA QUIEN ABRIÓ. Si ya hay una tarea abierta —el paso consciente de un workflow corre dentro de
+     * la corrida—, el bloque corre dentro de ella sin empezar ni terminar: un [empezar] de dentro desarmaría el
+     * alto de fuera, y un [termine] de dentro dejaría la corrida sin tarea, con la puerta cerrada para el resto
+     * de sus pasos y el alto sin armar (promesa 306). Hay una sola tarea por freno: dos corridas de fuera
+     * simultáneas comparten la de la primera, y cuando la primera acaba la otra ya no toca (y lo dice el log).
+     */
     suspend fun <T> enTarea(nombre: String, bloque: suspend () -> T): T {
+        if (_abierta) return bloque()
         empezar(nombre)
         try {
             return bloque()

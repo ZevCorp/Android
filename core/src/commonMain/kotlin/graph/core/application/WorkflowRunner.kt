@@ -7,6 +7,7 @@ import graph.core.domain.Workflow
 import graph.core.domain.WorkflowExecutor
 import graph.core.domain.WorkflowOutcome
 import graph.core.domain.WorkflowStep
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 private val NO_LOG = GraphLog { _, _ -> }
@@ -86,8 +87,14 @@ class WorkflowRunner(
 
             // 3) Ni este ni un paso posterior aparecen (o es un paso consciente): mini-motor Gemini.
             mode?.executing(false)
-            val ok = runCatching { conscious(workflow, step, context) }
-                .getOrElse { log.log("workflow", "  $n consciente falló: ${it.message}"); false }
+            val ok = try {
+                conscious(workflow, step, context)
+            } catch (ce: CancellationException) {
+                throw ce // parar (o cancelar) dentro del paso corta el workflow entero: no es un paso fallido (spec 003, promesa 316)
+            } catch (t: Throwable) {
+                log.log("workflow", "  $n consciente falló: ${t.message}")
+                false
+            }
             if (ok) {
                 consCount++
                 log.log("workflow", "  $n/${steps.size} 👁 consciente: ${step.action}")
