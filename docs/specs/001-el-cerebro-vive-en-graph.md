@@ -80,7 +80,7 @@ que un hilo reanudado se adopta; esa regla vivía solo en el comentario y en el 
 
 ### Con qué se juzga cada una
 
-Las once son **mapa a mano dentro de la propia prueba**: un `TurnTransport` falso que graba cada
+Todas son **mapa a mano dentro de la propia prueba**: un `TurnTransport` falso que graba cada
 request y devuelve respuestas guionadas, y un `sleep` falso que anota las esperas en vez de dormir.
 Ninguna toca red, Android ni disco.
 
@@ -88,11 +88,11 @@ Ninguna toca red, Android ni disco.
 |---|---|
 | 1 | Dos turnos guionados. El request 1 tiene `goal` y no tiene `session`; el request 2 tiene el `session` del response 1 y no tiene `goal` |
 | 2 | Turno con `question`; se llama `inform("sí")` y luego `next(results=["ok","falló"])`. El request lleva `results` en ese orden e `inform:"sí"`; el turno siguiente ya no lleva `inform` |
-| 3 | Response con `needsScreenshot:false` → el request siguiente no tiene la clave `screenshot`. Response con `needsScreenshot:true` → viaja como base64 del PNG, sin `data:` |
-| 4 | Un response con las siete `kind` conocidas produce las siete `AgentAction` con sus campos; un `kind:"teleport"` corrido por el `ExecutionEngine` real (con teléfono y MCP falsos) devuelve en el request siguiente `results:["acción desconocida: teleport"]` |
+| 3 | El turno 1 lleva una pantalla con PNG y nadie la pidió → no tiene la clave `screenshot`. Response con `needsScreenshot:false` → el request siguiente tampoco. Response con `needsScreenshot:true` → viaja como base64 del PNG, sin `data:` |
+| 4 | Un response con las siete `kind` conocidas (y `scroll` en los dos sentidos: `down:false` sube) produce sus `AgentAction` con sus campos; un `kind:"teleport"` corrido por el `ExecutionEngine` real (con teléfono y MCP falsos) devuelve en el request siguiente `results:["acción desconocida: teleport"]` |
 | 5 | Un response con los seis campos cargados → el `BrainTurn` los tiene idénticos |
-| 6 | Guion `503, 503, 200` → 3 requests y esperas `[800, 1600]`; guion `503×4` → falla tras 4 requests; `401` → 1 request y mensaje "la key de graph no vale"; `200` con `error:"sin cupo"` → excepción "sin cupo" |
-| 7 | El conjunto de claves del request es subconjunto de `{session, goal, userId, state, results, inform}` |
+| 6 | Guion `503, 0, 200` → 3 requests y esperas `[800, 1600]`; cada transitorio solo y primero, seguido de `200` → 2 requests; guion `504, 502, 408, 429` → falla tras 4 requests (el 504 abre: al final pasaba aunque no fuera transitorio); `401` → 1 request y mensaje "la key de graph no vale"; `200` con `error:"sin cupo"` → excepción "sin cupo" |
+| 7 | El conjunto de claves del request es subconjunto de `{session, goal, userId, state, results, inform}`, y las de `state` lo son de las nueve de `ScreenState` en `Protocol.cs`: `{screen, uiContext, width, height, screenshot, apps, surfaceId, surfaceOrigin, surfacePathname}` |
 | 8 | `GraphHeaders.build` con y sin email/deviceId; y el request grabado lleva esas cabeceras |
 | 9 | `GraphCredentials.resolve` con prefs, con compilada, con ambas y con ninguna; un `GraphBrain` sin key no hace ningún request y falla con la línea que dice qué falta |
 | 10 | `AndroidSurface.from("com.miui.calculator · Calculadora")` y sin título |

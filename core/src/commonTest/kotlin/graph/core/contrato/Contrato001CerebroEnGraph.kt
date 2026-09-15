@@ -152,12 +152,14 @@ class Contrato001CerebroEnGraph {
         )
         val b = cerebro(t)
         b.begin("mirá")
-        b.next(pantalla, emptyList())            // nadie pidió captura todavía
+        b.next(pantallaConFoto, emptyList())     // primer turno: hay PNG pero nadie la pidió todavía, no viaja
         b.next(pantallaConFoto, emptyList())     // el turno 1 no la pidió: no viaja aunque haya PNG
         b.next(pantallaConFoto, emptyList())     // el turno 2 la pidió: viaja
 
+        val estado1 = t.requests[0].json["state"]!!.jsonObject
         val estado2 = t.requests[1].json["state"]!!.jsonObject
         val estado3 = t.requests[2].json["state"]!!.jsonObject
+        assertNull(estado1["screenshot"], promesa(3) + " · el primer turno mandó la captura sin que nadie la pidiera")
         assertNull(estado2["screenshot"], promesa(3))
         assertEquals("iVBORw0KGgo=", estado3.texto("screenshot"), promesa(3))
     }
@@ -170,6 +172,7 @@ class Contrato001CerebroEnGraph {
                 {"kind":"tap","x":10,"y":20},
                 {"kind":"type","x":30,"y":40,"text":"hola"},
                 {"kind":"scroll","down":true},
+                {"kind":"scroll","down":false},
                 {"kind":"swipe","x1":1,"y1":2,"x2":3,"y2":4,"ms":500},
                 {"kind":"key","key":"back"},
                 {"kind":"wait","ms":250},
@@ -178,18 +181,19 @@ class Contrato001CerebroEnGraph {
             ]}""",
         )
         val a = r.toBrainTurn().actions
-        assertEquals(8, a.size, promesa(4))
+        assertEquals(9, a.size, promesa(4))
         assertIs<AgentAction.Tap>(a[0], promesa(4)).let { assertEquals(10 to 20, it.x to it.y, promesa(4)) }
         assertIs<AgentAction.Type>(a[1], promesa(4)).let { assertEquals(Triple(30, 40, "hola"), Triple(it.x, it.y, it.text), promesa(4)) }
         assertIs<AgentAction.Scroll>(a[2], promesa(4)).let { assertTrue(it.down, promesa(4)) }
-        assertIs<AgentAction.Swipe>(a[3], promesa(4)).let {
+        assertIs<AgentAction.Scroll>(a[3], promesa(4)).let { assertFalse(it.down, promesa(4) + " · scroll down:false no subió") }
+        assertIs<AgentAction.Swipe>(a[4], promesa(4)).let {
             assertEquals(listOf(1, 2, 3, 4), listOf(it.x1, it.y1, it.x2, it.y2), promesa(4))
             assertEquals(500L, it.ms, promesa(4))
         }
-        assertIs<AgentAction.Key>(a[4], promesa(4)).let { assertEquals("back", it.key, promesa(4)) }
-        assertIs<AgentAction.Wait>(a[5], promesa(4)).let { assertEquals(250L, it.ms, promesa(4)) }
-        assertIs<AgentAction.Mcp>(a[6], promesa(4)).let { assertEquals("set_alarm" to mapOf("hour" to "7", "minute" to "30"), it.tool to it.args, promesa(4)) }
-        assertIs<AgentAction.Unknown>(a[7], promesa(4)).let { assertEquals("teleport", it.kind, promesa(4)) }
+        assertIs<AgentAction.Key>(a[5], promesa(4)).let { assertEquals("back", it.key, promesa(4)) }
+        assertIs<AgentAction.Wait>(a[6], promesa(4)).let { assertEquals(250L, it.ms, promesa(4)) }
+        assertIs<AgentAction.Mcp>(a[7], promesa(4)).let { assertEquals("set_alarm" to mapOf("hour" to "7", "minute" to "30"), it.tool to it.args, promesa(4)) }
+        assertIs<AgentAction.Unknown>(a[8], promesa(4)).let { assertEquals("teleport", it.kind, promesa(4)) }
 
         // La corrida entera con el motor real: la desconocida no aborta y su resultado vuelve a Graph.
         val t = TransporteGuionado(
@@ -229,10 +233,20 @@ class Contrato001CerebroEnGraph {
             assertEquals(3, t.requests.size, promesa(6))
             assertEquals(listOf(800L, 1600L), esperas, promesa(6))
         }
-        // Transitorio que no se recupera: 1 intento + 3 reintentos y se rinde.
+        // Cada transitorio, solo y primero: se reintenta. Si alguno sale de la lista, el turno muere en el intento 1.
+        for (code in listOf(0, 408, 429, 502, 503, 504)) {
+            val esperas = mutableListOf<Long>()
+            val t = TransporteGuionado(TransportReply(code, ""), ok("""{"session":"s1"}"""))
+            val b = cerebro(t, esperas); b.begin("x")
+            b.next(pantalla, emptyList())
+            assertEquals(2, t.requests.size, promesa(6) + " · HTTP $code no se reintentó")
+            assertEquals(listOf(800L), esperas, promesa(6) + " · HTTP $code")
+        }
+        // Transitorio que no se recupera: 1 intento + 3 reintentos y se rinde. El 504 abre el guion:
+        // al final pasaba igual aunque no fuera transitorio, porque el cuarto intento ya no se reintenta.
         run {
             val esperas = mutableListOf<Long>()
-            val t = TransporteGuionado(TransportReply(502, ""), TransportReply(408, ""), TransportReply(429, ""), TransportReply(504, ""))
+            val t = TransporteGuionado(TransportReply(504, ""), TransportReply(502, ""), TransportReply(408, ""), TransportReply(429, ""))
             val b = cerebro(t, esperas); b.begin("x")
             assertFailsWith<IllegalStateException>(promesa(6)) { b.next(pantalla, emptyList()) }
             assertEquals(4, t.requests.size, promesa(6))
@@ -265,8 +279,14 @@ class Contrato001CerebroEnGraph {
         b.inform("sí")
         b.next(pantalla, listOf("ok"))
         val permitidas = setOf("session", "goal", "userId", "state", "results", "inform")
+        // Las nueve de `ScreenState` en `Protocol.cs` de Windows: un prompt escondido dentro del estado también es prompt.
+        val permitidasEnEstado = setOf(
+            "screen", "uiContext", "width", "height", "screenshot", "apps", "surfaceId", "surfaceOrigin", "surfacePathname",
+        )
         for (req in t.requests) {
             assertTrue(req.json.keys.all { it in permitidas }, promesa(7) + " · claves: ${req.json.keys}")
+            val estado = req.json["state"]!!.jsonObject.keys
+            assertTrue(estado.all { it in permitidasEnEstado }, promesa(7) + " · claves de state: ${estado - permitidasEnEstado}")
         }
         assertEquals(setOf("session", "userId", "state", "results", "inform"), t.requests[1].json.keys, promesa(7))
     }
@@ -280,18 +300,18 @@ class Contrato001CerebroEnGraph {
         assertFalse("X-Miracle-User-Email" in sin, promesa(8))
         assertFalse("X-Miracle-Device-Id" in sin, promesa(8))
 
-        val con = GraphHeaders.build("miracle_k", "dev@itsmiracleai.com", "abc123")
-        assertEquals("dev@itsmiracleai.com", con["X-Miracle-User-Email"], promesa(8))
+        val con = GraphHeaders.build("miracle_k", "usuario@example.com", "abc123")
+        assertEquals("usuario@example.com", con["X-Miracle-User-Email"], promesa(8))
         assertEquals("abc123", con["X-Miracle-Device-Id"], promesa(8))
 
         val t = TransporteGuionado(ok("""{"session":"s1"}"""))
-        val b = cerebro(t, email = "dev@itsmiracleai.com", deviceId = "abc123"); b.begin("x")
+        val b = cerebro(t, email = "usuario@example.com", deviceId = "abc123"); b.begin("x")
         b.next(pantalla, emptyList())
         val h = t.requests[0].headers
         assertEquals("miracle_k", h["X-API-Key"], promesa(8))
         assertEquals("android_app", h["X-Miracle-App"], promesa(8))
         assertEquals("conscious_bridge", h["X-Miracle-Feature"], promesa(8))
-        assertEquals("dev@itsmiracleai.com", h["X-Miracle-User-Email"], promesa(8))
+        assertEquals("usuario@example.com", h["X-Miracle-User-Email"], promesa(8))
         assertEquals("abc123", h["X-Miracle-Device-Id"], promesa(8))
         assertEquals("https://graph.test/api/v1/agent/turn", t.requests[0].url, promesa(8))
     }
