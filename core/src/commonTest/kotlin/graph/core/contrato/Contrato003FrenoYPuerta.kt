@@ -12,11 +12,14 @@ import graph.core.domain.Phone
 import graph.core.domain.ScreenState
 import graph.core.domain.SystemApi
 import graph.core.domain.UiPlayer
+import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import graph.core.precision.Freno
 import graph.core.precision.Paraste
 import graph.core.precision.Puerta
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -52,7 +55,7 @@ class Contrato003FrenoYPuerta {
             303 to "Con el freno echado ninguna entrada llega al teléfono y la corrida termina como cancelación, sin ejecutar el resto ni pedir otro turno.",
             304 to "El alto se avisa una sola vez por tarea aunque se pida diez veces, y al soltar se dice «Listo, tienes el control de vuelta.» una vez.",
             305 to "Una espera se corta en cuanto se pide el alto, no al agotar el plazo.",
-            306 to "Terminar suelta el freno siempre, aunque la tarea reviente; después la puerta vuelve a exigir tarea abierta.",
+            306 to "Terminar suelta el freno siempre, aunque la tarea reviente; después la puerta vuelve a exigir tarea abierta; una tarea anidada no la cierra.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -180,10 +183,11 @@ class Contrato003FrenoYPuerta {
         override fun inform(message: String) {}
     }
 
-    private fun motor(cerebro: Brain, puerta: Puerta, freno: Freno, voz: Voice, log: GraphLog) = ExecutionEngine(
+    private fun motor(cerebro: Brain, puerta: Puerta, freno: Freno, voz: Voice, log: GraphLog, usuario: UserChannel? = null) = ExecutionEngine(
         brain = { cerebro },
         phone = puerta.telefono,
         mcp = Mcp(puerta.gestos, puerta.sistema, player = puerta.reproductor, stepDelay = { 0 }),
+        user = usuario,
         voice = voz,
         log = log,
         stepDelay = { 0 },
@@ -332,6 +336,89 @@ class Contrato003FrenoYPuerta {
             assertEquals(1, cerebro.turnos, promesa(303) + " · pidió otro turno a Graph con el freno echado")
             assertTrue(dijo.startsWith("paraste:"), promesa(303) + " · «$dijo»")
         }
+
+        // (d) El alto se pide mientras Graph piensa y el turno vuelve con una pregunta: no se dice ni se le
+        // pregunta a nadie. Preguntar tras el alto deja la corrida esperando una respuesta que ya no importa.
+        run {
+            val freno = Freno()
+            val p = puerta(freno, Mano())
+            val preguntas = mutableListOf<String>()
+            val usuario = object : UserChannel {
+                override suspend fun ask(question: String): String { preguntas += question; return "a las 7" }
+            }
+            val cerebro = CerebroGuionado(
+                BrainTurn(question = "¿A qué hora?", speech = "Voy a poner la alarma", narration = "pensando la hora"),
+                alPensar = { freno.pide("botón") },
+            )
+            val voz = Voz()
+            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, voz, Bitacora(), usuario).run("pon una alarma") }
+            assertEquals(emptyList(), preguntas, promesa(303) + " · preguntó al usuario con el freno echado")
+            assertTrue(voz.dicho.isEmpty(), promesa(303) + " · habló con el freno echado: ${voz.dicho}")
+            assertTrue("pensando la hora" !in voz.narrado, promesa(303) + " · narró el turno pensado tras el alto: ${voz.narrado}")
+            assertTrue(dijo.startsWith("paraste:"), promesa(303) + " · «$dijo»")
+            assertEquals(1, cerebro.turnos, promesa(303))
+        }
+
+        // (e) Lo mismo con un turno que dice haber terminado: una corrida parada no celebra ni resume.
+        run {
+            val freno = Freno()
+            val p = puerta(freno, Mano())
+            val cerebro = CerebroGuionado(BrainTurn(done = true, text = "Alarma puesta"), alPensar = { freno.pide("botón") })
+            val voz = Voz()
+            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, voz, Bitacora()).run("pon una alarma") }
+            assertTrue(dijo.startsWith("paraste:"), promesa(303) + " · un turno done tras el alto no terminó como cancelación: «$dijo»")
+            assertTrue(voz.dicho.isEmpty(), promesa(303) + " · dijo el resumen de una corrida parada: ${voz.dicho}")
+            assertTrue(voz.narrado.none { "¡Listo!" in it }, promesa(303) + " · celebró una corrida parada: ${voz.narrado}")
+        }
+
+        // (f) Una espera que pide el modelo se corta con el alto: el motor espera con el freno, no de un tirón.
+        run {
+            val freno = Freno()
+            val p = puerta(freno, Mano())
+            val cerebro = CerebroGuionado(BrainTurn(actions = listOf(AgentAction.Wait(3000))), BrainTurn(done = true, text = "esperé"))
+            val inicio = TimeSource.Monotonic.markNow()
+            val dijo = freno.enTarea("espera larga") {
+                coroutineScope {
+                    launch { delay(120); freno.pide("botón") }
+                    motor(cerebro, p, freno, Voz(), Bitacora()).run("espera larga")
+                }
+            }
+            val tardo = inicio.elapsedNow()
+            assertTrue(tardo < 1.seconds, promesa(303) + " · un Wait(3000) con el alto a los 120 ms tardó $tardo")
+            assertTrue(dijo.startsWith("paraste:"), promesa(303) + " · «$dijo»")
+            assertEquals(1, cerebro.turnos, promesa(303))
+        }
+
+        // (g) Cancelar el trabajo NO es un alto: la cancelación sale tal cual y el motor no dice que paró.
+        // Un motor que tragara cualquier cancelación convertiría un reencaminado o un cierre en «paraste».
+        run {
+            val freno = Freno()
+            val p = puerta(freno, Mano())
+            val pensando = CompletableDeferred<Unit>()
+            val colgado = object : Brain {
+                override fun begin(goal: String) {}
+                override suspend fun next(state: ScreenState, actionResults: List<String>): BrainTurn {
+                    pensando.complete(Unit)
+                    awaitCancellation()
+                }
+                override fun inform(message: String) {}
+            }
+            val voz = Voz()
+            var salida: Result<String>? = null
+            coroutineScope {
+                val trabajo = launch {
+                    salida = runCatching { freno.enTarea("colgada") { motor(colgado, p, freno, voz, Bitacora()).run("colgada") } }
+                }
+                pensando.await()
+                trabajo.cancel()
+                trabajo.join()
+            }
+            val salio = salida?.exceptionOrNull()
+            assertIs<CancellationException>(salio, promesa(303) + " · cancelar el trabajo no propagó la cancelación: $salida")
+            assertFalse(salio is Paraste, promesa(303) + " · una cancelación cualquiera se tomó por un alto")
+            assertTrue(voz.narrado.none { "Paré" in it }, promesa(303) + " · narró que paró sin que nadie pidiera el alto: ${voz.narrado}")
+            assertFalse(freno.abierta, promesa(303))
+        }
     }
 
     @Test
@@ -456,5 +543,37 @@ class Contrato003FrenoYPuerta {
         assertFalse(p.telefono.tap(3, 3), promesa(306) + " · tras terminar la puerta dejó pasar sin tarea")
         assertEquals(listOf("tap"), mano.entradas, promesa(306))
         assertTrue(bitacora.lineas.any { it.startsWith("puerta: sin tarea abierta, no paso «") }, promesa(306) + " · ${bitacora.lineas}")
+
+        // Anidada (el paso consciente de un workflow dentro de la corrida): la de dentro no cierra la de fuera.
+        run {
+            val f = Freno()
+            val m = Mano()
+            val puertaAnidada = puerta(f, m)
+            var abiertaTrasInterior = false
+            var pasaTrasInterior = false
+            var armaTrasInterior = false
+            f.enTarea("exterior") {
+                f.enTarea("paso consciente") { puertaAnidada.telefono.tap(1, 1) }
+                abiertaTrasInterior = f.abierta
+                pasaTrasInterior = puertaAnidada.telefono.tap(2, 2)
+                f.pide("botón")
+                armaTrasInterior = f.pedido
+            }
+            assertTrue(abiertaTrasInterior, promesa(306) + " · la tarea anidada cerró la de fuera")
+            assertTrue(pasaTrasInterior, promesa(306) + " · tras la tarea anidada la puerta no dejó pasar a la de fuera")
+            assertTrue(armaTrasInterior, promesa(306) + " · tras la tarea anidada el alto ya no arma")
+            assertEquals(listOf("tap", "tap"), m.entradas, promesa(306))
+            assertFalse(f.abierta, promesa(306) + " · la de fuera no soltó al terminar")
+
+            // Y la de dentro tampoco desarma un alto que ya pidió la de fuera.
+            assertFailsWith<Paraste>(promesa(306)) {
+                f.enTarea("exterior") {
+                    f.pide("botón")
+                    f.enTarea("paso consciente") { puertaAnidada.telefono.tap(3, 3) }
+                }
+            }
+            assertEquals(listOf("tap", "tap"), m.entradas, promesa(306) + " · la tarea anidada desarmó el alto de fuera")
+            assertFalse(f.abierta, promesa(306))
+        }
     }
 }
