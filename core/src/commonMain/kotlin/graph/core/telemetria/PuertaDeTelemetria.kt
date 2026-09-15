@@ -154,6 +154,9 @@ object PuertaDeTelemetria {
         "EOFException", "InterruptedIOException", "IllegalStateException", "IllegalArgumentException", "CancellationException",
         "TimeoutCancellationException", "SerializationException", "JsonDecodingException", "NumberFormatException",
         "NullPointerException", "StackOverflowError", "OutOfMemoryError", "SecurityException",
+        // Una URL mal escrita es configuración, no red (`GraphTransport.causa`); un servidor que no habla HTTP o un TLS roto
+        // tampoco (`CanalOkHttp.tipo`); y un aviso que no llegó a inicializarse llega como `Error` (`Freno.dile`).
+        "MalformedURLException", "ProtocolException", "ExceptionInInitializerError",
     )
     private val EXCEPCION = Regex(EXCEPCIONES.joinToString("|"))
     private val VERSION = Regex("\\d{1,4}(?:\\.\\d{1,4}){0,3}(?:-(?:debug|release|beta\\d*|rc\\d*|alpha\\d*))?")
