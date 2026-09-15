@@ -69,3 +69,8 @@ promesas NNN×100+1 en adelante (la 002 empieza en 201), salvo la 001, que usa 1
 Una promesa retirada deja su número vacío en la tabla (tachada, con el porqué). Una promesa nueva
 toma el siguiente número libre, aunque la spec ya esté "cerrada": el enunciado del test y la fila
 de la spec cambian en el mismo commit, o no cambian.
+
+El juez lo hace cumplir: cada fila de la tabla `| # | Promesa |` de cada spec necesita su
+`promesaN` corrida, o sale `⧗ SIN JUEZ`; un test con `@Ignore` sale `✘ (silenciada)`; y un test sin
+fila en ninguna spec no deja juzgar. Retirar una promesa es tachar su enunciado (`~~…~~`), no
+borrar el test.
