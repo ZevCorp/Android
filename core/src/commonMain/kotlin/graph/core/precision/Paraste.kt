@@ -14,3 +14,6 @@ class Paraste(val motivo: String) : CancellationException(motivo)
 
 /** El motivo de un alto pedido por la persona: lo dicen la puerta y el motor, y tienen que decir lo mismo. */
 internal const val PARASTE_TU = "paraste tú"
+
+/** El motivo de una parada sin alto: la tarea ya no está abierta y otro turno sería pagar por nada (promesa 318). */
+internal const val SIN_TAREA = "sin tarea abierta"

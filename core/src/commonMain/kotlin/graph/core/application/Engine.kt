@@ -4,10 +4,12 @@ import graph.core.domain.*
 import graph.core.precision.Freno
 import graph.core.precision.PARASTE_TU
 import graph.core.precision.Paraste
+import graph.core.precision.SIN_TAREA
 import kotlinx.coroutines.delay
 import kotlin.time.TimeSource
 
 private val NO_LOG = GraphLog { _, _ -> }
+private val PAQUETE = Regex("""[A-Za-z]\w*(\.\w+)+""")
 private val NO_VOICE = object : Voice {
     override fun narrate(text: String) {}
     override fun speak(text: String) {}
@@ -23,7 +25,12 @@ private val NO_VOICE = object : Voice {
  * SE PUEDE PARAR (spec 003). Una [Paraste] en cualquier punto —la lanza la puerta al tocar con el freno
  * echado— termina la corrida como cancelación: no ejecuta el resto, no pide otro turno, devuelve
  * «paraste: …» y lo narra una vez. Con [freno], además, las esperas del motor se cortan al pedir el alto
- * y no se pide turno a Graph con el alto echado: la puerta ya impide tocar, esto impide pagar un turno.
+ * y no se pide turno a Graph con el alto echado: la puerta ya impide tocar, esto impide pagar un turno. Sin tarea
+ * abierta tampoco se pide turno: termina como parada, sin decir que paró por la persona (promesa 318).
+ *
+ * EL LOG DICE QUÉ HIZO, NO CON QUÉ (promesa 317). Sale del teléfono por la telemetría: la vía, el tipo de acción, su
+ * celda, el largo de los textos y el nombre de la herramienta MCP; nunca el objetivo, lo que se escribe, los
+ * argumentos, lo que Graph dice o pregunta, ni la ventana más allá de su paquete.
  */
 class ExecutionEngine(
     private val brain: () -> Brain,
@@ -49,7 +56,7 @@ class ExecutionEngine(
         val b = brain()
         b.begin(goal)
         if (announce) voice.narrate("¡Vamos! $goal")
-        log.log("run", "▶ \"$goal\"")
+        log.log("run", "▶ objetivo de ${goal.length} caracteres")
         val started = TimeSource.Monotonic.markNow()
 
         var results = emptyList<String>()
@@ -60,23 +67,26 @@ class ExecutionEngine(
         try {
             while (turns < maxTurns) {
                 sigue()
+                conTarea()
                 turns++
                 val turnStart = TimeSource.Monotonic.markNow()
                 val state = phone.state(withScreenshot = wantShot)
                 val turn = b.next(state, results)
                 sigue() // el alto pudo llegar mientras Graph pensaba: ese turno ni se narra, ni pregunta, ni celebra
+                conTarea()
                 wantShot = turn.needsScreenshot
                 val ms = turnStart.elapsedNow().inWholeMilliseconds
                 val via = if (state.screenshotPng != null) "👁 imagen" else "📝 texto"
                 val decided = when {
                     turn.actions.isNotEmpty() -> turn.actions.joinToString(", ") { describe(it) }
                     turn.question != null -> "pregunta"
-                    else -> "fin"
+                    turn.done -> "fin"
+                    else -> "nada aún" // sin acciones ni pregunta y sin terminar (p. ej. pide la imagen): hay otro turno
                 }
-                log.log("run", "turno $turns · ${ms}ms · $via · \"${state.screen.take(36)}\" · decide: $decided")
+                log.log("run", "turno $turns · ${ms}ms · $via · \"${paquete(state.screen)}\" · decide: $decided")
 
                 if (turn.narration.isNotBlank()) voice.narrate(turn.narration)
-                if (turn.speech != null) { voice.speak(turn.speech); log.log("run", "🗣 ${turn.speech}") }
+                if (turn.speech != null) { voice.speak(turn.speech); log.log("run", "🗣 ${turn.speech.length} caracteres") }
                 if (turn.text.isNotBlank()) summary = turn.text
                 if (turn.done) break
 
@@ -91,7 +101,7 @@ class ExecutionEngine(
                 results = out
 
                 turn.question?.let { q ->
-                    log.log("run", "❓ $q")
+                    log.log("run", "❓ pregunta de ${q.length} caracteres")
                     voice.speak(q)
                     b.inform(user?.ask(q)?.ifBlank { "usa tu mejor criterio" } ?: "No hay usuario; usa tu mejor criterio.")
                 }
@@ -101,7 +111,7 @@ class ExecutionEngine(
             // Parada, no fallo: ni resumen en voz alta ni "¡Listo!". Una sola narración, y el control vuelve.
             val secs = started.elapsedNow().inWholeSeconds
             log.log("run", "✋ ${p.motivo} · $turns turnos · $actions acciones · ${secs}s · no sigo")
-            voice.narrate("✋ Paré, como pediste.")
+            if (p.motivo == PARASTE_TU) voice.narrate("✋ Paré, como pediste.")
             return "paraste: paré en el turno $turns tras $actions acciones y no hice el resto"
         }
 
@@ -114,7 +124,7 @@ class ExecutionEngine(
             summary = "Mmm, no estoy seguro de haberte entendido. ¿Me lo dices de otra forma?"
             voice.speak(summary)
         }
-        log.log("run", "■ ${turns} turnos · $actions acciones · ${secs}s · ${summary.take(120)}")
+        log.log("run", "■ ${turns} turnos · $actions acciones · ${secs}s · resumen de ${summary.length} caracteres")
         if (announce) voice.narrate("¡Listo! 🎉")
         return summary.ifBlank { "Hecho" }
     }
@@ -122,6 +132,11 @@ class ExecutionEngine(
     /** Con el alto echado no se sigue: ni otra acción ni otro turno. */
     private fun sigue() {
         if (freno?.pedido == true) throw Paraste(PARASTE_TU)
+    }
+
+    /** Sin tarea abierta no se pide ni se sigue un turno: quien la abrió ya acabó, o nadie la abrió. */
+    private fun conTarea() {
+        if (freno?.abierta == false) throw Paraste(SIN_TAREA)
     }
 
     /** Una espera del motor: con freno, a trozos y cortada por el alto; sin él, de un tirón como siempre. */
@@ -147,18 +162,22 @@ class ExecutionEngine(
             is AgentAction.Wait -> { espera(action.ms); "ok" }
             is AgentAction.Unknown -> "acción desconocida: ${action.kind}"
         }
-        log.log("run", "  ▪ ${describe(action)} → $result")
+        log.log("run", "  ▪ ${describe(action)} → ${result.substringBefore(" — ")}") // el detalle nombra etiquetas: es para el modelo
         return result
     }
 
+    /** De la ventana, solo el paquete: el título es lo que la pantalla muestra (un chat, un contacto). */
+    private fun paquete(screen: String): String =
+        screen.substringBefore(" · ").trim().takeIf { PAQUETE.matches(it) } ?: "—"
+
     private fun Boolean.asResult() = if (this) "ok" else "no se pudo ejecutar la acción"
 
-    /** Etiqueta legible de una acción, distinguiendo la VÍA usada (MCP vs computer-use). */
+    /** Etiqueta de una acción para el log, distinguiendo la VÍA usada (MCP vs computer-use), sin lo que lleva. */
     private fun describe(a: AgentAction): String = when (a) {
-        is AgentAction.Mcp -> "MCP ${a.tool}" + if (a.args.isNotEmpty()) " ${a.args}" else ""
+        is AgentAction.Mcp -> "MCP ${a.tool}"
         is AgentAction.Tap -> "computer-use tap(${a.x},${a.y})"
-        is AgentAction.Type -> "computer-use type(${a.x},${a.y})=\"${a.text.take(24)}\""
-        is AgentAction.OpenApp -> "computer-use open_app \"${a.name}\""
+        is AgentAction.Type -> "computer-use type(${a.x},${a.y}) · ${a.text.length} caracteres"
+        is AgentAction.OpenApp -> "computer-use open_app · ${a.name.length} caracteres"
         is AgentAction.Scroll -> "computer-use scroll ${if (a.down) "down" else "up"}"
         is AgentAction.Swipe -> "computer-use swipe(${a.x1},${a.y1}→${a.x2},${a.y2})"
         is AgentAction.Key -> "computer-use key ${a.key}"

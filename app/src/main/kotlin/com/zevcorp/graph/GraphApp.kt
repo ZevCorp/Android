@@ -49,6 +49,7 @@ import graph.core.graph.Credential
 import graph.core.graph.GraphBrain
 import graph.core.graph.GraphCredentials
 import graph.core.precision.ArmadoDeEjecucion
+import graph.core.precision.CorridaEnCurso
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -431,6 +432,8 @@ class GraphApp : Application() {
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Ü"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
+        // Una corrida a la vez: la segunda no se abre encima ni paga nada antes de saberlo (spec 003, promesa 318).
+        if (Ejecucion.enCurso) return yaHayUna()
         // Sin key de Graph no se instancia el cerebro ni se llama a nadie: se dice qué falta y punto.
         if (provider() == Provider.GRAPH) {
             val falta = graphCredential() as? Credential.Falta
@@ -491,7 +494,7 @@ class GraphApp : Application() {
         // Sesión de telemetría: el prompt y TODOS los logs de su ejecución viajan al panel
         // Android del Provider Studio, con su desenlace (ok · error · cancelled) al cerrar.
         val telemetryId = Telemetry.promptStarted(prompt.trim(), if (user != null) "burbuja" else "app")
-        val result = try { Ejecucion.correr(prompt.trim().take(60)) { running {
+        val result = try { Ejecucion.correr(prompt.trim()) { running {
             var summary = ""
             var round = 0
             // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
@@ -535,7 +538,11 @@ class GraphApp : Application() {
             // Proactivo: ¿hay UNA acción directa encadenada que valga la pena proponer/hacer ya?
             anticipate(service, user, summary)
             summary
-        } } } catch (ce: CancellationException) {
+        } } } catch (ocupada: CorridaEnCurso) {
+            // Otra vía la abrió entre mirar y abrir: lo mismo que arriba.
+            Telemetry.promptFinished(telemetryId, "error", ocupada.message ?: CorridaEnCurso.MENSAJE)
+            return yaHayUna()
+        } catch (ce: CancellationException) {
             Telemetry.promptFinished(telemetryId, "cancelled", ce.message ?: "detenida por el usuario")
             throw ce
         } catch (t: Throwable) {
@@ -544,6 +551,13 @@ class GraphApp : Application() {
         }
         Telemetry.promptFinished(telemetryId, "ok", result)
         return result
+    }
+
+    /** Ya hay una corrida en marcha: se dice y no se abre otra (spec 003, promesa 318). */
+    private fun yaHayUna(): String {
+        LogBus.log("run", "${CorridaEnCurso.MENSAJE}: no abro otra corrida")
+        voice.speak(CorridaEnCurso.MENSAJE)
+        return CorridaEnCurso.MENSAJE
     }
 
     /** Cadena de pensamiento breve al terminar → propuesta proactiva (offer) o acción autónoma segura. */

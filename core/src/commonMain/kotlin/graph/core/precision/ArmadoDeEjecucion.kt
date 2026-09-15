@@ -32,11 +32,36 @@ import kotlin.concurrent.Volatile
  * Y ES DONDE SE CORRE Y SE PARA. [correr] abre la tarea de la corrida; [parar] pide el alto de la tarea
  * abierta, venga de la píldora, la notificación o la voz: un freno, una puerta (promesa 308). Si tras el
  * alto un turno de red no suelta, [cortaSiNoSuelta] corta el trabajo DESPUÉS del alto, nunca en su lugar.
+ *
+ * UNA CORRIDA DE FUERA A LA VEZ. [correr] no abre una corrida encima de otra: la segunda lanza [CorridaEnCurso]
+ * sin pedir un turno ni tocar (promesa 318). Antes corría anidada en la primera: cuando la primera cerraba la tarea,
+ * la segunda seguía pagando turnos a Graph sin poder pararse. Lo único que anida es [pasoConsciente].
  */
 class ArmadoDeEjecucion(
     val freno: Freno,
     private val log: GraphLog = GraphLog { _, _ -> },
+    /**
+     * Cómo lanzar el corte tras el alto sin detener a quien lo pidió (la app: su scope de proceso; la píldora pide
+     * desde el hilo de la UI). Sin él, [parar] solo pide el alto.
+     */
+    private val lanza: ((suspend () -> Unit) -> Unit)? = null,
+    /** Lo que se deja a la corrida soltar sola tras el alto antes de cortar su trabajo. */
+    private val graciaMs: Long = GRACIA_MS,
 ) {
+    companion object {
+        /**
+         * La gracia tras el alto. La corrida suelta en milisegundos salvo que esté esperando un turno de Graph en
+         * vuelo: ese es el único caso que llega a cortarse.
+         */
+        const val GRACIA_MS = 1_500L
+
+        /** El nombre de la tarea de una corrida de fuera: nunca el pedido, que es lo que la persona dijo (promesa 317). */
+        const val CORRIDA = "corrida"
+
+        /** El nombre de la tarea de un paso consciente cuando corre suelto, fuera de una corrida. */
+        const val PASO_CONSCIENTE = "paso consciente"
+    }
+
     /** Las manos crudas de la plataforma. Entran al armado y no salen: afuera solo circulan las vistas de la puerta. */
     class Manos(val telefono: Phone, val gestos: Gestures, val sistema: SystemApi, val reproductor: UiPlayer?)
 
@@ -98,25 +123,40 @@ class ArmadoDeEjecucion(
     private fun puerta(manos: Manos) = Puerta(freno, manos.telefono, manos.gestos, manos.sistema, manos.reproductor, log)
 
     /**
-     * Corre [bloque] como la corrida [nombre]. La de fuera abre la tarea, recuerda su trabajo para
-     * [cortaSiNoSuelta] y, si hubo alto, termina en [Paraste] aunque el motor ya haya devuelto «paraste: …»:
-     * quien la llamó no sigue con lo de después (reencaminar, anticipar). Una anidada —el paso consciente de
-     * un workflow— corre dentro de la de fuera sin abrir, cortar ni cerrar nada.
+     * Corre [bloque] como la corrida de fuera de [pedido]: abre la tarea, recuerda su trabajo para [cortaSiNoSuelta]
+     * y, si hubo alto, termina en [Paraste] aunque el motor ya haya devuelto «paraste: …»: quien la llamó no sigue
+     * con lo de después (reencaminar, anticipar).
+     *
+     * CON OTRA CORRIDA ABIERTA NO ABRE: lanza [CorridaEnCurso] sin correr el bloque. Mirar y abrir es un solo paso
+     * del freno. El paso consciente de un workflow no entra por aquí: anida con [pasoConsciente].
+     *
+     * EL PEDIDO NO SE NOMBRA. La tarea se llama [CORRIDA] y el log dice el largo del pedido: el log sale del
+     * teléfono por la telemetría (promesa 317).
      */
-    suspend fun <T> correr(nombre: String, bloque: suspend () -> T): T {
-        if (freno.abierta) return freno.enTarea(nombre, bloque)
+    suspend fun <T> correr(pedido: String, bloque: suspend () -> T): T {
+        if (!freno.empiezaSiNoHayOtra(CORRIDA)) {
+            log.log("freno", "${CorridaEnCurso.MENSAJE}: no abro otra corrida encima (pedido de ${pedido.length} caracteres)")
+            throw CorridaEnCurso()
+        }
         val suyo = currentCoroutineContext()[Job]
         trabajo = suyo
-        log.log("freno", "tarea abierta «$nombre»")
+        log.log("freno", "tarea abierta «$CORRIDA» (pedido de ${pedido.length} caracteres)")
         try {
-            return freno.enTarea(nombre) { bloque().also { sigue() } }
+            return bloque().also { sigue() }
         } finally {
+            freno.termine()
             if (trabajo === suyo) trabajo = null
         }
     }
 
-    /** Pide el alto de la corrida en curso. Toda orden de parar entra aquí; sin corrida no arma nada (promesa 302). */
-    fun parar(porque: String) = freno.pide(porque)
+    /**
+     * Pide el alto de la corrida en curso. Toda orden de parar entra aquí; sin corrida no arma nada (promesa 302).
+     * Con la corrida en curso lanza [cortaSiNoSuelta] con la gracia: pedir el alto primero, cortar solo si no suelta.
+     */
+    fun parar(porque: String) {
+        freno.pide(porque)
+        if (enCurso) lanza?.invoke { cortaSiNoSuelta(graciaMs) }
+    }
 
     /** Con el alto pedido no se sigue: lanza [Paraste]. Lo mira quien tiene algo más que hacer tras un motor. */
     fun sigue() {
@@ -143,16 +183,24 @@ class ArmadoDeEjecucion(
      * «paso hecho»: lanza [Paraste] y la corrida entera termina, sin seguir con el paso siguiente (promesa 316).
      * Un fallo que no es parada se queda en el paso: `false`, y el workflow decide.
      */
-    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine): Boolean = correr("paso consciente") {
+    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine): Boolean = freno.enTarea(PASO_CONSCIENTE) {
         try {
             motor.run(objetivo, announce = false)
         } catch (ce: CancellationException) {
             throw ce
         } catch (t: Throwable) {
-            log.log("workflow", "step consciente falló: ${t.message}")
-            return@correr false
+            log.log("workflow", "step consciente falló (${t::class.simpleName})")   // el mensaje puede nombrar la pantalla
+            return@enTarea false
         }
         sigue()
         true
+    }
+}
+
+/** Ya hay una corrida de fuera abierta: la segunda no se abre encima (promesa 318). No es una cancelación: no llegó a correr. */
+class CorridaEnCurso : IllegalStateException(MENSAJE) {
+    companion object {
+        /** Lo que se le dice a la persona. */
+        const val MENSAJE = "ya hay una tarea en curso"
     }
 }

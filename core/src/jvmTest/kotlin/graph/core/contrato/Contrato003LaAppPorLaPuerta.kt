@@ -9,6 +9,7 @@ import graph.core.domain.Brain
 import graph.core.domain.BrainTurn
 import graph.core.domain.LearnedTool
 import graph.core.domain.ScreenState
+import graph.core.domain.Voice
 import graph.core.domain.Workflow
 import graph.core.domain.WorkflowStep
 import graph.core.precision.ArmadoDeEjecucion
@@ -16,9 +17,12 @@ import graph.core.precision.Freno
 import graph.core.precision.Paraste
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -26,6 +30,7 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertTrue
 import kotlin.test.fail
+import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TimeSource
 
@@ -47,6 +52,15 @@ class Contrato003LaAppPorLaPuerta {
 
         /** El único archivo de la app que entrega las manos crudas, y las entrega al armado. */
         const val EJECUCION = "Ejecucion.kt"
+
+        /** La gracia tras el alto antes de cortar, escrita aquí y no leída de producción. */
+        const val GRACIA = 1_500L
+
+        /** Lo que narra el motor antes de la acción del guion de la 307: ahí se cierra la tarea. */
+        const val CIERRA = "cierro la tarea"
+
+        /** Los ejecutores que solo arma el [ArmadoDeEjecucion]. */
+        const val EJECUTOR = "ExecutionEngine|Mcp|WorkflowRunner|Puerta"
     }
 
     /* ---------- Las fuentes de la app ---------- */
@@ -93,6 +107,20 @@ class Contrato003LaAppPorLaPuerta {
         return lineas.subList(i, fin + 1).joinToString("\n")
     }
 
+    /** El bloque `{ … }` que abre la primera llave tras [inicio], con sus llaves anidadas; `null` si no está o no cierra. */
+    private fun bloqueDe(codigo: String, inicio: String): String? {
+        val desde = codigo.indexOf(inicio).takeIf { it >= 0 } ?: return null
+        val abre = codigo.indexOf('{', desde).takeIf { it >= 0 } ?: return null
+        var nivel = 0
+        for (i in abre until codigo.length) {
+            when (codigo[i]) {
+                '{' -> nivel++
+                '}' -> if (--nivel == 0) return codigo.substring(abre, i + 1)
+            }
+        }
+        return null
+    }
+
     private fun manos(mano: Mano) = ArmadoDeEjecucion.Manos(mano.telefono, mano.gestos, mano.sistema, mano.reproductor)
 
     /* ---------- Las promesas ---------- */
@@ -101,10 +129,17 @@ class Contrato003LaAppPorLaPuerta {
     fun promesa307() = corre {
         val fuentes = fuentesDeLaApp()
 
-        // Nadie en la app construye un ejecutor: ni el motor, ni el MCP, ni el reproductor, ni otra puerta.
-        val construye = Regex("""(?<![\w.])(ExecutionEngine|Mcp|WorkflowRunner|Puerta)\s*\(""")
+        // Nadie en la app construye un ejecutor: ni el motor, ni el MCP, ni el reproductor, ni otra puerta. Tampoco con
+        // el nombre calificado (`graph.core.application.ExecutionEngine(`): lo único con punto delante que se llama
+        // así y no es un ejecutor es la acción `AgentAction.Mcp(` que traen los cerebros.
+        val construye = Regex("""(?<!\w)(?<!AgentAction\.)($EJECUTOR)\s*\(""")
         val construidos = fuentes.flatMap { it.donde(construye) }
         assertEquals(emptyList(), construidos, promesa(307) + " · se arma un ejecutor fuera de ArmadoDeEjecucion")
+
+        // Ni tras un nombre que lo esconda: `typealias Motor = ExecutionEngine`, `import … ExecutionEngine as Motor`
+        // o la referencia al constructor `::ExecutionEngine`.
+        val escondido = Regex("""\btypealias\s+\w+(\s*<[^=]*>)?\s*=\s*([\w.]*\.)?($EJECUTOR)\b|\bimport\s+[\w.]*\b($EJECUTOR)\s+as\s+\w+|::\s*($EJECUTOR)\b""")
+        assertEquals(emptyList(), fuentes.flatMap { it.donde(escondido) }, promesa(307) + " · un ejecutor se esconde tras un alias")
 
         // Las manos crudas (servicio + sistema) solo se entregan en Ejecucion.kt, y ahí al armado.
         val entregaManos = Regex("""(?<!class )\b(ArmadoDeEjecucion|Manos|AndroidSystemApi)\s*\(""")
@@ -118,8 +153,10 @@ class Contrato003LaAppPorLaPuerta {
         val pasados = fuentes.flatMap { it.donde(servicioComoManos) }
         assertEquals(emptyList(), pasados, promesa(307) + " · el servicio crudo se entrega como manos")
 
-        // El armado real, con manos falsas y sin tarea abierta: ni el motor, ni una herramienta MCP (gesto,
-        // sistema, aprendida), ni el reproductor de workflows llegan a las manos.
+        // El armado real, con manos falsas. El motor mira la tarea antes de pedir cada turno y la puerta en cada
+        // entrada; entre una y otra, el motor narra la intención de la acción, y ahí se cierra la tarea. Lo que
+        // llegue a las manos después solo lo pudo frenar la puerta: ni el motor, ni una herramienta MCP (gesto,
+        // sistema, aprendida), ni el reproductor de workflows llegan a las manos sin pasar por ella.
         val bitacora = Bitacora()
         val freno = Freno(log = bitacora)
         val armado = ArmadoDeEjecucion(freno, bitacora)
@@ -130,18 +167,27 @@ class Contrato003LaAppPorLaPuerta {
             elementos = { listOf("Guardar") },
             consciente = { _, _, _ -> error("este workflow no tiene pasos conscientes") },
         )
-        fun guion() = CerebroGuionado(
-            BrainTurn(actions = listOf(
-                AgentAction.Tap(1, 1),
-                AgentAction.OpenApp("Ajustes"),
-                AgentAction.Mcp("go_home", emptyMap()),
-                AgentAction.Mcp("set_alarm", mapOf("hour" to "7")),
-                AgentAction.Mcp("calc", mapOf("taps" to "5")),
-                AgentAction.Mcp("workflow_guardar", mapOf("context" to "")),
-            )),
+        fun guion(cierra: Boolean) = CerebroGuionado(
+            BrainTurn(
+                actions = listOf(
+                    AgentAction.Tap(1, 1),
+                    AgentAction.OpenApp("Ajustes"),
+                    AgentAction.Mcp("go_home", emptyMap()),
+                    AgentAction.Mcp("set_alarm", mapOf("hour" to "7")),
+                    AgentAction.Mcp("calc", mapOf("taps" to "5")),
+                    AgentAction.Mcp("workflow_guardar", mapOf("context" to "")),
+                ),
+                intents = if (cierra) listOf(CIERRA) else emptyList(),
+            ),
             BrainTurn(done = true, text = "fin"),
         )
-        armado.arma(manos(mano), { guion() }, Voz(), pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("sin tarea")
+        val cierraLaTarea = object : Voice {
+            override fun narrate(text: String) { if (text == CIERRA) freno.termine() }
+            override fun speak(text: String) {}
+        }
+        armado.correr("se cierra a mitad") {
+            armado.arma(manos(mano), { guion(cierra = true) }, cierraLaTarea, pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("se cierra a mitad")
+        }
         assertEquals(emptyList(), mano.entradas, promesa(307) + " · el armado tocó las manos sin tarea abierta")
         assertTrue(bitacora.lineas.count { it.startsWith("puerta: sin tarea abierta, no paso «") } >= 6,
             promesa(307) + " · alguna acción no pasó por la puerta: ${bitacora.lineas}")
@@ -152,7 +198,7 @@ class Contrato003LaAppPorLaPuerta {
 
         // Con la tarea abierta las mismas acciones llegan, cada una por su vista: la fábrica no está rota.
         armado.correr("con tarea") {
-            armado.arma(manos(mano), { guion() }, Voz(), pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("con tarea")
+            armado.arma(manos(mano), { guion(cierra = false) }, Voz(), pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("con tarea")
         }
         assertEquals(listOf("tap", "telefono.openApp", "home", "setAlarm", "tapLabel", "tapLabel"), mano.entradas, promesa(307))
     }
@@ -183,60 +229,103 @@ class Contrato003LaAppPorLaPuerta {
 
         // La corrida de la app es la de ESE freno. Sin tarea abierta el alto no arma nada (302): una corrida que no
         // entrara en Ejecucion.correr no se podría parar. Y con el alto pedido, tras el motor no se reencamina ni se
-        // anticipa: sería seguir, y pagar otra llamada al modelo, después de que la persona dijo basta.
+        // anticipa: sería seguir, y pagar otra llamada al modelo, después de que la persona dijo basta. Todo eso
+        // DENTRO del bloque de la corrida: anticipar después de soltar la tarea es anticipar sin alto posible.
         val run = cuerpo(app.codigo, Regex("""suspend fun run\s*\(prompt"""))
-        val abre = run.indexOf("Ejecucion.correr(")
-        val motor = run.indexOf("engine.run(")
-        assertTrue(abre >= 0 && motor > abre, promesa(308) + " · GraphApp.run no corre el motor dentro de Ejecucion.correr")
-        val sigueDespues = listOf("round++", "anticipate(").associateWith { run.indexOf(it, motor) }
-        assertTrue(sigueDespues.values.all { it > motor }, promesa(308) + " · GraphApp.run ya no reencamina o anticipa tras el motor: rehaz este juez, $sigueDespues")
-        val mira = run.indexOf("Ejecucion.sigue()", motor)
+        val corrida = bloqueDe(run, "Ejecucion.correr(") ?: fail(promesa(308) + " · GraphApp.run no corre dentro de Ejecucion.correr")
+        val motor = corrida.indexOf("engine.run(")
+        assertTrue(motor >= 0, promesa(308) + " · el motor de GraphApp.run no corre dentro del bloque de Ejecucion.correr")
+        val sigueDespues = listOf("round++", "anticipate(").associateWith { corrida.indexOf(it, motor) }
+        assertTrue(sigueDespues.values.all { it > motor }, promesa(308) + " · reencaminar o anticipar ya no están dentro de la corrida tras el motor: $sigueDespues")
+        val mira = corrida.indexOf("Ejecucion.sigue()", motor)
         assertTrue(mira > motor && sigueDespues.values.all { mira < it },
             promesa(308) + " · tras el motor GraphApp.run reencamina o anticipa sin mirar el alto con Ejecucion.sigue()")
 
-        // Ejecucion.parar es el alto de verdad: lo pide al armado y, si la corrida no suelta, corta DESPUÉS del alto.
-        // El freno es uno: la píldora, la notificación y el botón llaman a parar, y no sirve de nada si parar no frena.
+        // El paso consciente de un workflow corre con Ejecucion.pasoConsciente: parado dentro, no se da por hecho (316).
+        val consciente = cuerpo(app.codigo, Regex("""suspend fun consciousStep\s*\("""))
+        assertTrue(Regex("""\breturn\s+Ejecucion\.pasoConsciente\(""").containsMatchIn(consciente),
+            promesa(308) + " · consciousStep no devuelve Ejecucion.pasoConsciente: $consciente")
+        assertFalse(Regex("""\.run\s*\(""").containsMatchIn(consciente), promesa(308) + " · consciousStep corre un motor por su cuenta: $consciente")
+        assertTrue("consciousStep(" in cuerpo(app.codigo, Regex("""fun newSession\s*\(""")), promesa(308) + " · los workflows ya no dan sus pasos conscientes con consciousStep")
+
+        // Ejecucion.parar es el alto del armado, y nada más: el corte tras la gracia es del armado (se juzga abajo por
+        // comportamiento), y la app solo le da con qué lanzarlo, sin cambiarle la gracia.
         val ejecucion = fuentes.uno(EJECUCION)
         val parar = cuerpo(ejecucion.codigo, Regex("""fun parar\s*\(porque"""))
-        val pide = parar.indexOf("armado.parar(porque)")
-        assertTrue(pide >= 0, promesa(308) + " · Ejecucion.parar no pide el alto al armado: $parar")
-        assertTrue(parar.indexOf("cortaSiNoSuelta(") > pide, promesa(308) + " · Ejecucion.parar no corta tras el alto una corrida que no suelta: $parar")
-        assertFalse(".cancel(" in parar, promesa(308) + " · Ejecucion.parar cancela en vez de pedir el alto: $parar")
+        assertTrue("armado.parar(porque)" in parar, promesa(308) + " · Ejecucion.parar no pide el alto al armado: $parar")
+        assertFalse(Regex("""\.cancel\s*\(|cortaSiNoSuelta|(?i:gracia)""").containsMatchIn(parar), promesa(308) + " · Ejecucion.parar decide el corte por su cuenta: $parar")
+        val armadoDeLaApp = ejecucion.donde(Regex("""\bArmadoDeEjecucion\s*\(""")).singleOrNull() ?: fail(promesa(308) + " · $EJECUCION no arma un único ArmadoDeEjecucion")
+        assertTrue(Regex("""lanza\s*=\s*\{\s*(\w+)\s*->\s*[\w.]*\.launch\s*\{\s*\1\s*\(\s*\)\s*\}""").containsMatchIn(armadoDeLaApp),
+            promesa(308) + " · el armado de la app no tiene con qué lanzar el corte tras el alto: $armadoDeLaApp")
+        assertFalse(Regex("""(?i:gracia)""").containsMatchIn(armadoDeLaApp), promesa(308) + " · la app cambia la gracia del armado: $armadoDeLaApp")
         assertTrue(ejecucion.donde(Regex("""fun <T> correr\s*\([^\n]*=\s*armado\.correr\(""")).isNotEmpty(),
             promesa(308) + " · Ejecucion.correr no abre la tarea del armado")
         val frenos = fuentes.flatMap { it.donde(Regex("""(?<![\w.])Freno\s*\(""")) }
         assertEquals(1, frenos.size, promesa(308) + " · la app no tiene un único freno: $frenos")
         assertTrue(frenos.single().substringBefore(":").endsWith(EJECUCION), promesa(308) + " · el freno no vive en $EJECUCION: $frenos")
 
-        // Sin corrida, parar no arma nada ni hay trabajo que cortar.
+        // Sin corrida, parar no arma nada ni lanza un corte.
         val bitacora = Bitacora()
         val avisos = mutableListOf<String>()
         val freno = Freno(log = bitacora, avisa = { avisos += it })
-        val armado = ArmadoDeEjecucion(freno, bitacora)
+        var alcance: CoroutineScope? = null
+        var cortes = 0
+        val armado = ArmadoDeEjecucion(freno, bitacora, lanza = { corte -> cortes++; alcance?.launch { corte() } })
         armado.parar("píldora")
         assertFalse(freno.pedido, promesa(308) + " · parar sin corrida armó el freno")
         assertFalse(armado.enCurso, promesa(308))
+        assertEquals(0, cortes, promesa(308) + " · parar sin corrida lanzó un corte")
 
         // Dentro de la corrida, las tres órdenes van al mismo alto: arma el freno de ESA tarea y avisa una vez.
         var armoLaPildora = false
         var enCurso = false
-        val salida = runCatching {
-            armado.correr("abre ajustes") {
-                enCurso = armado.enCurso
-                armado.parar("píldora")
-                armoLaPildora = freno.pedido && freno.tarea == "abre ajustes"
-                armado.parar("notificación")
-                armado.parar("voz")
+        val salida = coroutineScope {
+            alcance = this
+            runCatching {
+                armado.correr("abre ajustes") {
+                    enCurso = armado.enCurso
+                    armado.parar("píldora")
+                    armoLaPildora = freno.pedido && freno.tarea == "corrida"
+                    armado.parar("notificación")
+                    armado.parar("voz")
+                }
             }
         }
         assertTrue(enCurso, promesa(308) + " · la corrida no se sabe en curso")
         assertTrue(armoLaPildora, promesa(308) + " · la píldora no armó el freno de la tarea abierta")
         assertIs<Paraste>(salida.exceptionOrNull(), promesa(308) + " · una corrida con alto no terminó como cancelación: $salida")
         assertEquals(listOf(Freno.ALTO, Freno.DEVUELVO_EL_CONTROL), avisos, promesa(308) + " · tres órdenes, avisos: $avisos")
-        assertEquals(listOf("freno: alto pedido (píldora); paro «abre ajustes»"), bitacora.lineas.filter { "alto pedido" in it }, promesa(308))
+        assertEquals(listOf("freno: alto pedido (píldora); paro «corrida»"), bitacora.lineas.filter { "alto pedido" in it }, promesa(308))
         assertFalse(armado.enCurso, promesa(308) + " · la corrida acabó y sigue en curso")
 
-        // Un turno de Graph colgado en red tras el alto: pasada la gracia se corta el trabajo y la corrida
+        // Una corrida que suelta sola tras el alto (su turno de Graph vuelve a los 100 ms) no se corta: la gracia es
+        // para soltar, y la corrida termina por el alto, no por el corte.
+        run {
+            val desde = bitacora.lineas.size
+            val pensando = CompletableDeferred<Unit>()
+            val vuelve = object : Brain {
+                override fun begin(goal: String) {}
+                override suspend fun next(state: ScreenState, actionResults: List<String>): BrainTurn {
+                    pensando.complete(Unit)
+                    delay(100)
+                    return BrainTurn(done = true, text = "tarde")
+                }
+                override fun inform(message: String) {}
+            }
+            val sesion = armado.arma(manos(Mano()), { vuelve }, Voz(), pausa = { 0 })
+            coroutineScope {
+                alcance = this
+                val corrida = launch { runCatching { armado.correr("suelta sola") { sesion.motor.run("suelta sola") } } }
+                pensando.await()
+                armado.parar("píldora")
+                corrida.join()
+            }
+            val nuevas = bitacora.lineas.drop(desde)
+            assertTrue(nuevas.any { it.startsWith("run: ✋") }, promesa(308) + " · la corrida no soltó sola por el alto: $nuevas")
+            assertTrue(nuevas.none { it.startsWith("freno:") && "corto" in it }, promesa(308) + " · parar cortó una corrida que soltaba sola: $nuevas")
+        }
+
+        // Un turno de Graph colgado en red tras el alto: parar corta el trabajo pasada la gracia, no antes, y la corrida
         // termina como cancelación, sin tocar nada y soltando el freno.
         val pensando = CompletableDeferred<Unit>()
         val colgado = object : Brain {
@@ -250,19 +339,24 @@ class Contrato003LaAppPorLaPuerta {
         val mano = Mano()
         val sesion = armado.arma(manos(mano), { colgado }, Voz(), pausa = { 0 })
         var salioColgada: Throwable? = null
-        val inicio = TimeSource.Monotonic.markNow()
+        var tardo = 0.milliseconds
+        var soltó = true
         coroutineScope {
+            alcance = this
             val corrida = launch {
                 salioColgada = runCatching { armado.correr("colgada") { sesion.motor.run("colgada") } }.exceptionOrNull()
             }
             pensando.await()
+            val alto = TimeSource.Monotonic.markNow()
             armado.parar("notificación")
-            armado.cortaSiNoSuelta(50)
-            corrida.join()
+            soltó = withTimeoutOrNull((GRACIA + 2_000).milliseconds) { corrida.join() } != null
+            tardo = alto.elapsedNow()
+            if (!soltó) corrida.cancel()
         }
-        val tardo = inicio.elapsedNow()
+        assertTrue(soltó, promesa(308) + " · parar no cortó la corrida colgada en ${GRACIA + 2_000} ms")
         assertIs<CancellationException>(salioColgada, promesa(308) + " · la corrida colgada no terminó como cancelación")
-        assertTrue(tardo < 1.seconds, promesa(308) + " · cortar la corrida colgada tardó $tardo")
+        assertTrue(tardo >= GRACIA.milliseconds, promesa(308) + " · cortó a los $tardo, antes de la gracia de $GRACIA ms: cortó en vez de pedir el alto")
+        assertTrue(tardo < (GRACIA + 1_000).milliseconds, promesa(308) + " · cortar la corrida colgada tardó $tardo")
         assertEquals(emptyList(), mano.entradas, promesa(308))
         assertFalse(freno.abierta, promesa(308) + " · la corrida cortada no soltó el freno")
         assertTrue(bitacora.lineas.any { it.startsWith("freno:") && "corto" in it }, promesa(308) + " · el corte no quedó en el log: ${bitacora.lineas}")

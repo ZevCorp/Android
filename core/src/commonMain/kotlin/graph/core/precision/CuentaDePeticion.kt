@@ -9,7 +9,8 @@ enum class QuienHabla { PERSONA, SISTEMA }
 /**
  * LA MEDIDA DE UNA PETICIÓN (spec 003, promesa 315): cuántas llamadas, cuántas herramientas distintas, el
  * máximo de intentos a un mismo destino y los milisegundos hasta la primera y la última acción que actuó.
- * Una línea `peticion:` en el log por petición.
+ * Una línea `peticion:` en el log por petición. El destino va como [TopeDeIntentos.enLog]: la celda tal cual, y
+ * un selector o un nombre como hash corto, porque el log sale del teléfono (promesa 317).
  *
  * Nace de U (`CuentaDelTurno.cs`, promesa 205): sin una unidad «petición», saber si algo se hizo a la
  * primera era reconstruirlo sumando líneas sueltas con un script.
@@ -77,7 +78,7 @@ class CuentaDePeticion(
         }
         val max = intentos.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key }).firstOrNull()
         val linea = "llamadas=$llamadas distintas=${distintas.size} " +
-            (if (max == null) "intentos_max=0 «—» " else "intentos_max=${max.value} «${max.key}» ") +
+            (if (max == null) "intentos_max=0 «—» " else "intentos_max=${max.value} «${TopeDeIntentos.enLog(max.key)}» ") +
             "primera=${ms(primera, primeraLlamada)} ultima=${ms(ultima, primeraLlamada)} " +
             "desde_peticion=${ms(primera, peticion)} rechazadas=$rechazadas retiradas=$retiradas"
         reiniciar()

@@ -169,21 +169,22 @@ class Contrato003TopeYCuenta {
         assertFalse(p.telefono.tap(550, 900), promesa(310) + " · la tercera dijo que se hizo")
         assertFalse(p.telefono.tap(551, 901), promesa(310) + " · la cuarta dijo que se hizo")
         assertEquals(2, tel.entradas.count { it == "tap" }, promesa(310) + " · la tercera tocó el teléfono: ${tel.entradas}")
-        val alTocar = bitacora.rechazos().filter { it.startsWith("tope: no paso «tap(550,900)»: ${TERCERA}«Guardar» ya falló dos veces en esta petición — 1) ") }
+        // El log dice qué no pasó y por qué; qué salió en cada una va en el rechazo (arriba), no en el log (promesa 317).
+        val alTocar = bitacora.rechazos().filter { it.startsWith("tope: no paso «tap(550,900)»: ") }
         assertEquals(1, alTocar.size, promesa(310) + " · el log no dice el rechazo: ${bitacora.lineas}")
-        assertTrue(" · 2) " in alTocar.single() && alTocar.single().endsWith(CAMBIA_DE_VIA), promesa(310) + " · ${alTocar.single()}")
+        assertTrue("ya falló dos veces" in alTocar.single(), promesa(310) + " · ${alTocar.single()}")
         assertTrue(p.telefono.tap(100, 100), promesa(310) + " · otro botón no pasó")
 
         assertFalse(p.telefono.type(100, 310, "Ana"), promesa(310))
         assertFalse(p.telefono.type(100, 310, "Ana"), promesa(310))
         assertFalse(p.telefono.type(100, 310, "Ana"), promesa(310))
         assertEquals(2, tel.entradas.count { it == "type" }, promesa(310) + " · la tercera escritura tocó el teléfono")
-        assertTrue(bitacora.rechazos().any { it.startsWith("tope: no paso «type(100,310)»: $TERCERA") }, promesa(310) + " · ${bitacora.lineas}")
+        assertTrue(bitacora.rechazos().any { it.startsWith("tope: no paso «type(100,310)»: ") }, promesa(310) + " · ${bitacora.lineas}")
         assertTrue(bitacora.lineas.none { "Ana" in it }, promesa(310) + " · el log dice lo que se escribió: ${bitacora.lineas}")
 
         repeat(3) { p.reproductor.tapLabel("Guardar") }
         assertEquals(2, tel.entradas.count { it == "tapLabel" }, promesa(310) + " · la tercera por etiqueta tocó el teléfono")
-        assertTrue(bitacora.rechazos().any { it.startsWith("tope: no paso «tap_label Guardar»: $TERCERA") }, promesa(310) + " · ${bitacora.lineas}")
+        assertTrue(bitacora.rechazos().any { it.startsWith("tope: no paso «tap_label") }, promesa(310) + " · ${bitacora.lineas}")
     }
 
     @Test
@@ -448,6 +449,25 @@ class Contrato003TopeYCuenta {
             assertTrue("primera=250 ms ultima=250 ms desde_peticion=350 ms" in sola && "=-" !in sola, promesa(315) + " · «$sola»")
         }
 
+        // Un destino que no es una celda (el selector de un nodo, un nombre) sale como un hash corto: sin lo que el
+        // nodo muestra, y el mismo destino con el mismo hash para poder seguirlo de una petición a otra.
+        run {
+            val c = CuentaDePeticion(TestTimeSource())
+            val selector = "a11y:id=contact_row;text=Juan Pérez;cls=TextView;path=0.3.2"
+            val hash = Regex("""intentos_max=\d+ «(#[0-9a-f]{8})» """)
+            repeat(2) { c.llamada("tap", selector) }
+            val una = c.cerrar()
+            c.llamada("tap", selector)
+            val otra = c.cerrar()
+            assertNotNull(una, promesa(315)); assertNotNull(otra, promesa(315))
+            val h1 = hash.find(una)?.groupValues?.get(1)
+            assertNotNull(h1, promesa(315) + " · «$una»")
+            assertEquals(h1, hash.find(otra)?.groupValues?.get(1), promesa(315) + " · el mismo selector dio otro hash: «$una» · «$otra»")
+            assertFalse("Juan" in una || "text=" in una, promesa(315) + " · «$una»")
+            c.llamada("tap", "celda:2,3")
+            assertTrue("intentos_max=1 «celda:2,3» " in (c.cerrar() ?: ""), promesa(315) + " · la celda no va tal cual")
+        }
+
         // Por la puerta: lo rechazado cuenta, y cada entrada es una llamada.
         run {
             val bitacora = Bitacora()
@@ -459,7 +479,7 @@ class Contrato003TopeYCuenta {
             p.telefono.scroll(true)
             val linea = cuenta.cerrar()
             assertNotNull(linea, promesa(315))
-            assertTrue(linea.startsWith("llamadas=4 distintas=2 intentos_max=3 «${GUARDAR.selector}» "), promesa(315) + " · «$linea»")
+            assertTrue(Regex("""^llamadas=4 distintas=2 intentos_max=3 «#[0-9a-f]{8}» """).containsMatchIn(linea), promesa(315) + " · el destino no va como hash corto: «$linea»")
             assertTrue(linea.endsWith(" rechazadas=1 retiradas=0"), promesa(315) + " · «$linea»")
             assertTrue(bitacora.lineas.contains("peticion: $linea"), promesa(315) + " · ${bitacora.lineas}")
         }

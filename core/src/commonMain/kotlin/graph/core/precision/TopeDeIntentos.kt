@@ -157,6 +157,23 @@ class TopeDeIntentos(private val celdaPx: Int) {
         /** Los px de una celda de [CELDA_DP] dp a esta densidad (`displayMetrics.density`). */
         fun celdaPx(densidad: Float): Int = (CELDA_DP * densidad).roundToInt().coerceAtLeast(1)
 
+        /**
+         * Una clave tal como puede ir al log, que sale del teléfono por la telemetría (promesa 317): la celda tal
+         * cual; el selector de un nodo o un nombre, que llevan lo que la pantalla muestra, como un hash corto (`#` y
+         * 8 hex, FNV-1a de 32 bits). El mismo destino da el mismo hash: se sigue de una línea a otra sin leer qué dice.
+         */
+        fun enLog(clave: String): String {
+            if (CELDA_EN_LOG.matches(clave)) return clave
+            var h = 0x811c9dc5.toInt()
+            for (c in clave) {
+                h = h xor c.code
+                h *= 0x01000193
+            }
+            return "#" + h.toUInt().toString(16).padStart(8, '0')
+        }
+
+        private val CELDA_EN_LOG = Regex("""celda:-?\d+,-?\d+""")
+
         /** ¿Se logró? `null` si no se sabe: se dio sin escribir y no hubo huella con que juzgar si cambió. */
         fun logro(dio: Boolean, escribio: Boolean, cambio: Boolean?): Boolean? = when {
             !dio -> false

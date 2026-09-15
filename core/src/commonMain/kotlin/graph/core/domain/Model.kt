@@ -161,10 +161,11 @@ class Mcp(
         ) { args ->
             val labels = (args["taps"] ?: "").split(',').map { it.trim() }.filter { it.isNotBlank() }
             val failed = mutableListOf<String>()
-            for (label in labels) {
+            for ((i, label) in labels.withIndex()) {
                 if (player?.tapLabel(label) != true) {
                     failed += label
-                    log.log("mcp", "🧩 ${sanitize(lt.name)}: falló el paso \"$label\"")
+                    // La etiqueta es lo que la pantalla muestra: va al modelo en el detalle, al log solo su número (spec 003, promesa 317).
+                    log.log("mcp", "🧩 ${sanitize(lt.name)}: falló el paso ${i + 1} de ${labels.size}")
                 }
                 delay(stepDelay())
             }

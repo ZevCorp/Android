@@ -20,32 +20,30 @@ import kotlinx.coroutines.launch
  *  1. Es el ÚNICO sitio que entrega las manos crudas —el servicio de accesibilidad y `AndroidSystemApi`— y las
  *     entrega al [ArmadoDeEjecucion], que las cierra detrás de la puerta. Toda corrida se arma con [arma].
  *  2. Tiene UN [Freno] por proceso. Toda corrida entra por [correr]: sin tarea abierta la puerta no toca nada.
- *  3. [parar] es el único alto: la píldora, la notificación, el botón y, a futuro, la voz lo piden aquí.
+ *  3. [parar] es el único alto: la píldora, la notificación, el botón y, a futuro, la voz lo piden aquí. Cuándo
+ *     cortar una corrida que no suelta lo decide el armado (core, juzgado por comportamiento); la app solo le da
+ *     su scope para lanzar ese corte.
  */
 object Ejecucion {
-    /**
-     * Lo que se deja a la corrida soltar sola tras el alto antes de cortar su trabajo. Suelta en milisegundos
-     * salvo que esté esperando un turno de Graph en vuelo; ese es el único caso que llega a cortarse.
-     */
-    private const val GRACIA_MS = 1_500L
-
     private val freno = Freno(log = LogBus, avisa = { texto -> bubble()?.speak(texto) })
-    private val armado = ArmadoDeEjecucion(freno, LogBus)
+    private val armado = ArmadoDeEjecucion(freno, LogBus, lanza = { corte -> GraphApp.instance.scope.launch { corte() } })
 
     private fun bubble() = (GraphApp.instance.ui as? GraphAccessibilityService)?.bubble
 
     /** ¿Hay una corrida en marcha? */
     val enCurso: Boolean get() = armado.enCurso
 
-    /** Pide el alto de la corrida en curso y, si no suelta en [GRACIA_MS], corta su trabajo (después del alto, nunca en su lugar). */
+    /** Pide el alto de la corrida en curso; si no suelta, el armado corta su trabajo pasada la gracia (después del alto, nunca en su lugar). */
     fun parar(porque: String) {
         LogBus.log("app", "⏹ alto pedido por $porque")
         armado.parar(porque)
-        if (armado.enCurso) GraphApp.instance.scope.launch { armado.cortaSiNoSuelta(GRACIA_MS) }
     }
 
-    /** Corre [bloque] como la corrida [nombre]: abre la tarea, y con alto termina en `Paraste` (una cancelación). */
-    suspend fun <T> correr(nombre: String, bloque: suspend () -> T): T = armado.correr(nombre, bloque)
+    /**
+     * Corre [bloque] como la corrida de fuera de [pedido]: abre la tarea; con otra abierta lanza `CorridaEnCurso` sin
+     * correrlo; con alto termina en `Paraste` (una cancelación). El pedido no se nombra en el log, solo su largo.
+     */
+    suspend fun <T> correr(pedido: String, bloque: suspend () -> T): T = armado.correr(pedido, bloque)
 
     /** Con el alto pedido lanza `Paraste`: tras un motor, quien tiene algo más que hacer lo mira primero. */
     fun sigue() = armado.sigue()

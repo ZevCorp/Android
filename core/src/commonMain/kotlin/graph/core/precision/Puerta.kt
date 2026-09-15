@@ -32,8 +32,9 @@ import kotlin.concurrent.Volatile
  * Son cuatro vistas y no una clase que implemente las cuatro interfaces: `Phone.openApp` y
  * `SystemApi.openApp` tienen la misma firma y delegan en objetos distintos.
  *
- * El log nombra la acción, nunca los datos personales que lleva (lo que se escribe, a quién se llama o
- * se escribe, qué se busca o se copia).
+ * EL LOG NOMBRA LA ACCIÓN, NUNCA LO QUE LLEVA (promesa 317). El log sale del teléfono por la telemetría: dice el
+ * tipo de entrada, su celda o el largo de su texto, y el destino del tope como hash corto; nunca lo que se
+ * escribe, a quién se llama, qué se busca o se copia, qué etiqueta se toca ni lo que la pantalla muestra.
  */
 class Puerta(
     private val freno: Freno,
@@ -82,7 +83,8 @@ class Puerta(
         cuenta?.llamada(herramienta, if (t != null && destino != null) t.clave(destino) else "")
         if (t != null && destino != null) {
             t.rechazo(destino)?.let { porque ->
-                log.log("tope", "no paso «$accion»: $porque")
+                // El rechazo entero nombra el destino y lo que salió: es para el modelo, no para el log.
+                log.log("tope", "no paso «$accion»: tercera entrada a «${TopeDeIntentos.enLog(t.clave(destino))}», que ya falló dos veces en esta petición")
                 cuenta?.rechazada(herramienta)
                 return false
             }
@@ -127,7 +129,7 @@ class Puerta(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.log("tope", "no pude tomar la huella: ${e.message}")
+            log.log("tope", "no pude tomar la huella (${e::class.simpleName})")
             null
         }
     }
@@ -135,7 +137,7 @@ class Puerta(
     private fun nodoVivoEn(x: Int, y: Int): NodoVivo? = try {
         nodoEn?.invoke(x, y)
     } catch (e: Exception) {
-        log.log("tope", "no pude leer el nodo en ($x,$y): ${e.message}; cuento por celda")
+        log.log("tope", "no pude leer el nodo en ($x,$y) (${e::class.simpleName}); cuento por celda")
         null
     }
 
@@ -147,13 +149,16 @@ class Puerta(
         else -> "se dio; sin huella no sé si cambió"
     }
 
+    /** Lo que se dice en el log de un texto: su largo. */
+    private fun largo(texto: String) = "(${texto.length} caracteres)"
+
     val telefono: Phone = object : Phone {
         override suspend fun state(withScreenshot: Boolean): ScreenState = phone.state(withScreenshot)
         override suspend fun tap(x: Int, y: Int) =
             pasa("tap($x,$y)", Vigilada(escribe = false) { it.alTocar(x, y, nodoVivoEn(x, y)) }) { phone.tap(x, y) }
         override suspend fun type(x: Int, y: Int, text: String) =
             pasa("type($x,$y)", Vigilada(escribe = true) { it.alEscribirEn(x, y) }) { phone.type(x, y, text) }
-        override suspend fun openApp(query: String) = pasa("open_app $query") { phone.openApp(query) }
+        override suspend fun openApp(query: String) = pasa("open_app ${largo(query)}") { phone.openApp(query) }
         override suspend fun scroll(down: Boolean) = pasa("scroll ${if (down) "down" else "up"}") { phone.scroll(down) }
         override suspend fun swipe(x1: Int, y1: Int, x2: Int, y2: Int, ms: Long) =
             pasa("swipe($x1,$y1→$x2,$y2)") { phone.swipe(x1, y1, x2, y2, ms) }
@@ -169,9 +174,9 @@ class Puerta(
     }
 
     val sistema: SystemApi = object : SystemApi {
-        override suspend fun openApp(name: String) = pasa("launch_app $name") { system.openApp(name) }
-        override suspend fun setAlarm(hour: Int, minute: Int, message: String) = pasa("set_alarm $hour:$minute") { system.setAlarm(hour, minute, message) }
-        override suspend fun setTimer(seconds: Int, message: String) = pasa("set_timer ${seconds}s") { system.setTimer(seconds, message) }
+        override suspend fun openApp(name: String) = pasa("launch_app ${largo(name)}") { system.openApp(name) }
+        override suspend fun setAlarm(hour: Int, minute: Int, message: String) = pasa("set_alarm") { system.setAlarm(hour, minute, message) }
+        override suspend fun setTimer(seconds: Int, message: String) = pasa("set_timer") { system.setTimer(seconds, message) }
         override suspend fun showAlarms() = pasa("show_alarms") { system.showAlarms() }
         override suspend fun createEvent(title: String, startIso: String, location: String) = pasa("create_event") { system.createEvent(title, startIso, location) }
         override suspend fun dial(number: String) = pasa("dial") { system.dial(number) }
@@ -186,13 +191,13 @@ class Puerta(
         override suspend fun openSettings(section: String) = pasa("open_settings $section") { system.openSettings(section) }
         override suspend fun shareText(text: String) = pasa("share_text") { system.shareText(text) }
         override suspend fun setClipboard(text: String) = pasa("set_clipboard") { system.setClipboard(text) }
-        override suspend fun setVolume(stream: String, percent: Int) = pasa("set_volume $stream $percent") { system.setVolume(stream, percent) }
+        override suspend fun setVolume(stream: String, percent: Int) = pasa("set_volume $stream") { system.setVolume(stream, percent) }
         override suspend fun adjustVolume(stream: String, direction: String) = pasa("adjust_volume $stream $direction") { system.adjustVolume(stream, direction) }
     }
 
     /** Sin reproductor real, tocar por etiqueta no se puede: pasa por la puerta igual y devuelve `false`. */
     val reproductor: UiPlayer = object : UiPlayer {
         override suspend fun tapLabel(label: String) =
-            pasa("tap_label $label", Vigilada(escribe = false) { TopeDeIntentos.Destino.Nombre(label) }) { player?.tapLabel(label) == true }
+            pasa("tap_label ${largo(label)}", Vigilada(escribe = false) { TopeDeIntentos.Destino.Nombre(label) }) { player?.tapLabel(label) == true }
     }
 }
