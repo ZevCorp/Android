@@ -4,13 +4,8 @@ import graph.core.domain.BrainTurn
 import graph.core.domain.GraphLog
 import graph.core.domain.ScreenState
 import graph.core.domain.ThreadedBrain
-import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.withTimeoutOrNull
-import kotlin.time.Duration
-import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.minutes
-import kotlin.time.TimeMark
 import kotlin.time.TimeSource
 
 private val NO_LOG = GraphLog { _, _ -> }
@@ -133,59 +128,25 @@ class GraphBrain(
         return turn
     }
 
-    /** Lo que dejó el POST: la última respuesta, cuántos intentos llevó y si lo cortó el tope del turno. */
-    private class Posted(val reply: TransportReply, val attempts: Int, val capped: Boolean)
-
     /**
-     * El POST con los reintentos de los transitorios, dentro del tope del turno. Una excepción del
-     * transporte cuenta como HTTP 0 y lleva su mensaje; una cancelación no: sale tal cual.
+     * El POST con los reintentos de los transitorios, dentro del tope del turno. Es [enviarConReintentos],
+     * el mismo bucle que usa el aprendizaje (spec 004): una excepción del transporte cuenta como HTTP 0 y
+     * lleva su mensaje; una cancelación no, sale tal cual.
      */
-    private suspend fun post(url: String, body: String, headers: Map<String, String>): Posted {
-        val deadline = timeSource.markNow() + TURN_CAP
-        var reply = intento(url, body, headers, deadline)
-        var attempts = 1
-        while (reply.status in TRANSIENT && attempts <= MAX_RETRIES) {
-            val wait = waitFor(reply, retry = attempts - 1)
-            if (wait.milliseconds >= remaining(deadline)) {
-                log.log("graph", "HTTP ${reply.status} · sin reintento: no cabe en el tope de ${TURN_CAP.inWholeMinutes} min del turno")
-                return Posted(reply, attempts, capped = true)
-            }
-            log.log("graph", "HTTP ${reply.status} transitorio · reintento $attempts/$MAX_RETRIES en ${wait}ms")
-            sleep(wait)
-            attempts++
-            reply = intento(url, body, headers, deadline)
+    private suspend fun post(url: String, body: String, headers: Map<String, String>): Envio =
+        enviarConReintentos(TURN_CAP, timeSource, sleep, log, etiqueta = "graph", deQue = "del turno") {
+            transport.post(url, body, headers)
         }
-        return Posted(reply, attempts, capped = false)
-    }
 
-    /** Un intento, cortado en lo que le queda al turno: si se agota, es una lectura agotada y no se reintenta. */
-    private suspend fun intento(url: String, body: String, headers: Map<String, String>, deadline: TimeMark): TransportReply =
-        withTimeoutOrNull(remaining(deadline)) {
-            try {
-                transport.post(url, body, headers)
-            } catch (e: CancellationException) {
-                throw e // cancelar la corrida (o agotar el tope) no es un fallo de red
-            } catch (e: Exception) {
-                TransportReply(TransportReply.NOT_CONNECTED, e.message ?: e::class.simpleName ?: "sin red")
-            }
-        } ?: TransportReply(TransportReply.TIMED_OUT, "se agotó el tope de ${TURN_CAP.inWholeMinutes} min del turno")
-
-    private fun remaining(deadline: TimeMark): Duration = -deadline.elapsedNow()
-
-    /** Un 429 con `Retry-After` espera eso, hasta [RETRY_AFTER_CAP_S]; el resto, backoff creciente. */
-    private fun waitFor(reply: TransportReply, retry: Int): Long =
-        reply.retryAfterSeconds?.takeIf { reply.status == 429 && it >= 0 }?.let { minOf(it, RETRY_AFTER_CAP_S) * 1000L }
-            ?: (BACKOFF_MS shl retry)
-
-    private fun parse(posted: Posted): TurnResponse {
+    private fun parse(posted: Envio): TurnResponse {
         val reply = posted.reply
         if (reply.status == 401 || reply.status == 403)
             throw IllegalStateException("la key de graph no vale (HTTP ${reply.status})")
         if (reply.status == TransportReply.TIMED_OUT)
             throw IllegalStateException("graph no respondió a tiempo (${reply.body.ifBlank { "sin causa" }}); no se reintentó para no cobrar dos veces")
-        if (reply.status in TRANSIENT) {
-            val cuando = if (posted.capped) "dentro del tope de ${TURN_CAP.inWholeMinutes} min del turno, tras ${posted.attempts} intentos"
-                else "tras ${posted.attempts} intentos"
+        if (Reintentos.esTransitorio(reply.status)) {
+            val cuando = if (posted.topado) "dentro del tope de ${TURN_CAP.inWholeMinutes} min del turno, tras ${posted.intentos} intentos"
+                else "tras ${posted.intentos} intentos"
             throw IllegalStateException("graph no respondió (HTTP ${reply.status}) $cuando" + (causa(reply.body)?.let { ": $it" } ?: ""))
         }
         val decoded = runCatching { TurnJson.decodeFromString(TurnResponse.serializer(), reply.body) }
@@ -215,12 +176,7 @@ class GraphBrain(
 
     private companion object {
         const val TURN_PATH = "/api/v1/agent/turn"
-        /** Ver `GraphClient.cs:18`: pasarela, arranque en frío del serverless o la espera del cliente. */
-        val TRANSIENT = setOf(0, 408, 429, 502, 503, 504)
-        const val MAX_RETRIES = 3
-        const val BACKOFF_MS = 800L
         /** El turno entero, intentos y esperas: más que esto, el usuario ya se fue. */
         val TURN_CAP = 6.minutes
-        const val RETRY_AFTER_CAP_S = 10
     }
 }
