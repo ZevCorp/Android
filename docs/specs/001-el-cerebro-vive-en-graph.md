@@ -142,7 +142,8 @@ Lo que quedó, archivo por archivo:
   `DEFAULT_GRAPH_API_KEY`** con `GraphCredentials` (no pasa por `RemoteConfig`: Graph ES el backend
   nuevo); `graphBaseUrl` = pref o `https://graph-eight-pied.vercel.app`; `userId`/`email` de la sesión
   Supabase si existe; `deviceId` = `Settings.Secure.ANDROID_ID`; `listApps` del `PackageManager`
-  (una consulta por cerebro, compartida con los otros dos proveedores). Con `Falta`, `run()` no
+  (desde R2: una consulta por corrida en `Dispatchers.IO`, promesa 15; antes, una por turno y en el
+  hilo principal). Con `Falta`, `run()` no
   instancia el cerebro: loguea `[graph]`, lo dice por voz y devuelve la línea (promesa 9).
 - `app/…/platform/GraphTransport.kt` — el `TurnTransport` real: `HttpURLConnection`, 30 s conectar
   / 5 min leer, cancelable (`disconnect()` al cancelar), cuerpo también en errores, status 0 cuando no

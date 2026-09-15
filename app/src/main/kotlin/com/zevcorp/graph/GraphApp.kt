@@ -56,6 +56,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 /**
  * Una propuesta ("¿quieres que lo haga yo?") o pregunta que el asistente dijo por VOZ y quedó
@@ -314,7 +315,11 @@ class GraphApp : Application() {
      */
     private val subconsciousExecution = false
 
-    /** Apps con launcher, por etiqueta. Una sola consulta al PackageManager por cerebro creado. */
+    /**
+     * Apps con launcher, por etiqueta. Cara: una llamada al PackageManager por paquete instalado.
+     * OpenAI y Gemini la piden cuando el modelo llama `list_apps`; GRAPH la pide una vez por corrida y
+     * en `Dispatchers.IO`, porque `run()` arranca desde el hilo principal (promesa 15).
+     */
     private fun installedApps(): List<String> =
         packageManager.getInstalledApplications(0)
             .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
@@ -335,7 +340,7 @@ class GraphApp : Application() {
                 userId = { auth.userId.ifBlank { null } },
                 email = { auth.email.ifBlank { null } },
                 deviceId = { deviceId },
-                listApps = apps,
+                listApps = { withContext(Dispatchers.IO) { installedApps() } },
                 log = LogBus,
             )
         }
@@ -358,9 +363,11 @@ class GraphApp : Application() {
     private val maxContextTokens = 400_000
 
     /**
-     * Crea un motor y su cerebro. Con `resume`, el cerebro CONTINÚA el hilo compartido (no reenvía el
-     * system prompt: el servidor ya lo tiene) para que haya continuidad entre activaciones; si no,
-     * arranca un hilo fresco. Devuelve ambos para poder guardar el id/tokens del hilo al terminar.
+     * Crea un motor y su cerebro. Con `resume`, OpenAI y Gemini CONTINÚAN el hilo compartido (no
+     * reenvían el system prompt: el servidor ya lo tiene) para que haya continuidad entre activaciones;
+     * si no, arrancan un hilo fresco. GRAPH no reanuda nunca: cada corrida abre un hilo nuevo en Graph
+     * aunque llegue `resume` (promesa 12; `GraphBrain.resume` es no-op). Devuelve ambos para poder
+     * guardar el id/tokens del hilo al terminar.
      */
     private fun newSession(surface: Phone, service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, ThreadedBrain> {
         // El runner de workflows: los steps subconscientes salen por MCP (clic por árbol de UI) y los
