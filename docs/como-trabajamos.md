@@ -63,6 +63,9 @@ Un cambio está listo cuando pasa los cuatro, y el PR dice cuáles y con qué ev
 
 ## Los números no se reciclan
 
+Cada spec numera en su propio bloque para que dos ramas paralelas no choquen: la spec NNN usa las
+promesas NNN×100+1 en adelante (la 002 empieza en 201), salvo la 001, que usa 1-99.
+
 Una promesa retirada deja su número vacío en la tabla (tachada, con el porqué). Una promesa nueva
 toma el siguiente número libre, aunque la spec ya esté "cerrada": el enunciado del test y la fila
 de la spec cambian en el mismo commit, o no cambian.
