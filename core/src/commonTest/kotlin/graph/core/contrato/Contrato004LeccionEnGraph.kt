@@ -7,6 +7,7 @@ import graph.core.graph.learning.Almacen
 import graph.core.graph.learning.Arranque
 import graph.core.graph.learning.Cierre
 import graph.core.graph.learning.CierrePendiente
+import graph.core.graph.learning.GraphException
 import graph.core.graph.learning.IdentidadDePantalla
 import graph.core.graph.learning.LearningClient
 import graph.core.graph.learning.Leccion
@@ -50,7 +51,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 
 /**
- * CONTRATO 004 · LA LECCIÓN (docs/specs/004-lo-ensenado-vive-en-graph.md, fase 4A2 y sus revisiones: 417-420).
+ * CONTRATO 004 · LA LECCIÓN (docs/specs/004-lo-ensenado-vive-en-graph.md, fase 4A2 y sus revisiones: 417-422 y 424-426).
  *
  * Cada `promesaNNN` es una fila de la tabla de la spec, con el enunciado literal en [PROMESAS]. Juzgan el
  * orquestador de una enseñanza con el [LearningClient] REAL encima de un transporte que responde por ruta y
@@ -75,6 +76,9 @@ class Contrato004LeccionEnGraph {
             420 to "Un cierre cancelado devuelve el control en un tiempo acotado, y si el proceso muere a mitad del cierre, al arrancar queda un pendiente que lo termina.",
             421 to "Antes de reintentar un cierre pendiente, el arranque pregunta a Graph si ya lo cerró: si lo cerró no vuelve a cerrarlo ni a cobrarlo, y si no se sabe lo intenta como siempre.",
             422 to "Mientras una lección se cierra, ningún arranque cierra su sesión: a Graph no le llega un paso ni una nota después de su finish.",
+            424 to "Dos arranques a la vez en el mismo proceso nunca reintentan el mismo cierre dos veces: mientras uno corre, el otro no llama a Graph ni toca el disco, y si el que corre se cancela, el siguiente arranque corre.",
+            425 to "Descartar una demostración que ya abrió sesión en Graph la borra allí con un solo DELETE en segundo plano: 2xx y 404 cuentan como hecho, otro fallo deja en el log solo el id y el status, sin sesión no se llama, y su cierre pendiente se borra antes, sin que ningún arranque la cierre después del DELETE.",
+            426 to "Procesar un video es una sola llamada por acción del usuario: ni un 5xx, ni un 429, ni una lectura agotada, ni el tope la repiten, y la lección cuyo video falla queda para reprocesar a mano, sin reintento al arrancar.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -114,7 +118,8 @@ class Contrato004LeccionEnGraph {
         fun ultimo(que: (String) -> Boolean) = eventos.indexOfLast(que)
     }
 
-    class Llamada(val metodo: String, val ruta: String, val body: String?) {
+    /** Una llamada como la vio el transporte; [timeout] es lo que le quedaba al tope de la llamada al salir. */
+    class Llamada(val metodo: String, val ruta: String, val body: String?, val timeout: Duration? = null) {
         val json: JsonObject get() = Json.parseToJsonElement(body ?: error("$metodo $ruta no llevó cuerpo")).jsonObject
         val esSesion get() = ruta == "/api/v1/learning/sessions"
         val esPaso get() = ruta.endsWith("/steps")
@@ -122,6 +127,8 @@ class Contrato004LeccionEnGraph {
         val esCierre get() = ruta.endsWith("/finish")
         /** `GET /api/v1/workflows/:id`: el arranque pregunta si Graph ya cerró la sesión (421). */
         val esWorkflow get() = metodo == "GET" && ruta.startsWith("/api/v1/workflows/")
+        /** `DELETE /api/v1/workflows/:id`: una demostración descartada se borra en Graph (425). */
+        val esBorrado get() = metodo == "DELETE"
         val selector: String get() = json["selector"]!!.jsonPrimitive.content
         override fun toString() = "$metodo $ruta"
     }
@@ -140,7 +147,7 @@ class Contrato004LeccionEnGraph {
         override suspend fun post(url: String, body: String, headers: Map<String, String>) = send("POST", url, body, headers)
 
         override suspend fun send(method: String, url: String, body: String?, headers: Map<String, String>, timeout: Duration?): TransportReply {
-            val llamada = Llamada(method, url.removePrefix(BASE), body)
+            val llamada = Llamada(method, url.removePrefix(BASE), body, timeout)
             llamadas += llamada
             cronica += "red $llamada"
             enVuelo++
@@ -195,7 +202,7 @@ class Contrato004LeccionEnGraph {
      * workflow (`registerPublicApiRoutes.js:459-465`); un paso o una nota se guardan TAMBIÉN sobre una sesión ya cerrada
      * (`LearningSessionService.js:40-49`, `WorkflowLearner.js:49-67`); `finish` responde 200, la deja `done` y post-procesa con el
      * LLM CADA vez, aunque ya estuviera cerrada (`WorkflowLearner.js:69-121`, `Neo4jWorkflowRepository.js:605`), y [cobros] lo
-     * cuenta; lo que no existe es 404 (`WorkflowLearner.js:23-36`). [llegadas] es lo que le llegó, en orden, por cualquier transporte.
+     * cuenta; `DELETE` la borra (`WorkflowCatalog.js:267-276`); lo que no existe es 404 (`WorkflowLearner.js:23-36`). [llegadas] es lo que le llegó, en orden, por cualquier transporte.
      */
     class GraphDeVerdad(ids: List<String> = listOf("ses-1")) {
         private val porAbrir = ArrayDeque(ids)
@@ -206,6 +213,8 @@ class Contrato004LeccionEnGraph {
         fun abierta(id: String) { estados[id] = "recording" }
         fun cerrada(id: String) { estados[id] = "done"; cobrado[id] = cobros(id) + 1 }
         fun cobros(id: String) = cobrado[id] ?: 0
+        /** ¿Sigue en Graph? Lo que se borra deja de salir en `GET /workflows` y de llegarle al cerebro. */
+        fun existe(id: String) = id in estados
 
         fun responder(l: Llamada): TransportReply {
             llegadas += l.toString()
@@ -217,6 +226,8 @@ class Contrato004LeccionEnGraph {
                 l.esNota -> TransportReply(201, """{"ok":true}""")
                 l.esCierre -> { cerrada(id); TransportReply(200, """{"workflow_id":"$id","summary":"registra pacientes","workflow":${workflowDeGraph(id, "done")}}""") }
                 l.esWorkflow -> TransportReply(200, """{"workflow":${workflowDeGraph(id, estados.getValue(id))}}""")
+                // `DELETE /workflows/:id` borra el workflow con sus pasos (`Neo4jWorkflowRepository.js:735-749`): lo que llegue después es 404.
+                l.esBorrado -> { estados.remove(id); TransportReply(200, """{"deleted":true,"id":"$id"}""") }
                 else -> error("ruta no prevista: $l")
             }
         }
@@ -231,6 +242,7 @@ class Contrato004LeccionEnGraph {
         l.esNota -> ok("{}")
         l.esCierre -> ok("""{"workflow_id":"wf-$sesion","summary":"registra pacientes"}""")
         l.esWorkflow -> ok("""{"workflow":${workflowDeGraph(l.ruta.substringAfterLast('/'), "recording")}}""")
+        l.esBorrado -> ok("""{"deleted":true,"id":"${l.ruta.substringAfterLast('/')}"}""")
         else -> error("ruta no prevista: $l")
     }
 
@@ -706,6 +718,24 @@ class Contrato004LeccionEnGraph {
             assertEquals(listOf("ses-t1", "ses-t2", "ses-t3"), sesionesDe(t), "$p · al arrancar no hubo tope de tiempo")
             assertEquals(7, r.siguen, p)
         }
+        // La consulta de si Graph ya la cerró (421) también gasta el tope: tiene el suyo, corto, y pasado el tope del arranque el cierre
+        // ya no empieza. Cada consulta tarda 15 s y cada cierre 40 s: la tercera consulta acaba a los 125 s y su cierre queda para el siguiente.
+        run {
+            val disco = sietePendientes()
+            val reloj = TestTimeSource()
+            val t = TransporteDeRutas(Cronica()) { l ->
+                if (l.esWorkflow) { reloj += 15.seconds; sano(l) } else { reloj += 40.seconds; vercel }
+            }
+            val r = leccion(t, disco, reloj = reloj).reintentarPendientes()
+            val consultas = t.llamadas.filter { it.esWorkflow }
+            assertEquals(listOf("wf-t1", "wf-t2", "wf-t3"), consultas.map { it.ruta.substringAfterLast('/') }, "$p · con consultas que tardan: ${t.llamadas}")
+            assertEquals(listOf("ses-t1", "ses-t2"), sesionesDe(t), "$p · la consulta no contó en el tope del arranque: un cierre empezó pasados ${Leccion.TOPE_DE_ARRANQUE}")
+            assertEquals(Triple(0, 7, 0), Triple(r.cerrados, r.siguen, r.descartados), "$p · con consultas que tardan: cerrados, siguen y descartados")
+            assertEquals(7, disco.en(Leccion.CARPETA_PENDIENTES).size, "$p · un pendiente sin cerrar se borró")
+            // Y su tope es el corto, no los 90 s de una llamada: una consulta colgada no se come el arranque.
+            assertTrue(LearningClient.TOPE_DE_CONSULTA < LearningClient.TOPE_GENERAL, p)
+            assertEquals(consultas.map { LearningClient.TOPE_DE_CONSULTA }, consultas.map { it.timeout }, "$p · la consulta no viajó con su tope corto")
+        }
     }
 
     @Test
@@ -745,25 +775,30 @@ class Contrato004LeccionEnGraph {
             assertFalse(r.videoParaReprocesar, p)
             assertTrue(almacen.en(Leccion.CARPETA_VIDEOS).isEmpty(), "$p · un video procesado quedó para reprocesar")
         }
-        // Descartada con un paso en vuelo, dos en cola y una nota: no sale nada más.
+        // Descartada con un paso en vuelo, dos en cola y una nota: no sale nada más que el borrado de la sesión (425). El scope interno
+        // espera al lector y a ese borrado, que corre en segundo plano.
+        val borrado = "DELETE /api/v1/workflows/wf-ses-1"
         run {
             val cronica = Cronica()
             val enVuelo = CompletableDeferred<Unit>()
             val t = TransporteDeRutas(cronica) { l -> if (l.esPaso) { enVuelo.complete(Unit); awaitCancellation() } else sano(l) }
             val almacen = AlmacenEnMemoria(cronica)
-            val l = leccion(t, almacen)
-            l.empezar(registro, "Registrar paciente")
-            for (n in 1..3) l.pasoObservado(paso(n))
-            l.nota("me equivoqué de pantalla")
-            enVuelo.await()
-            assertTrue(l.descartar(), "$p · descartar mientras se graba no dijo que descartó")
             val publicado = listOf("POST /api/v1/learning/sessions", "POST /api/v1/learning/sessions/ses-1/steps")
-            assertEquals(publicado, t.llamadas.map { it.toString() }, "$p · descartada, siguió publicando")
-            assertFalse(l.pasoObservado(paso(4)), "$p · descartada, aceptó un paso")
-            l.nota("y otra cosa")
-            lanzaExacto<IllegalStateException>("$p · terminar una demostración descartada") { l.terminar(listo) { cronica += "video"; null } }
-            assertTrue(l.descartar(), "$p · descartar dos veces: dejó de estar descartada")
-            assertEquals(publicado, t.llamadas.map { it.toString() }, "$p · después de descartar, algo salió")
+            fun publicadas() = t.llamadas.filterNot { it.esBorrado }.map { it.toString() }
+            coroutineScope {
+                val l = leccion(t, almacen)
+                l.empezar(registro, "Registrar paciente")
+                for (n in 1..3) l.pasoObservado(paso(n))
+                l.nota("me equivoqué de pantalla")
+                enVuelo.await()
+                assertTrue(l.descartar(), "$p · descartar mientras se graba no dijo que descartó")
+                assertEquals(publicado, publicadas(), "$p · descartada, siguió publicando")
+                assertFalse(l.pasoObservado(paso(4)), "$p · descartada, aceptó un paso")
+                l.nota("y otra cosa")
+                lanzaExacto<IllegalStateException>("$p · terminar una demostración descartada") { l.terminar(listo) { cronica += "video"; null } }
+                assertTrue(l.descartar(), "$p · descartar dos veces: dejó de estar descartada")
+            }
+            assertEquals(publicado + borrado, t.llamadas.map { it.toString() }, "$p · después de descartar, algo salió")
             assertTrue(almacen.escrituras.isEmpty(), "$p · descartada, escribió en disco: ${almacen.escrituras}")
             assertFalse("video" in cronica.eventos, "$p · descartada, procesó el video")
         }
@@ -772,12 +807,14 @@ class Contrato004LeccionEnGraph {
             val cronica = Cronica()
             val t = TransporteDeRutas(cronica) { sano(it) }
             val almacen = AlmacenEnMemoria(cronica)
-            val l = leccion(t, almacen)
-            l.empezar(registro, "Registrar paciente")
-            l.pasoObservado(paso(1))
-            l.pasoObservado(paso(2))
-            assertTrue(l.descartar(), p)
-            assertEquals(listOf("POST /api/v1/learning/sessions"), t.llamadas.map { it.toString() }, "$p · descartada antes de mandar, mandó")
+            coroutineScope {
+                val l = leccion(t, almacen)
+                l.empezar(registro, "Registrar paciente")
+                l.pasoObservado(paso(1))
+                l.pasoObservado(paso(2))
+                assertTrue(l.descartar(), p)
+            }
+            assertEquals(listOf("POST /api/v1/learning/sessions", borrado), t.llamadas.map { it.toString() }, "$p · descartada antes de mandar, mandó")
             assertTrue(almacen.escrituras.isEmpty(), "$p · descartada, escribió en disco: ${almacen.escrituras}")
         }
         // Descartar mientras se cierra no descarta: dice que no, y el cierre sigue entero, con el paso que estaba en vuelo.
@@ -1208,6 +1245,18 @@ class Contrato004LeccionEnGraph {
             assertEquals(listOf(consulta), t.llamadas.map { it.toString() }, "$p · con completedAt, el arranque volvió a cerrarla")
             assertEquals(1, r.cerrados, p)
         }
+        // Y basta `status` `done`, aunque `completedAt` llegue nulo o no llegue: tampoco se vuelve a cerrar.
+        for ((caso, cuerpo) in listOf(
+            "completedAt nulo" to workflowDeGraph("ses-1", "done", completado = false),
+            "sin completedAt" to workflowDeGraph("ses-1", "done", completado = false).replace("\"completedAt\":null,", ""),
+        )) {
+            assertTrue(("\"completedAt\":null" in cuerpo) == (caso == "completedAt nulo") && "\"status\":\"done\"" in cuerpo, "$p · el caso «$caso» no es el que dice")
+            val disco = conPendiente()
+            val t = TransporteDeRutas(Cronica()) { l -> if (l.esWorkflow) ok("""{"workflow":$cuerpo}""") else sano(l) }
+            val r = leccion(t, disco).reintentarPendientes()
+            assertEquals(listOf(consulta), t.llamadas.map { it.toString() }, "$p · con status done y $caso, el arranque volvió a cerrarla")
+            assertEquals(Triple(1, 0, 0), Triple(r.cerrados, r.siguen, r.descartados), "$p · con status done y $caso: cerrados, siguen y descartados")
+        }
         // Graph la tiene abierta (el cierre no salió): el GET y un finish, con un solo cobro.
         run {
             val graph = GraphDeVerdad().apply { abierta("ses-1") }
@@ -1276,6 +1325,271 @@ class Contrato004LeccionEnGraph {
             assertEquals(Cierre.PENDIENTE, l.terminar(listo, sinVideo).cierre, p)
             val arranque = TransporteDeRutas(Cronica()) { sano(it) }
             assertEquals(1, leccion(arranque, almacen).reintentarPendientes().cerrados, "$p · terminada la lección, el arranque no cerró lo que dejó pendiente: ${arranque.llamadas}")
+        }
+    }
+
+    @Test
+    fun promesa424() = demo(promesa(424)) {
+        val p = promesa(424)
+        val ses1 = Leccion.ruta(Leccion.CARPETA_PENDIENTES, "ses-1")
+        suspend fun conPendiente(cronica: Cronica = Cronica()) = AlmacenEnMemoria(cronica).apply {
+            escribirEntero(ses1, LeccionJson.encodeToString(CierrePendiente.serializer(), CierrePendiente("ses-1", "ses-1", AHORA)))
+        }
+        val consulta = "GET /api/v1/workflows/ses-1"
+        val cierre = "POST /api/v1/learning/sessions/ses-1/finish"
+
+        // La app vuelve al frente dos veces: dos arranques sobre el mismo pendiente, con el finish del primero tardando. Sin exclusión, los
+        // dos GET ven `recording`, los dos mandan finish y Graph cobra el post-procesado dos veces (`WorkflowLearner.js:69-121`).
+        run {
+            val graph = GraphDeVerdad().apply { abierta("ses-1") }
+            val cronica = Cronica()
+            val disco = conPendiente(cronica)
+            val enVuelo = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            val lento = TransporteDeRutas(Cronica()) { l ->
+                if (l.esCierre && !enVuelo.isCompleted) { enVuelo.complete(Unit); soltar.await() }
+                graph.responder(l)
+            }
+            val primero = async { leccion(lento, disco).reintentarPendientes() }
+            enVuelo.await()
+            val discoAntes = cronica.eventos.toList()
+            val otro = TransporteDeRutas(Cronica()) { graph.responder(it) }
+            val lineas = mutableListOf<String>()
+            val segundo = leccion(otro, disco, lineas = lineas).reintentarPendientes()
+            assertTrue(otro.llamadas.isEmpty(), "$p · con un arranque en curso, otro llamó a Graph: ${otro.llamadas}")
+            assertEquals(discoAntes, cronica.eventos, "$p · con un arranque en curso, otro tocó el disco")
+            assertTrue(segundo.otroArranqueEnCurso, "$p · el segundo arranque no dice que había otro en curso")
+            assertEquals(Triple(0, 0, 0), Triple(segundo.cerrados, segundo.siguen, segundo.descartados), "$p · el segundo arranque: cerrados, siguen y descartados")
+            assertTrue(lineas.any { "en curso" in it }, "$p · el log no dice por qué el segundo arranque no hizo nada: $lineas")
+            soltar.complete(Unit)
+            val r = primero.await()
+            assertEquals(listOf(consulta, cierre), lento.llamadas.map { it.toString() }, p)
+            assertEquals(1, graph.llegadas.count { it == cierre }, "$p · dos arranques a la vez mandaron más de un finish: ${graph.llegadas}")
+            assertEquals(1, graph.cobros("ses-1"), "$p · Graph cobró el post-procesado más de una vez: ${graph.llegadas}")
+            assertEquals(Triple(1, 0, 0), Triple(r.cerrados, r.siguen, r.descartados), "$p · el arranque que corría: cerrados, siguen y descartados")
+            assertFalse(r.otroArranqueEnCurso, p)
+            assertTrue(disco.en(Leccion.CARPETA_PENDIENTES).isEmpty(), "$p · el pendiente cerrado se quedó: ${disco.archivos.keys}")
+            // Terminado, el siguiente arranque corre: ya no hay pendientes y no llama a nadie.
+            val siguiente = TransporteDeRutas(Cronica()) { graph.responder(it) }
+            assertFalse(leccion(siguiente, disco).reintentarPendientes().otroArranqueEnCurso, "$p · terminado el arranque, el candado quedó tomado")
+            assertTrue(siguiente.llamadas.isEmpty(), "$p · sin pendientes, el siguiente arranque llamó: ${siguiente.llamadas}")
+        }
+        // El que corre se cancela con su finish colgado: el candado se suelta, y el siguiente arranque pregunta y cierra.
+        run {
+            val graph = GraphDeVerdad().apply { abierta("ses-1") }
+            val disco = conPendiente()
+            val enVuelo = CompletableDeferred<Unit>()
+            val colgado = TransporteDeRutas(Cronica()) { l -> if (l.esCierre) { enVuelo.complete(Unit); awaitCancellation() } else graph.responder(l) }
+            val primero = launch { leccion(colgado, disco).reintentarPendientes() }
+            enVuelo.await()
+            primero.cancelAndJoin()
+            assertTrue(primero.isCancelled, "$p · el arranque cancelado no salió cancelado")
+            assertTrue(ses1 in disco.archivos, "$p · el arranque cancelado borró el pendiente: ${disco.archivos.keys}")
+            val t = TransporteDeRutas(Cronica()) { graph.responder(it) }
+            val r = leccion(t, disco).reintentarPendientes()
+            assertFalse(r.otroArranqueEnCurso, "$p · cancelado el arranque que corría, el candado quedó tomado y el siguiente no corrió")
+            assertEquals(listOf(consulta, cierre), t.llamadas.map { it.toString() }, "$p · cancelado el que corría, el siguiente no cerró")
+            assertEquals(Triple(1, 0, 0) to 1, Triple(r.cerrados, r.siguen, r.descartados) to graph.cobros("ses-1"), "$p · cancelado el que corría: el siguiente y los cobros")
+        }
+    }
+
+    @Test
+    fun promesa425() = demo(promesa(425)) {
+        val p = promesa(425)
+        val descripcion = "Registrar a Ana Pérez CC 1037"
+        val borrado = "DELETE /api/v1/workflows/ses-1"
+        val pendiente = Leccion.ruta(Leccion.CARPETA_PENDIENTES, "ses-1")
+        suspend fun AlmacenEnMemoria.conPendiente() = apply {
+            escribirEntero(pendiente, LeccionJson.encodeToString(CierrePendiente.serializer(), CierrePendiente("ses-1", "ses-1", AHORA)))
+        }
+        /** Lo que el log no puede llevar: la descripción, ni el texto con que Graph la repite (419). */
+        fun conDatos(lineas: List<String>) = lineas.filter { l -> listOf("Ana", "Pérez", "1037", "Registrar").any { it in l } }
+
+        // Grabando, con la sesión abierta en Graph —que ya la lista y se la da al cerebro—: descartar vuelve sin esperar al DELETE, y un
+        // solo DELETE la borra.
+        run {
+            val graph = GraphDeVerdad()
+            val lineas = mutableListOf<String>()
+            val esperas = mutableListOf<Long>()
+            val soltar = CompletableDeferred<Unit>()
+            val t = TransporteDeRutas(Cronica()) { l -> if (l.esBorrado) soltar.await(); graph.responder(l) }
+            coroutineScope {
+                val l = leccion(t, AlmacenEnMemoria(Cronica()), esperas = esperas, lineas = lineas)
+                assertIs<Arranque.Ensenando>(l.empezar(registro, descripcion), p)
+                assertEquals(true, withTimeoutOrNull(2.seconds) { l.descartar() }, "$p · descartar esperó al DELETE: bloquea a quien descarta")
+                soltar.complete(Unit)
+            }
+            assertEquals(listOf("POST /api/v1/learning/sessions", borrado), t.llamadas.map { it.toString() }, "$p · descartada con la sesión abierta en Graph")
+            assertTrue(esperas.isEmpty(), "$p · el DELETE esperó para reintentar: $esperas")
+            assertFalse(graph.existe("ses-1"), "$p · descartada, la sesión sigue en Graph: ${graph.llegadas}")
+            assertEquals(0, graph.cobros("ses-1"), p)
+            assertTrue(lineas.any { "ses-1" in it && "ya no está en graph" in it }, "$p · el log no dice que la borró: $lineas")
+            assertEquals(emptyList(), conDatos(lineas), "$p · el log llevó la descripción")
+        }
+        // 404 cuenta como hecho. Cualquier otro fallo: un solo intento, y en el log el id y el status, sin lo que Graph repitió.
+        for ((caso, respuesta) in listOf(
+            "HTTP 404" to TransportReply(404, """{"error":"Workflow not found: $descripcion"}"""),
+            "HTTP 500" to TransportReply(500, """{"error":"no se pudo borrar «$descripcion»"}"""),
+            "HTTP 503" to TransportReply(503, """{"error":"Ana Pérez"}"""),
+            "HTTP 429" to TransportReply(429, """{"error":"Ana Pérez"}""", retryAfterSeconds = 2),
+            "HTTP -1" to TransportReply(-1, "Read timed out borrando a Ana Pérez"),
+            "HTTP 0" to null,
+        )) {
+            val lineas = mutableListOf<String>()
+            val esperas = mutableListOf<Long>()
+            val t = TransporteDeRutas(Cronica()) { l -> if (l.esBorrado) respuesta ?: throw IllegalStateException("sin red borrando a Ana Pérez") else sano(l) }
+            coroutineScope {
+                val l = leccion(t, AlmacenEnMemoria(Cronica()), esperas = esperas, lineas = lineas)
+                assertIs<Arranque.Ensenando>(l.empezar(registro, descripcion), "$p · $caso")
+                assertTrue(l.descartar(), "$p · $caso")
+            }
+            assertEquals(listOf("DELETE /api/v1/workflows/wf-ses-1"), t.llamadas.filter { it.esBorrado }.map { it.toString() }, "$p · $caso: el DELETE no fue uno solo")
+            assertTrue(esperas.isEmpty(), "$p · $caso: se esperó para reintentar el DELETE: $esperas")
+            if (caso == "HTTP 404") {
+                assertTrue(lineas.any { "ses-1" in it && "ya no está en graph" in it }, "$p · 404 no contó como hecho: $lineas")
+                assertTrue(lineas.none { "no se borró" in it }, "$p · 404 contó como fallo: $lineas")
+            } else {
+                assertTrue(lineas.any { "ses-1" in it && "no se borró" in it && caso in it }, "$p · $caso: el log no dice el id y el status: $lineas")
+            }
+            assertEquals(emptyList(), conDatos(lineas), "$p · $caso: el log llevó la descripción o lo que Graph repitió")
+        }
+        // Sin sesión en Graph no se llama: sin empezar, o con Graph que no la abrió.
+        run {
+            val t = TransporteDeRutas(Cronica()) { l -> if (l.esSesion) TransportReply(401, """{"error":"invalid api key"}""") else sano(l) }
+            coroutineScope {
+                val l = leccion(t, AlmacenEnMemoria(Cronica()))
+                assertFalse(l.descartar(), "$p · sin empezar dijo que descartó")
+                assertIs<Arranque.NoSePuede>(l.empezar(registro, descripcion), p)
+                assertFalse(l.descartar(), "$p · sin sesión dijo que descartó")
+            }
+            assertEquals(listOf("POST /api/v1/learning/sessions"), t.llamadas.map { it.toString() }, "$p · sin sesión en Graph, descartar llamó")
+        }
+        // Descartada mientras Graph abría: la sesión existe allá, y en cuanto llega su id se borra.
+        run {
+            val graph = GraphDeVerdad()
+            val abriendo = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            val t = TransporteDeRutas(Cronica()) { l -> if (l.esSesion) { abriendo.complete(Unit); soltar.await() }; graph.responder(l) }
+            coroutineScope {
+                val l = leccion(t, AlmacenEnMemoria(Cronica()))
+                val empezando = async { l.empezar(registro, descripcion) }
+                abriendo.await()
+                assertTrue(l.descartar(), p)
+                soltar.complete(Unit)
+                assertIs<Arranque.NoSePuede>(empezando.await(), p)
+            }
+            assertEquals(listOf("POST /api/v1/learning/sessions", borrado), t.llamadas.map { it.toString() }, "$p · descartada mientras Graph abría, la sesión quedó en Graph")
+            assertFalse(graph.existe("ses-1"), p)
+        }
+        // Con un cierre pendiente de esa sesión en disco: se borra ANTES del DELETE, y el arranque siguiente no la toca.
+        run {
+            val graph = GraphDeVerdad()
+            val cronica = Cronica()
+            val almacen = AlmacenEnMemoria(cronica)
+            coroutineScope {
+                val l = leccion(TransporteDeRutas(cronica) { graph.responder(it) }, almacen)
+                assertIs<Arranque.Ensenando>(l.empezar(registro, descripcion), p)
+                almacen.conPendiente()
+                assertTrue(l.descartar(), p)
+            }
+            val borraPendiente = cronica.primero { it == "disco borra $pendiente" }
+            assertTrue(borraPendiente in 0 until cronica.primero { it == "red $borrado" }, "$p · el pendiente no se borró antes del DELETE: ${cronica.eventos}")
+            val arranque = TransporteDeRutas(Cronica()) { graph.responder(it) }
+            leccion(arranque, almacen).reintentarPendientes()
+            assertTrue(arranque.llamadas.isEmpty(), "$p · descartada, un arranque volvió a tocar la sesión: ${arranque.llamadas}")
+        }
+        // Un arranque está cerrando esa sesión cuando se descarta (422, 424): el DELETE espera a que termine, y a Graph no le llega nada
+        // de la sesión después del DELETE.
+        run {
+            val graph = GraphDeVerdad()
+            val cronica = Cronica()
+            val almacen = AlmacenEnMemoria(cronica)
+            val enVuelo = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            coroutineScope {
+                val l = leccion(TransporteDeRutas(cronica) { graph.responder(it) }, almacen)
+                assertIs<Arranque.Ensenando>(l.empezar(registro, descripcion), p)
+                almacen.conPendiente()
+                val lento = TransporteDeRutas(cronica) { c -> if (c.esCierre) { enVuelo.complete(Unit); soltar.await() }; graph.responder(c) }
+                val arranque = async { leccion(lento, almacen).reintentarPendientes() }
+                enVuelo.await()
+                assertTrue(l.descartar(), p)
+                repeat(20) { yield() } // lo que no espere al arranque tiene aquí tiempo de salir
+                soltar.complete(Unit)
+                arranque.await()
+            }
+            val deLaSesion = graph.llegadas.filter { "/ses-1" in it }
+            val delete = deLaSesion.indexOf(borrado)
+            assertTrue(delete >= 0 && deLaSesion.drop(delete + 1).isEmpty(), "$p · a Graph le llegó algo de la sesión después del DELETE: $deLaSesion")
+            assertFalse(graph.existe("ses-1"), p)
+            assertTrue(almacen.en(Leccion.CARPETA_PENDIENTES).isEmpty(), "$p · quedó el pendiente de una sesión borrada: ${almacen.archivos.keys}")
+        }
+    }
+
+    @Test
+    fun promesa426() = demo(promesa(426)) {
+        val p = promesa(426)
+        val video = "POST /api/v1/teach/process-video"
+        fun cliente(t: TurnTransport, esperas: MutableList<Long>, topeTeach: Duration = LearningClient.TOPE_TEACH) = LearningClient(
+            transport = t, credentials = { "miracle_k" }, baseUrl = { "$BASE/" }, email = { null }, deviceId = { "dev-1" },
+            sleep = { esperas += it }, topeTeach = topeTeach,
+        )
+        // Graph ya reintenta 5 veces contra Gemini y cada intento es consumo (`GeminiVideoClient.js:260-300`): el cliente llama UNA vez.
+        val fallos = listOf(500, 502, 503, 504, 408, 0).map { TransportReply(it, """{"error":"Gemini: saturado"}""") } +
+            TransportReply(429, """{"error":"Gemini: sin cupo"}""", retryAfterSeconds = 4) + TransportReply(-1, "Read timed out")
+        for (respuesta in fallos) {
+            val caso = "HTTP ${respuesta.status}"
+            val esperas = mutableListOf<Long>()
+            val t = TransporteDeRutas(Cronica()) { respuesta }
+            val e = lanzaExacto<GraphException>("$p · $caso") { cliente(t, esperas).processVideo("files/demo", "u-1") }
+            assertEquals(listOf(video), t.llamadas.map { it.toString() }, "$p · $caso: process-video se repitió")
+            assertTrue(esperas.isEmpty(), "$p · $caso: se esperó para reintentar process-video: $esperas")
+            assertEquals(respuesta.status, e.status, "$p · $caso")
+        }
+        // Colgada: su tope la corta como lectura agotada, y no se repite.
+        run {
+            val esperas = mutableListOf<Long>()
+            val t = TransporteDeRutas(Cronica()) { awaitCancellation() }
+            val e = lanzaExacto<GraphException>("$p · colgada") {
+                withTimeout(3.seconds) { cliente(t, esperas, topeTeach = 200.milliseconds).processVideo("files/demo", "u-1") }
+            }
+            assertEquals(listOf(video), t.llamadas.map { it.toString() }, "$p · colgada: process-video se repitió")
+            assertEquals(TransportReply.TIMED_OUT, e.status, "$p · colgada: ${e.message}")
+        }
+        // upload-token y file-state siguen con los reintentos del cerebro (403).
+        for ((ruta, llamada) in listOf<Pair<String, suspend (LearningClient) -> Unit>>(
+            "upload-token" to { it.uploadToken(10, "u-1") },
+            "file-state" to { it.fileState("files/demo") },
+        )) {
+            val esperas = mutableListOf<Long>()
+            var primera = true
+            val guion = TransporteDeRutas(Cronica()) {
+                if (primera) { primera = false; TransportReply(503, "") } else ok("""{"geminiUploadUrl":"https://upload.test/x","state":"ACTIVE"}""")
+            }
+            llamada(cliente(guion, esperas))
+            assertEquals(2, guion.llamadas.size, "$p · $ruta dejó de reintentar: ${guion.llamadas}")
+            assertEquals(listOf(800L), esperas, "$p · $ruta")
+        }
+        // La lección cuyo video falla: una sola llamada, el video queda para reprocesar a mano y ningún arranque lo reintenta.
+        run {
+            val cronica = Cronica()
+            val almacen = AlmacenEnMemoria(cronica)
+            val t = TransporteDeRutas(cronica) { l -> if (l.ruta.endsWith("/process-video")) TransportReply(503, """{"error":"Gemini: saturado"}""") else sano(l) }
+            val esperas = mutableListOf<Long>()
+            val paraElVideo = cliente(t, esperas)
+            val l = leccion(t, almacen)
+            assertIs<Arranque.Ensenando>(l.empezar(registro, "Registrar paciente"), p)
+            l.pasoObservado(paso(1))
+            val r = l.terminar(listo) { paraElVideo.processVideo("files/demo", "u-1").let { ResumenDeVideo(it.summary, it.interpretation) } }
+            assertEquals(1, t.llamadas.count { it.toString() == video }, "$p · la lección repitió process-video: ${t.llamadas}")
+            assertTrue(esperas.isEmpty(), "$p · la lección esperó para reintentar el video: $esperas")
+            assertEquals(Cierre.CERRADA, r.cierre, p)
+            assertTrue(r.videoParaReprocesar, "$p · el video que falló no quedó para reprocesar")
+            assertEquals(1, almacen.en(Leccion.CARPETA_VIDEOS).size, "$p · no quedó la marca para reprocesar: ${almacen.archivos.keys}")
+            val arranque = TransporteDeRutas(Cronica()) { sano(it) }
+            leccion(arranque, almacen).reintentarPendientes()
+            assertTrue(arranque.llamadas.isEmpty(), "$p · al arrancar se reintentó algo: ${arranque.llamadas}")
+            assertEquals(1, almacen.en(Leccion.CARPETA_VIDEOS).size, "$p · al arrancar desapareció la marca para reprocesar a mano")
         }
     }
 }
