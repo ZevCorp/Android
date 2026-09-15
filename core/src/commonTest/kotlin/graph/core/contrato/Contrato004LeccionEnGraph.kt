@@ -50,7 +50,7 @@ import kotlin.time.Duration.Companion.seconds
 import kotlin.time.TestTimeSource
 
 /**
- * CONTRATO 004 · LA LECCIÓN (docs/specs/004-lo-ensenado-vive-en-graph.md, fase 4A2 y sus revisiones: 417-420).
+ * CONTRATO 004 · LA LECCIÓN (docs/specs/004-lo-ensenado-vive-en-graph.md, fase 4A2 y sus revisiones: 417-422 y 424).
  *
  * Cada `promesaNNN` es una fila de la tabla de la spec, con el enunciado literal en [PROMESAS]. Juzgan el
  * orquestador de una enseñanza con el [LearningClient] REAL encima de un transporte que responde por ruta y
@@ -75,6 +75,7 @@ class Contrato004LeccionEnGraph {
             420 to "Un cierre cancelado devuelve el control en un tiempo acotado, y si el proceso muere a mitad del cierre, al arrancar queda un pendiente que lo termina.",
             421 to "Antes de reintentar un cierre pendiente, el arranque pregunta a Graph si ya lo cerró: si lo cerró no vuelve a cerrarlo ni a cobrarlo, y si no se sabe lo intenta como siempre.",
             422 to "Mientras una lección se cierra, ningún arranque cierra su sesión: a Graph no le llega un paso ni una nota después de su finish.",
+            424 to "Dos arranques a la vez en el mismo proceso nunca reintentan el mismo cierre dos veces: mientras uno corre, el otro no llama a Graph ni toca el disco, y si el que corre se cancela, el siguiente arranque corre.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -114,7 +115,8 @@ class Contrato004LeccionEnGraph {
         fun ultimo(que: (String) -> Boolean) = eventos.indexOfLast(que)
     }
 
-    class Llamada(val metodo: String, val ruta: String, val body: String?) {
+    /** Una llamada como la vio el transporte; [timeout] es lo que le quedaba al tope de la llamada al salir. */
+    class Llamada(val metodo: String, val ruta: String, val body: String?, val timeout: Duration? = null) {
         val json: JsonObject get() = Json.parseToJsonElement(body ?: error("$metodo $ruta no llevó cuerpo")).jsonObject
         val esSesion get() = ruta == "/api/v1/learning/sessions"
         val esPaso get() = ruta.endsWith("/steps")
@@ -140,7 +142,7 @@ class Contrato004LeccionEnGraph {
         override suspend fun post(url: String, body: String, headers: Map<String, String>) = send("POST", url, body, headers)
 
         override suspend fun send(method: String, url: String, body: String?, headers: Map<String, String>, timeout: Duration?): TransportReply {
-            val llamada = Llamada(method, url.removePrefix(BASE), body)
+            val llamada = Llamada(method, url.removePrefix(BASE), body, timeout)
             llamadas += llamada
             cronica += "red $llamada"
             enVuelo++
@@ -706,6 +708,24 @@ class Contrato004LeccionEnGraph {
             assertEquals(listOf("ses-t1", "ses-t2", "ses-t3"), sesionesDe(t), "$p · al arrancar no hubo tope de tiempo")
             assertEquals(7, r.siguen, p)
         }
+        // La consulta de si Graph ya la cerró (421) también gasta el tope: tiene el suyo, corto, y pasado el tope del arranque el cierre
+        // ya no empieza. Cada consulta tarda 15 s y cada cierre 40 s: la tercera consulta acaba a los 125 s y su cierre queda para el siguiente.
+        run {
+            val disco = sietePendientes()
+            val reloj = TestTimeSource()
+            val t = TransporteDeRutas(Cronica()) { l ->
+                if (l.esWorkflow) { reloj += 15.seconds; sano(l) } else { reloj += 40.seconds; vercel }
+            }
+            val r = leccion(t, disco, reloj = reloj).reintentarPendientes()
+            val consultas = t.llamadas.filter { it.esWorkflow }
+            assertEquals(listOf("wf-t1", "wf-t2", "wf-t3"), consultas.map { it.ruta.substringAfterLast('/') }, "$p · con consultas que tardan: ${t.llamadas}")
+            assertEquals(listOf("ses-t1", "ses-t2"), sesionesDe(t), "$p · la consulta no contó en el tope del arranque: un cierre empezó pasados ${Leccion.TOPE_DE_ARRANQUE}")
+            assertEquals(Triple(0, 7, 0), Triple(r.cerrados, r.siguen, r.descartados), "$p · con consultas que tardan: cerrados, siguen y descartados")
+            assertEquals(7, disco.en(Leccion.CARPETA_PENDIENTES).size, "$p · un pendiente sin cerrar se borró")
+            // Y su tope es el corto, no los 90 s de una llamada: una consulta colgada no se come el arranque.
+            assertTrue(LearningClient.TOPE_DE_CONSULTA < LearningClient.TOPE_GENERAL, p)
+            assertEquals(consultas.map { LearningClient.TOPE_DE_CONSULTA }, consultas.map { it.timeout }, "$p · la consulta no viajó con su tope corto")
+        }
     }
 
     @Test
@@ -1208,6 +1228,18 @@ class Contrato004LeccionEnGraph {
             assertEquals(listOf(consulta), t.llamadas.map { it.toString() }, "$p · con completedAt, el arranque volvió a cerrarla")
             assertEquals(1, r.cerrados, p)
         }
+        // Y basta `status` `done`, aunque `completedAt` llegue nulo o no llegue: tampoco se vuelve a cerrar.
+        for ((caso, cuerpo) in listOf(
+            "completedAt nulo" to workflowDeGraph("ses-1", "done", completado = false),
+            "sin completedAt" to workflowDeGraph("ses-1", "done", completado = false).replace("\"completedAt\":null,", ""),
+        )) {
+            assertTrue(("\"completedAt\":null" in cuerpo) == (caso == "completedAt nulo") && "\"status\":\"done\"" in cuerpo, "$p · el caso «$caso» no es el que dice")
+            val disco = conPendiente()
+            val t = TransporteDeRutas(Cronica()) { l -> if (l.esWorkflow) ok("""{"workflow":$cuerpo}""") else sano(l) }
+            val r = leccion(t, disco).reintentarPendientes()
+            assertEquals(listOf(consulta), t.llamadas.map { it.toString() }, "$p · con status done y $caso, el arranque volvió a cerrarla")
+            assertEquals(Triple(1, 0, 0), Triple(r.cerrados, r.siguen, r.descartados), "$p · con status done y $caso: cerrados, siguen y descartados")
+        }
         // Graph la tiene abierta (el cierre no salió): el GET y un finish, con un solo cobro.
         run {
             val graph = GraphDeVerdad().apply { abierta("ses-1") }
@@ -1276,6 +1308,71 @@ class Contrato004LeccionEnGraph {
             assertEquals(Cierre.PENDIENTE, l.terminar(listo, sinVideo).cierre, p)
             val arranque = TransporteDeRutas(Cronica()) { sano(it) }
             assertEquals(1, leccion(arranque, almacen).reintentarPendientes().cerrados, "$p · terminada la lección, el arranque no cerró lo que dejó pendiente: ${arranque.llamadas}")
+        }
+    }
+
+    @Test
+    fun promesa424() = demo(promesa(424)) {
+        val p = promesa(424)
+        val ses1 = Leccion.ruta(Leccion.CARPETA_PENDIENTES, "ses-1")
+        suspend fun conPendiente(cronica: Cronica = Cronica()) = AlmacenEnMemoria(cronica).apply {
+            escribirEntero(ses1, LeccionJson.encodeToString(CierrePendiente.serializer(), CierrePendiente("ses-1", "ses-1", AHORA)))
+        }
+        val consulta = "GET /api/v1/workflows/ses-1"
+        val cierre = "POST /api/v1/learning/sessions/ses-1/finish"
+
+        // La app vuelve al frente dos veces: dos arranques sobre el mismo pendiente, con el finish del primero tardando. Sin exclusión, los
+        // dos GET ven `recording`, los dos mandan finish y Graph cobra el post-procesado dos veces (`WorkflowLearner.js:69-121`).
+        run {
+            val graph = GraphDeVerdad().apply { abierta("ses-1") }
+            val cronica = Cronica()
+            val disco = conPendiente(cronica)
+            val enVuelo = CompletableDeferred<Unit>()
+            val soltar = CompletableDeferred<Unit>()
+            val lento = TransporteDeRutas(Cronica()) { l ->
+                if (l.esCierre && !enVuelo.isCompleted) { enVuelo.complete(Unit); soltar.await() }
+                graph.responder(l)
+            }
+            val primero = async { leccion(lento, disco).reintentarPendientes() }
+            enVuelo.await()
+            val discoAntes = cronica.eventos.toList()
+            val otro = TransporteDeRutas(Cronica()) { graph.responder(it) }
+            val lineas = mutableListOf<String>()
+            val segundo = leccion(otro, disco, lineas = lineas).reintentarPendientes()
+            assertTrue(otro.llamadas.isEmpty(), "$p · con un arranque en curso, otro llamó a Graph: ${otro.llamadas}")
+            assertEquals(discoAntes, cronica.eventos, "$p · con un arranque en curso, otro tocó el disco")
+            assertTrue(segundo.otroArranqueEnCurso, "$p · el segundo arranque no dice que había otro en curso")
+            assertEquals(Triple(0, 0, 0), Triple(segundo.cerrados, segundo.siguen, segundo.descartados), "$p · el segundo arranque: cerrados, siguen y descartados")
+            assertTrue(lineas.any { "en curso" in it }, "$p · el log no dice por qué el segundo arranque no hizo nada: $lineas")
+            soltar.complete(Unit)
+            val r = primero.await()
+            assertEquals(listOf(consulta, cierre), lento.llamadas.map { it.toString() }, p)
+            assertEquals(1, graph.llegadas.count { it == cierre }, "$p · dos arranques a la vez mandaron más de un finish: ${graph.llegadas}")
+            assertEquals(1, graph.cobros("ses-1"), "$p · Graph cobró el post-procesado más de una vez: ${graph.llegadas}")
+            assertEquals(Triple(1, 0, 0), Triple(r.cerrados, r.siguen, r.descartados), "$p · el arranque que corría: cerrados, siguen y descartados")
+            assertFalse(r.otroArranqueEnCurso, p)
+            assertTrue(disco.en(Leccion.CARPETA_PENDIENTES).isEmpty(), "$p · el pendiente cerrado se quedó: ${disco.archivos.keys}")
+            // Terminado, el siguiente arranque corre: ya no hay pendientes y no llama a nadie.
+            val siguiente = TransporteDeRutas(Cronica()) { graph.responder(it) }
+            assertFalse(leccion(siguiente, disco).reintentarPendientes().otroArranqueEnCurso, "$p · terminado el arranque, el candado quedó tomado")
+            assertTrue(siguiente.llamadas.isEmpty(), "$p · sin pendientes, el siguiente arranque llamó: ${siguiente.llamadas}")
+        }
+        // El que corre se cancela con su finish colgado: el candado se suelta, y el siguiente arranque pregunta y cierra.
+        run {
+            val graph = GraphDeVerdad().apply { abierta("ses-1") }
+            val disco = conPendiente()
+            val enVuelo = CompletableDeferred<Unit>()
+            val colgado = TransporteDeRutas(Cronica()) { l -> if (l.esCierre) { enVuelo.complete(Unit); awaitCancellation() } else graph.responder(l) }
+            val primero = launch { leccion(colgado, disco).reintentarPendientes() }
+            enVuelo.await()
+            primero.cancelAndJoin()
+            assertTrue(primero.isCancelled, "$p · el arranque cancelado no salió cancelado")
+            assertTrue(ses1 in disco.archivos, "$p · el arranque cancelado borró el pendiente: ${disco.archivos.keys}")
+            val t = TransporteDeRutas(Cronica()) { graph.responder(it) }
+            val r = leccion(t, disco).reintentarPendientes()
+            assertFalse(r.otroArranqueEnCurso, "$p · cancelado el arranque que corría, el candado quedó tomado y el siguiente no corrió")
+            assertEquals(listOf(consulta, cierre), t.llamadas.map { it.toString() }, "$p · cancelado el que corría, el siguiente no cerró")
+            assertEquals(Triple(1, 0, 0) to 1, Triple(r.cerrados, r.siguen, r.descartados) to graph.cobros("ses-1"), "$p · cancelado el que corría: el siguiente y los cobros")
         }
     }
 }

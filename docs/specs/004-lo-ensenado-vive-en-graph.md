@@ -80,6 +80,7 @@ otro en el mismo commit.
 | 421 | Antes de reintentar un cierre pendiente, el arranque pregunta a Graph si ya lo cerró: si lo cerró no vuelve a cerrarlo ni a cobrarlo, y si no se sabe lo intenta como siempre. | 4A2 · Graph |
 | 422 | Mientras una lección se cierra, ningún arranque cierra su sesión: a Graph no le llega un paso ni una nota después de su finish. | 4A2 · Graph |
 | 423 | Lo que Graph responde de verdad se lee sin romperse: el workflow con sus variables en lista y sus fechas Neo4j, el plan con su eco y su contexto de ramas, y la alineación dice en el log si ya estaba o se aprendió. | 4A1 · Graph |
+| 424 | Dos arranques a la vez en el mismo proceso nunca reintentan el mismo cierre dos veces: mientras uno corre, el otro no llama a Graph ni toca el disco, y si el que corre se cancela, el siguiente arranque corre. | 4A2 · control |
 
 **La que cierra el asunto es la 401.** Si el protocolo no es el de Windows, Graph recibe algo que
 acepta con HTTP 200 y descarta en silencio (un `actionType` que no conoce, unos `alternativeTargets`

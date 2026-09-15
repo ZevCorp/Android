@@ -142,7 +142,13 @@ class ResultadoDeLeccion(
  * Lo que dejó [Leccion.reintentarPendientes]. [siguen]: los que no salieron y los que el tope dejó para el arranque siguiente.
  * [descartados]: Graph ya no los conoce o pudo haberlos cerrado.
  */
-class PendientesReintentados(val cerrados: Int, val siguen: Int, val descartados: Int)
+class PendientesReintentados(
+    val cerrados: Int,
+    val siguen: Int,
+    val descartados: Int,
+    /** Otro arranque de este proceso ya estaba reintentando los pendientes: este no llamó a Graph ni tocó el disco (424). */
+    val otroArranqueEnCurso: Boolean = false,
+)
 
 /**
  * UNA ENSEÑANZA contra Graph y el disco (spec 004, fase 4A2). Espejo del comportamiento de
@@ -162,13 +168,14 @@ class PendientesReintentados(val cerrados: Int, val siguen: Int, val descartados
  *    → el video → la nota → el cierre (409-412). Cancelarlo no lo deja a medias: se cierra, o queda pendiente (418);
  *  - [descartar] no publica nada: ni pasos pendientes, ni nota, ni cierre, ni lección (412);
  *  - un cierre que no sale por un transitorio o por la key queda en disco y [reintentarPendientes] lo intenta al
- *    arrancar, una vez por arranque, hasta [MAX_PENDIENTES_POR_ARRANQUE] en [TOPE_DE_ARRANQUE]; una lectura agotada no deja
- *    pendiente automático (411);
+ *    arrancar, una vez por arranque, hasta [MAX_PENDIENTES_POR_ARRANQUE] en [TOPE_DE_ARRANQUE], con la consulta a Graph dentro del
+ *    tope; una lectura agotada no deja pendiente automático (411);
  *  - el cierre provisional va a disco con la lección, antes de la red: ni un proceso que muere ni un cierre cancelado que agota
  *    su [TOPE_DE_CIERRE_CANCELADO] dejan la sesión sin pendiente (420);
  *  - antes de reintentar un pendiente, el arranque pregunta si Graph ya lo cerró: un `finish` repetido responde 200 y cobra el
  *    post-procesado otra vez (421). Y no toca una sesión que una lección de este proceso está cerrando: nada le llega a Graph
- *    después de su `finish` (422);
+ *    después de su `finish` (422). Y de [reintentarPendientes] corre uno solo a la vez por proceso: el que llega con otro en curso
+ *    vuelve sin llamar a Graph ni tocar el disco (424);
  *  - el log sale del teléfono (en la app, `LogBus` manda cada línea a telemetría): lleva ids, cuentas, estados y códigos. Lo que
  *    el usuario dijo, escribió o nombró, y el texto de un fallo, van al resultado y a disco, nunca al log (419).
  */
@@ -618,14 +625,39 @@ class Leccion(
      *
      * Con tope (411): hasta [MAX_PENDIENTES_POR_ARRANQUE] intentos, y ninguno que empiece pasado [TOPE_DE_ARRANQUE]; con Graph
      * caído, N pendientes × 90 s se comerían el arranque. El resto queda para el siguiente, que empieza por los que menos veces se
-     * intentaron: sin ese turno, cinco pendientes que nunca salen taparían al sexto para siempre. El intento que ya salió termina en
-     * su propio tope de 90 s: cortarlo a mitad dejaría a Graph cerrando sin que nadie lo sepa.
+     * intentaron: sin ese turno, cinco pendientes que nunca salen taparían al sexto para siempre.
      *
-     * Cada intento empieza preguntando si Graph ya cerró la sesión, con un GET sin reintentos (421): si ya está cerrada, se borra sin
-     * `finish`, porque un `finish` repetido responde 200 y cobra otra vez. Y un pendiente cuya sesión está cerrando una lección de este
-     * proceso ni se intenta: es su provisional, no un cierre que quedó (422).
+     * Cada intento empieza preguntando si Graph ya cerró la sesión, con un GET sin reintentos y con su propio tope corto,
+     * [LearningClient.TOPE_DE_CONSULTA] (421): si ya está cerrada, se borra sin `finish`, porque un `finish` repetido responde 200 y
+     * cobra otra vez. La consulta gasta del mismo tope del arranque: se mira antes de preguntar y otra vez antes de cerrar, y si se
+     * agotó mientras tanto el cierre no empieza y queda para el siguiente, sin contarse como intento. Lo que ya salió termina en su
+     * propio tope —cortar un `finish` a mitad dejaría a Graph cerrando sin que nadie lo sepa—, así que un arranque dura como mucho
+     * [TOPE_DE_ARRANQUE] más un cierre de 90 s. Y un pendiente cuya sesión está cerrando una lección de este proceso ni se intenta: es
+     * su provisional, no un cierre que quedó (422).
+     *
+     * UNO SOLO A LA VEZ POR PROCESO (424). La app que vuelve al frente dos veces lo llama dos veces: los dos leerían el mismo
+     * pendiente, los dos GET verían `recording`, los dos mandarían `finish` —Graph cobra el post-procesado dos veces— y los dos
+     * escribirían y borrarían el mismo archivo. El que llega con otro barrido en curso vuelve enseguida, sin llamar a Graph ni tocar el
+     * disco, con [PendientesReintentados.otroArranqueEnCurso]: no espera ni se une al que corre, porque quien llama no gana nada
+     * esperando —lo que haya que cerrar lo cierra el otro— y así no hereda una cancelación ajena. Si el que corre se cancela o falla,
+     * el candado se suelta igual y el arranque siguiente corre. Es del proceso, como el registro de la 422: otra [Leccion] del mismo
+     * proceso lo ve; otro proceso sobre el mismo disco, no.
      */
     suspend fun reintentarPendientes(): PendientesReintentados {
+        if (!barridoDelProceso.tryLock()) {
+            log.log(TAG, "hay otro arranque en curso reintentando los cierres pendientes de este proceso: este no llama a graph ni toca el disco")
+            return PendientesReintentados(0, 0, 0, otroArranqueEnCurso = true)
+        }
+        try {
+            return barrerPendientes()
+        } finally {
+            // Pase lo que pase —la cancelación, un Error—, el candado se suelta: `unlock` no suspende y no lo frena la cancelación.
+            barridoDelProceso.unlock()
+        }
+    }
+
+    /** El barrido de [reintentarPendientes], ya con el candado del proceso tomado. */
+    private suspend fun barrerPendientes(): PendientesReintentados {
         val empezo = reloj.markNow()
         val rutas = try {
             almacen.listar(CARPETA_PENDIENTES).sorted()
@@ -675,6 +707,13 @@ class Leccion(
                 borrarPendiente(ruta)
                 continue
             }
+            // La consulta también gasta el tope del arranque (411): si se agotó mientras Graph contestaba, el cierre no empieza y queda para
+            // el siguiente, que lo toma primero porque no se le anota el intento.
+            if (empezo.elapsedNow() >= TOPE_DE_ARRANQUE) {
+                siguen++
+                log.log(TAG, "el tope de ${Reintentos.corto(TOPE_DE_ARRANQUE)} del arranque se agotó al preguntar por ${pendiente.sessionId}: su cierre queda para el próximo arranque")
+                continue
+            }
             try {
                 cliente.terminar(pendiente.sessionId, pendiente.workflowId, intentos = 1)
                 cerrados++
@@ -710,8 +749,14 @@ class Leccion(
 
     /**
      * ¿Graph ya cerró la sesión de [p]? (421) Si no se supo —no respondió, no la encuentra, sin key—, `false`: se intenta el cierre y
-     * lo juzga [trasFallo], como siempre. El costo que queda: si Graph ya la había cerrado y el GET no respondió pero `finish` sí,
-     * Graph cobra el post-procesado otra vez.
+     * lo juzga [trasFallo], como siempre. Lo que cuesta, y el cliente no puede evitar:
+     *  - si Graph ya la había cerrado y el GET no respondió pero `finish` sí, Graph cobra el post-procesado otra vez;
+     *  - un `finish` EN VUELO no se ve: Graph ya lo recibió y sigue post-procesando —el LLM en `WorkflowLearner.js:87`, `done` y
+     *    `completedAt` recién en `:114`—, y la función de Vercel sigue hasta sus 60 s (`vercel.json`) aunque el cliente se corte. En esa
+     *    ventana el GET ve `recording` y el arranque manda un segundo `finish`, que cobra otra vez. Pasa si el proceso murió con el
+     *    `finish` en vuelo y la app vuelve a arrancar enseguida, o si el tope de un cierre cancelado lo cortó y un arranque lo toma
+     *    antes de que Graph termine. Esperar no lo garantiza —el cliente no sabe cuándo salió ese `finish`— y Graph no tiene un
+     *    «cerrando» que preguntar.
      */
     private suspend fun yaCerradaEnGraph(p: CierrePendiente): Boolean = try {
         cliente.cerradaEnGraph(p.workflowId)
@@ -962,6 +1007,12 @@ class Leccion(
          */
         private val cerrandoEnEsteProceso = mutableSetOf<String>()
         private val candadoDelProceso = Mutex()
+
+        /**
+         * Tomado mientras un arranque de ESTE proceso reintenta los pendientes (424). Se toma con `tryLock`, que no espera: el segundo
+         * vuelve sin hacer nada. Del proceso y no de la instancia, por lo mismo que [cerrandoEnEsteProceso]: cada arranque es otra [Leccion].
+         */
+        private val barridoDelProceso = Mutex()
 
         /** `carpeta/<id>.json`, con el id escapado: todo lo que no es letra, dígito, `-`, `_` o `.` va como `%XX`. */
         fun ruta(carpeta: String, id: String): String = "$carpeta/${archivo(id)}.json"
