@@ -1,0 +1,230 @@
+package graph.core.contrato
+
+import graph.core.contrato.Contrato002VozGptLive.Companion.promesa
+import java.io.File
+import kotlin.test.Test
+import kotlin.test.assertEquals
+import kotlin.test.assertTrue
+import kotlin.test.fail
+
+/**
+ * LA 246 SE JUZGA LEYENDO LAS FUENTES DE `app` (docs/specs/002, fase B1b). `app` es Android y no corre en jvmTest, pero lo que
+ * promete está escrito: dónde vive el botón, de dónde sale la clave y por dónde pasa la telemetría. Se lee, sin compilar nada.
+ *
+ * ANCLADO CONTRA LOS ATAJOS QUE YA BURLARON UN TEST DE FUENTES: el nombre calificado y el `typealias`. No se busca «la línea
+ * buena»: se cuenta CADA aparición del nombre —con paquete delante, en un alias o en un import con `as`— y cada una tiene que
+ * estar donde debe. Los comentarios no cuentan; los textos sí, porque dentro de una plantilla `${…}` cabe código.
+ */
+class Contrato002VozEnVivoDev {
+
+    private companion object {
+        const val VOZ = "app/src/main/kotlin/com/zevcorp/graph/voice/live/VozEnVivoDev.kt"
+        const val PANTALLA = "app/src/main/kotlin/com/zevcorp/graph/ui/MainActivity.kt"
+        const val BUS = "app/src/main/kotlin/com/zevcorp/graph/platform/LogBus.kt"
+        const val TELEMETRIA = "app/src/main/kotlin/com/zevcorp/graph/platform/Telemetry.kt"
+        const val BOTON = "Voz en vivo (prueba)"
+        val RAMA_DEV = Regex("""\bif\s*\(\s*mode\s*==\s*MODE_DEV\s*\)\s*\{""")
+
+        /** Lo único que puede nombrar la expresión de la clave: las prefs del teléfono y lo horneado al compilar. */
+        val NOMBRES_DE_LA_CLAVE = setOf(
+            "GraphApp", "instance", "prefs", "getString", "null", "trim", "ifBlank", "BuildConfig", "DEFAULT_OPENAI_KEY",
+            "com", "zevcorp", "graph",
+        )
+    }
+
+    private val raiz: File = generateSequence(File(System.getProperty("user.dir")).absoluteFile) { it.parentFile }
+        .firstOrNull { File(it, "app/src/main").isDirectory }
+        ?: fail("no encuentro app/src/main subiendo desde ${System.getProperty("user.dir")}")
+
+    /** Una fuente en dos vistas del mismo largo: sin comentarios, y además sin el contenido de los textos (para las llaves). */
+    private class Fuente(val ruta: String, texto: String) {
+        val sinComentarios: String
+        val soloCodigo: String
+
+        init {
+            val a = StringBuilder(texto)
+            val b = StringBuilder(texto)
+            fun borrar(sb: StringBuilder, desde: Int, hasta: Int) {
+                for (k in desde until minOf(hasta, sb.length)) if (sb[k] != '\n') sb.setCharAt(k, ' ')
+            }
+            val n = texto.length
+            var i = 0
+            while (i < n) {
+                when {
+                    texto.startsWith("//", i) -> {
+                        val fin = texto.indexOf('\n', i).let { if (it < 0) n else it }
+                        borrar(a, i, fin); borrar(b, i, fin); i = fin
+                    }
+                    texto.startsWith("/*", i) -> {
+                        var nivel = 0
+                        var j = i
+                        while (j < n) {
+                            if (texto.startsWith("/*", j)) { nivel++; j += 2 }
+                            else if (texto.startsWith("*/", j)) { nivel--; j += 2; if (nivel == 0) break }
+                            else j++
+                        }
+                        borrar(a, i, j); borrar(b, i, j); i = j
+                    }
+                    texto.startsWith("\"\"\"", i) -> {
+                        var fin = texto.indexOf("\"\"\"", i + 3).let { if (it < 0) n else it + 3 }
+                        while (fin < n && texto[fin] == '"') fin++
+                        borrar(b, i + 3, fin - 3); i = fin
+                    }
+                    texto[i] == '"' || texto[i] == '\'' -> {
+                        val cierre = texto[i]
+                        var j = i + 1
+                        while (j < n && texto[j] != cierre && texto[j] != '\n') j += if (texto[j] == '\\') 2 else 1
+                        borrar(b, i + 1, j); i = j + 1
+                    }
+                    else -> i++
+                }
+            }
+            sinComentarios = a.toString()
+            soloCodigo = b.toString()
+        }
+
+        /** Cada aparición de [nombre] como palabra entera, con o sin paquete delante, textos incluidos. */
+        fun apariciones(nombre: String): List<Int> =
+            Regex("(?<![\\p{L}\\p{N}_])" + Regex.escape(nombre) + "(?![\\p{L}\\p{N}_])").findAll(sinComentarios).map { it.range.first }.toList()
+
+        /** De la llave en [llave] a la que la cierra, contadas en el código sin textos. */
+        fun bloque(llave: Int): IntRange {
+            var nivel = 0
+            for (k in llave until soloCodigo.length) {
+                when (soloCodigo[k]) {
+                    '{' -> nivel++
+                    '}' -> if (--nivel == 0) return llave..k
+                }
+            }
+            fail("$ruta: la llave de la posición $llave no cierra")
+        }
+
+        fun linea(pos: Int): String {
+            val desde = sinComentarios.lastIndexOf('\n', pos) + 1
+            val hasta = sinComentarios.indexOf('\n', pos).let { if (it < 0) sinComentarios.length else it }
+            return sinComentarios.substring(desde, hasta).trim()
+        }
+
+        fun lineas(regex: Regex): List<String> = regex.findAll(soloCodigo).map { linea(it.range.first) }.toList()
+    }
+
+    private fun fuente(ruta: String): Fuente {
+        val f = File(raiz, ruta)
+        assertTrue(f.isFile, promesa(246) + " · falta $ruta")
+        return Fuente(ruta, f.readText())
+    }
+
+    /** Todas las fuentes de `app`: un alias o una llamada pueden vivir en cualquiera. */
+    private fun todas(): List<Fuente> = File(raiz, "app/src").walkTopDown()
+        .filter { it.isFile && it.extension in setOf("kt", "java", "kts") }
+        .map { Fuente(it.relativeTo(raiz).invariantSeparatorsPath, it.readText()) }
+        .toList()
+
+    @Test
+    fun promesa246() {
+        val voz = fuente(VOZ)
+        val pantalla = fuente(PANTALLA)
+        val bus = fuente(BUS)
+        val telemetria = fuente(TELEMETRIA)
+        val app = todas()
+
+        // ── EL BOTÓN VIVE EN `if (mode == MODE_DEV) { … }`, y la voz no se arranca por ningún otro sitio ──────────────────
+        val modos = Regex("""\bconst\s+val\s+(MODE_\w+)\s*=\s*("[^"]*")""").findAll(pantalla.sinComentarios).map { it.groupValues[1] to it.groupValues[2] }.toList()
+        assertEquals(listOf("\"dev\""), modos.filter { it.first == "MODE_DEV" }.map { it.second }, promesa(246) + " · MODE_DEV es «dev», declarado una vez")
+        assertEquals(modos.size, modos.map { it.second }.toSet().size, promesa(246) + " · ningún otro modo vale lo mismo: $modos")
+        assertEquals(
+            listOf("private var mode = MODE_CLOUD", "mode = app.prefs.getString(KEY_UI_MODE, MODE_CLOUD) ?: MODE_CLOUD"),
+            pantalla.lineas(Regex("""(?<![\w.])mode\s*=(?!=)""")),
+            promesa(246) + " · el modo solo sale de la preferencia: nadie lo pisa ni lo sombrea",
+        )
+        val ramas = RAMA_DEV.findAll(pantalla.soloCodigo).map { pantalla.bloque(it.range.last) }.toList()
+        assertTrue(ramas.isNotEmpty(), promesa(246) + " · MainActivity no tiene ninguna rama `if (mode == MODE_DEV) { … }`")
+        fun enRamaDev(pos: Int) = ramas.any { pos in it }
+
+        val botones = pantalla.apariciones(BOTON)
+        assertTrue(botones.isNotEmpty(), promesa(246) + " · no hay botón «$BOTON» en MainActivity")
+        assertEquals(emptyList(), botones.filterNot(::enRamaDev).map(pantalla::linea), promesa(246) + " · el botón fuera de la rama MODE_DEV")
+        assertEquals(
+            emptyList(),
+            pantalla.apariciones("VozEnVivoDev").filterNot { enRamaDev(it) || pantalla.linea(it) == "import com.zevcorp.graph.voice.live.VozEnVivoDev" }.map(pantalla::linea),
+            promesa(246) + " · VozEnVivoDev fuera de la rama MODE_DEV (un alias, un import con `as` o un nombre calificado también cuentan)",
+        )
+        assertTrue(
+            Regex("""\bVozEnVivoDev\s*\(""").findAll(pantalla.soloCodigo).any { enRamaDev(it.range.first) },
+            promesa(246) + " · la voz se construye dentro de la rama MODE_DEV",
+        )
+        for (f in app) {
+            if (f.ruta == VOZ || f.ruta == PANTALLA) continue
+            assertEquals(emptyList(), f.apariciones("VozEnVivoDev").map(f::linea), promesa(246) + " · ${f.ruta} nombra a VozEnVivoDev")
+            assertEquals(emptyList(), f.apariciones("ConversacionViva").map(f::linea), promesa(246) + " · la conversación solo la arma VozEnVivoDev, no ${f.ruta}")
+        }
+        assertEquals(listOf("class VozEnVivoDev(private val contexto: Context) {"), voz.apariciones("VozEnVivoDev").map(voz::linea), promesa(246) + " · en su archivo, VozEnVivoDev solo se declara")
+        val clase = Regex("""\bclass\s+VozEnVivoDev\b""").find(voz.soloCodigo) ?: fail(promesa(246) + " · VozEnVivoDev.kt no declara la clase")
+        val cuerpo = voz.bloque(voz.soloCodigo.indexOf('{', clase.range.last))
+        assertEquals(
+            emptyList(),
+            voz.apariciones("ConversacionViva").filterNot { it in cuerpo || voz.linea(it) == "import graph.core.voz.ConversacionViva" }.map(voz::linea),
+            promesa(246) + " · la conversación vive dentro de la clase VozEnVivoDev",
+        )
+
+        // PARAR NO DEPENDE DE LA PANTALLA: detener() corre en el alcance propio de la voz. Desde el de una Activity que se
+        // cierra, `withContext` lanza antes de correr y el micrófono queda abierto.
+        assertEquals(
+            listOf("private val alcance = CoroutineScope(SupervisorJob() + Dispatchers.Default)"),
+            voz.lineas(Regex("""\balcance\s*=""")),
+            promesa(246) + " · la voz tiene su propio alcance",
+        )
+        val detenciones = voz.apariciones("detener")
+        assertEquals(1, detenciones.size, promesa(246) + " · detener() se llama en un solo sitio: ${detenciones.map(voz::linea)}")
+        assertTrue(
+            Regex("""\balcance\s*\.\s*launch\s*\{""").findAll(voz.soloCodigo).any { detenciones.single() in voz.bloque(it.range.last) },
+            promesa(246) + " · y ese sitio está dentro de `alcance.launch { … }`",
+        )
+
+        // ── LA CLAVE ES LA DEL BUILD INTERNO: prefs `openaiKey` o BuildConfig, nunca la configuración remota ─────────────
+        val remota = Regex("(?i)remote")
+        assertEquals(emptyList(), remota.findAll(voz.sinComentarios).map { voz.linea(it.range.first) }.toList(), promesa(246) + " · VozEnVivoDev no toca la configuración remota (RemoteConfig ni las prefs «remote…»)")
+        for (r in ramas) {
+            assertTrue(remota.find(pantalla.sinComentarios.substring(r.first, r.last + 1)) == null, promesa(246) + " · ni la rama MODE_DEV le pasa nada remoto")
+        }
+        assertEquals(1, Regex("""\bcredencial\s*=""").findAll(voz.soloCodigo).count(), promesa(246) + " · una sola credencial")
+        assertEquals(1, Regex("""\bcredencial\s*=\s*\{\s*claveDelBuildInterno\s*\(\s*\)\s*\}""").findAll(voz.soloCodigo).count(), promesa(246) + " · la credencial es claveDelBuildInterno()")
+        val declaracion = Regex("""\bfun\s+claveDelBuildInterno\s*\(\s*\)\s*:\s*String\?\s*=""").findAll(voz.soloCodigo).toList()
+        assertEquals(1, declaracion.size, promesa(246) + " · claveDelBuildInterno() se declara una vez, como expresión")
+        assertEquals(2, voz.apariciones("claveDelBuildInterno").size, promesa(246) + " · y solo se usa como credencial")
+        // La expresión llega hasta la primera línea en blanco.
+        val expresion = voz.sinComentarios.substring(declaracion.single().range.last + 1).split(Regex("\n[ \t]*\n"), limit = 2)[0]
+        assertEquals(listOf("openaiKey"), Regex("\"([^\"]*)\"").findAll(expresion).map { it.groupValues[1] }.toList(), promesa(246) + " · la única pref que lee es «openaiKey»: $expresion")
+        assertTrue(Regex("""\bprefs\s*\.\s*getString\s*\(\s*"openaiKey"\s*,""").containsMatchIn(expresion), promesa(246) + " · lee prefs.getString(\"openaiKey\", …): $expresion")
+        assertTrue(Regex("""\bBuildConfig\s*\.\s*DEFAULT_OPENAI_KEY\b""").containsMatchIn(expresion), promesa(246) + " · y si no, BuildConfig.DEFAULT_OPENAI_KEY: $expresion")
+        val nombres = Regex("""[\p{L}_][\p{L}\p{N}_]*""").findAll(expresion.replace(Regex("\"[^\"]*\""), "\"\"")).map { it.value }.toSet()
+        assertEquals(emptySet(), nombres - NOMBRES_DE_LA_CLAVE, promesa(246) + " · la clave no pasa por nadie más: $expresion")
+
+        // ── LOGBUS SOLO ENCOLA LO QUE DEJA PASAR TelemetriaDeVoz ───────────────────────────────────────────────────────
+        assertEquals(1, bus.apariciones("Telemetry").size, promesa(246) + " · LogBus nombra a Telemetry una sola vez: ${bus.apariciones("Telemetry").map(bus::linea)}")
+        assertEquals(1, bus.apariciones("enqueue").size, promesa(246) + " · y encola en un solo sitio: ${bus.apariciones("enqueue").map(bus::linea)}")
+        assertEquals(
+            1,
+            Regex("""\bTelemetriaDeVoz\s*\.\s*paraRemoto\s*\(\s*tag\s*,\s*message\s*\)\s*\?\.\s*let\s*\{\s*Telemetry\s*\.\s*enqueue\s*\(\s*tag\s*,\s*it\s*\)\s*\}""").findAll(bus.soloCodigo).count(),
+            promesa(246) + " · a Telemetry.enqueue solo llega lo que devuelve TelemetriaDeVoz.paraRemoto(tag, message)",
+        )
+        assertEquals(1, Regex("""\boverride\s+fun\s+log\s*\(\s*tag\s*:\s*String\s*,\s*message\s*:\s*String\s*\)""").findAll(bus.soloCodigo).count(), promesa(246) + " · dentro de log(tag, message)")
+        assertEquals(emptyList(), bus.lineas(Regex("""\b(?:val|var)\s+(?:tag|message|it)\b|(?<![\w.])(?:tag|message)\s*=(?!=)""")), promesa(246) + " · ni tag ni message se sombrean antes del filtro")
+        assertEquals(
+            listOf("import graph.core.voz.TelemetriaDeVoz"),
+            bus.apariciones("TelemetriaDeVoz").map(bus::linea).filter { it.startsWith("import") },
+            promesa(246) + " · el filtro es el de core, importado sin alias",
+        )
+        assertEquals(2, bus.apariciones("TelemetriaDeVoz").size, promesa(246) + " · importado y usado una vez")
+        for (f in app) {
+            assertEquals(
+                emptyList(),
+                f.lineas(Regex("""\b(?:object|class|interface|typealias|fun|val|var)\s+TelemetriaDeVoz\b|\bas\s+TelemetriaDeVoz\b""")),
+                promesa(246) + " · ${f.ruta} declara otro TelemetriaDeVoz",
+            )
+            if (f.ruta == BUS || f.ruta == TELEMETRIA) continue
+            assertEquals(emptyList(), f.apariciones("enqueue").map(f::linea), promesa(246) + " · a la telemetría solo encola LogBus, no ${f.ruta}")
+        }
+        assertEquals(listOf("fun enqueue(tag: String, message: String) {"), telemetria.apariciones("enqueue").map(telemetria::linea), promesa(246) + " · Telemetry no se encola por otro camino")
+    }
+}

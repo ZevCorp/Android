@@ -2,6 +2,7 @@ package com.zevcorp.graph.platform
 
 import android.util.Log
 import graph.core.domain.GraphLog
+import graph.core.voz.TelemetriaDeVoz
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
@@ -24,7 +25,9 @@ object LogBus : GraphLog {
         Log.d("Graph", "[$tag] $message")
         // El mismo bus alimenta la telemetría: cada línea viaja (por lotes) al panel Android del
         // Provider Studio, correlacionada con el prompt en curso. Encolar nunca bloquea ni lanza.
-        Telemetry.enqueue(tag, message)
+        // DE LA VOZ SOLO SALE LA MEDIDA (docs/specs/002, promesa 245): lo que alguien dijo se queda en logcat y en el
+        // panel de este teléfono; a la tabla remota llega su largo.
+        TelemetriaDeVoz.paraRemoto(tag, message)?.let { Telemetry.enqueue(tag, it) }
     }
 
     @Synchronized
