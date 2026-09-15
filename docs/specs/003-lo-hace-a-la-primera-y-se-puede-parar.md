@@ -1,6 +1,6 @@
 # Plan de implementación: lo hace a la primera y se puede parar — el freno y la puerta única
 
-Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B en curso** (promesas 307-309 y 316: la app ejecuta solo por la puerta y un único alto la frena) · Nace de leer el freno de `U-Windows-App`
+Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **Nivel 4 de la 3B pendiente**: el APK de este worktree no trae key de Graph · Nace de leer el freno de `U-Windows-App`
 (`windows-client/src/Actions/Freno.cs`, promesas 21-28 y 59 de su contrato) y de un hallazgo grave
 de U que el Android no puede heredar · Rama: `yokh/precision`
 
@@ -110,6 +110,23 @@ Pone verdes: **301-306**. La app todavía no usa la puerta.
 - `Freno.enTarea` anidada no empieza ni termina: solo cierra quien abrió.
 - `ExecutionEngine` mira el freno también justo después de `next`: un turno que vuelve con pregunta o `done`
   tras el alto no pregunta ni celebra.
+
+### Nivel 4 de la 3B — en el teléfono (pendiente, 2026-09-14)
+
+Xiaomi M2101K7BL · Android 12 · APK release 0.42 armado en este worktree (HEAD `2e18c83`), instalado con
+`adb install -r`. Primer intento, «abre la calculadora» escrito en «Pídeme algo». `adb logcat -s Graph:D`:
+
+```
+23:29:22.046 [app] Pídeme: abre la calculadora
+23:29:22.090 [graph] no hay key de graph: ponela en el panel de desarrollador o en apikey.properties como graphApiKey
+mCurrentFocus=Window{e5a51a5 u0 com.miui.home/com.miui.home.launcher.Launcher}
+```
+
+El proveedor guardado es GRAPH, pero este APK se armó sin `apikey.properties` (fuera de git; no está en este
+worktree) y prefs no tiene key: la corrida se corta antes de abrir la tarea, sin tocar el teléfono ni llamar a
+nadie. Falta, con la key puesta: (a) «abre la calculadora» pasando por la puerta, con `freno: tarea abierta` y la
+acción; (b) «abre ajustes y entra a wifi y luego a bluetooth» parada con la píldora a mitad: `freno: alto pedido
+(píldora)`, `run: ✋` y ningún `[graph] turno` después; (c) lo mismo desde la notificación.
 
 ---
 
