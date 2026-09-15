@@ -109,6 +109,9 @@ class Contrato002VozEnVariosHilos {
         return (e as? JsonPrimitive)?.takeIf { it.isString }?.content
     }
 
+    /** Una lista que llenan otros hilos se lee por copia y con su candado: recorrerla a secas es una carrera del propio juez. */
+    private fun foto(lista: MutableList<String>): List<String> = synchronized(lista) { lista.toList() }
+
     private fun enviado(linea: String): JsonObject = Json.parseToJsonElement(linea.drop(1)).jsonObject
 
     private suspend fun hasta(ms: Long, condicion: () -> Boolean): Boolean {
@@ -159,7 +162,7 @@ class Contrato002VozEnVariosHilos {
         val voz = CoroutineScope(Dispatchers.Default).async { conv.conversar() }
         canal.entrada.send(Recibido.Mensaje(SESION))
         canal.entrada.send(Recibido.Mensaje(usuario(PREGUNTA)))
-        assertTrue(hasta(1_000) { "Te escucho." in dicho }, "$prefijo · la sesión no se confirmó: $log")
+        assertTrue(hasta(1_000) { "Te escucho." in dicho }, "$prefijo · la sesión no se confirmó: ${foto(log)}")
 
         val aceptados = ConcurrentLinkedQueue<String>()
         val largada = CountDownLatch(1)
@@ -199,7 +202,7 @@ class Contrato002VozEnVariosHilos {
         // EL TURNO. Sin ninguna llamada en curso, 2000 ms de silencio lo cierran; con una que una carrera dejó colgada, no.
         reloj.ms.addAndGet(10_000)
         canal.entrada.send(Recibido.Mensaje(SIN_HECHOS))
-        hasta(1_000) { log.any { "usuario dijo: $PREGUNTA" in it } }
+        hasta(1_000) { foto(log).any { "usuario dijo: $PREGUNTA" in it } }
         conv.detener()
         withTimeoutOrNull(2_000) { voz.join() } ?: voz.cancel()
 
@@ -237,7 +240,7 @@ class Contrato002VozEnVariosHilos {
         assertEquals((0 until LLAMADAS).associate { "call_$it" to 1 }, contestadas.toMap(), "$prefijo · cada llamada, una salida y solo una")
         assertTrue(ultimoPedido > ultimaSalida, "$prefijo · tras la última salida o aviso no se pidió respuesta: algo quedó pendiente")
         assertEquals(aceptados.sorted(), avisosSalidos.sorted(), "$prefijo · cada aviso aceptado sale una vez")
-        assertEquals(1, log.count { "usuario dijo: $PREGUNTA" in it }, "$prefijo · el turno no se cerró: quedó una llamada en curso. ${log.takeLast(8)}")
-        assertTrue(log.none { "no pude" in it }, "$prefijo · ${log.filter { "no pude" in it }}")
+        assertEquals(1, foto(log).count { "usuario dijo: $PREGUNTA" in it }, "$prefijo · el turno no se cerró: quedó una llamada en curso. ${foto(log).takeLast(8)}")
+        assertTrue(foto(log).none { "no pude" in it }, "$prefijo · ${foto(log).filter { "no pude" in it }}")
     }
 }

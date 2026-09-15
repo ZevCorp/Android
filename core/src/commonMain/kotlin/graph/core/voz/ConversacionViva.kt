@@ -13,8 +13,10 @@ import kotlinx.coroutines.job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlin.concurrent.Volatile
 import kotlin.coroutines.CoroutineContext
 import kotlin.math.max
 import kotlin.math.roundToLong
@@ -25,10 +27,13 @@ import kotlin.math.roundToLong
  * las manos son [ejecutar]. Comportamiento de `U-Windows-App/windows-client/src/Voice/ConversacionEnVivo.cs`,
  * reescrito, no traducido: cada decisión de aquí costó una sesión de voz real en Windows.
  *
- * TODO VIVE EN UN SOLO HILO O CORRUTINA CONFINADA: [TurnosSinMarca] no tiene candado. Quien la cablea (fase B) llama
- * a [conversar], [oirMicrofono], [escribir], [avisar] y [detener] desde el mismo despachador de un hilo. Las
- * herramientas corren en corrutinas hijas de la CONEXIÓN, en el mismo despachador: las que actúan en la pantalla de a
- * una, las de control en el acto. Una acción que tarda no frena la escucha, y la conexión que muere se las lleva.
+ * DE A UNA COSA POR VEZ, AUNQUE LA LLAMEN DESDE VARIOS HILOS (promesa 236). En la fase B la llaman los callbacks de
+ * OkHttp, el AudioRecord desde IO y la pantalla: [TurnosSinMarca] no tiene candado, y el estado de aquí tampoco. Por eso
+ * cada método público salta a [hilo], un despachador de un solo hilo, y todo envío pasa por UN escritor: confinar no
+ * basta, porque entre dos suspensiones de un envío cabe otro. Las herramientas corren en corrutinas hijas de la
+ * CONEXIÓN, en ese mismo hilo: las que actúan en la pantalla de a una, las de control en el acto. Una acción que tarda
+ * no frena la escucha, y la conexión que muere se las lleva. Una herramienta que BLOQUEA el hilo en vez de suspender lo
+ * bloquea para todo: que salte a su propio despachador.
  *
  * LO QUE ANTES FALLABA EN SILENCIO, y por eso está aquí y no en el cableado:
  *  - «sesión abierta» se escribía al conectar el socket, y sin crédito salió en el mismo segundo que el error (U, 2026-09-12);
@@ -39,7 +44,7 @@ import kotlin.math.roundToLong
 class ConversacionViva(
     private val canal: CanalDeVoz,
     private val protocolo: ProtocoloGptLive = ProtocoloGptLive(),
-    /** La clave de hoy (OpenAI) o el token de mañana (Graph): se pide al arrancar, nunca se guarda aquí. */
+    /** La clave de hoy (OpenAI) o el token de mañana (Graph): se pide en CADA apertura, nunca se guarda aquí. */
     private val credencial: () -> String?,
     private val instruccionesVoz: String,
     instruccionesDelegado: String,
@@ -51,6 +56,7 @@ class ConversacionViva(
     private val sonando: () -> Boolean,
     /** Lo que se le muestra o anuncia al usuario. Nunca la transcripción: esa va por [transcribe]. */
     private val dice: (String) -> Unit,
+    /** Acaba en la telemetría remota (`LogBus`): aquí nunca llega el contenido de una herramienta ni de un error. */
     private val log: (tag: String, mensaje: String) -> Unit,
     private val reloj: Reloj,
     private val compuertaActiva: Boolean = ModoDeCaptura.activa(forzada = false, aec = false),
@@ -63,7 +69,16 @@ class ConversacionViva(
      * de a una; las de control (`parar`, `como_va`, `self_*`) corren en el acto. Por defecto todas actúan: nada se cruza.
      */
     private val actuaEnPantalla: (nombre: String) -> Boolean = { true },
+    /**
+     * Con la compuerta activa, el detector de energía calla a Ü cuando le hablan encima. APAGADO por defecto, como en U
+     * (`U_BARGEIN_ENERGIA`, `ConversacionEnVivo.cs:1183-1189`): allí la voz del usuario llegaba ~3× más débil que el eco y
+     * el único que cruzaba el umbral era el propio eco. Se enciende donde se mida que la energía separa.
+     */
     private val bargeInPorEnergia: Boolean = false,
+    /**
+     * Donde vive la conversación: UN hilo. Otro contexto solo para juzgarla; uno de varios hilos rompe el confinamiento.
+     * El contrato común pasa el vacío porque `corre` ya es de un solo hilo.
+     */
     private val hilo: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
 ) {
 
@@ -95,6 +110,9 @@ class ConversacionViva(
 
         /** La salida de una llamada retirada: el servidor la espera igual, y sin ella rechaza el siguiente `response.create`. */
         const val RETIRADA = "retirada: no se ejecutó"
+
+        /** Lo que cabe del mensaje de un error del canal en una línea del log. */
+        const val LARGO_DEL_MOTIVO = 120
     }
 
     /** Lo que es de UNA conexión, y por eso muere con ella: la sesión del servidor que abre es otra. */
@@ -107,7 +125,14 @@ class ConversacionViva(
         /** Pedidas y sin contestar, por instancia: un call_id puede venir vacío. */
         val sinContestar = mutableListOf<Llamada>()
 
+        /**
+         * Lo que espera a que no quede ninguna llamada sin contestar —avisos y lo escrito, en el orden en que llegaron y ya
+         * como item— para salir todo junto con UN `response.create`.
+         */
+        val cola = ArrayDeque<EnCola>()
+
         var confirmada = false
+        var acabada = false
 
         /** Lo primero que dijo el servidor antes de confirmar: si el socket muere sin confirmar, eso es por qué no abrió. */
         var fallaAntesDeAbrir = ""
@@ -115,6 +140,12 @@ class ConversacionViva(
         /** Por qué no se arregla reconectando. La primera gana: el error llega antes que el cierre y con su mensaje. */
         var causa: String? = null
         var dichoDeLaCausa = ""
+
+        /** Al reabrir, `credencial()` no dio nada: no se llama a nadie. */
+        var faltaCredencial = false
+
+        /** `abrir` lanzó algo que no es la red (TLS, URL mala), ya saneado: falla igual si se reintenta. */
+        var errorAlAbrir: String? = null
 
         var cayoSolo = false
         var resultadosSinPedir = false
@@ -132,6 +163,7 @@ class ConversacionViva(
          * una herramienta colgada en una conexión muerta dejaba en cola para siempre las de la siguiente.
          */
         fun acabar() {
+            acabada = true
             tandas.close()
             trabajo.cancel()
         }
@@ -139,20 +171,25 @@ class ConversacionViva(
 
     private class Tanda(val conexion: Conexion, val llamadas: List<Llamada>)
 
+    private class EnCola(val item: String, val esAviso: Boolean)
+
     private var delegado = instruccionesDelegado
     private var herramientas = utensilios
 
     /** El modo vigente no es el de siempre: una sesión que abre en él se lo tiene que repetir a la voz. */
     private var modoEspecial = false
 
+    /** Se lee desde cualquier hilo; se escribe solo en [hilo]. */
+    @Volatile
     var viva = false
         private set
 
     /** Peticiones del usuario abiertas en esta conversación, por voz o por texto. Un aviso del sistema no es una. */
+    @Volatile
     var peticiones = 0
         private set
 
-    /** Items creados en la sesión del servidor en curso: mensajes escritos, resultados y avisos. */
+    /** Items creados en la sesión del servidor en curso: llamadas del delegado, mensajes escritos, resultados y avisos. */
     val itemsEnSesion: Int get() = conexion?.items ?: 0
 
     private var detenida = false
@@ -161,11 +198,17 @@ class ConversacionViva(
     private var reconexiones = 0
     private var segundosAnteriores = 0.0
 
-    /** Una tanda que contesta y un aviso que sale no se cruzan: si no, el `response.create` podía salir dos veces. */
-    private val envio = Mutex()
+    /** Alguna sesión de esta conversación llegó a confirmarse: solo entonces hay algo que «olvidé» al volver. */
+    private var algunaConfirmada = false
+
+    /**
+     * EL ÚNICO ESCRITOR DEL SOCKET (en U, `ConversacionEnVivo.cs:1341-1350`): el micrófono, la apertura, una tanda que
+     * contesta y un aviso que sale no se cruzan. Sin él, el `response.create` podía salir dos veces, y un trozo de audio
+     * se colaba a mitad de otro envío.
+     */
+    private val escritor = Mutex()
 
     private val retiradas = mutableSetOf<String>()
-    private val avisos = ArrayDeque<String>()
     private val fraseU = StringBuilder()
     private val fraseUsuario = StringBuilder()
 
@@ -177,17 +220,19 @@ class ConversacionViva(
     /** La espera entre intentos que está en curso: [detener] la corta en vez de esperar a que venza. */
     private var espera: Job? = null
 
+    /** Todo lo que entra desde afuera pasa por aquí: al hilo de la conversación, y de a uno. */
+    private suspend fun <T> confinado(bloque: suspend () -> T): T = withContext(hilo) { bloque() }
+
     /**
      * Abre y conversa hasta que se acaba: vuelve cuando la voz terminó, por la vía que sea. Toda escucha que termina
      * —cierre, excepción, cancelación, o una apertura que no llegó a escuchar— pasa por [alTerminarLaEscucha].
      */
-    suspend fun conversar() {
-        if (viva) return
-        val clave = credencial()?.trim().orEmpty()
-        if (clave.isEmpty()) {
+    suspend fun conversar(): Unit = confinado {
+        if (viva) return@confinado
+        if (credencial().isNullOrBlank()) {
             log(TAG, "sin credencial: no se llama a nadie")
             dice(SIN_CREDENCIAL)
-            return
+            return@confinado
         }
         viva = true
         detenida = false
@@ -195,26 +240,26 @@ class ConversacionViva(
         conexiones = 0
         segundosAnteriores = 0.0
         conexion = null
+        algunaConfirmada = false
         retiradas.clear()
-        avisos.clear()
 
         coroutineScope {
             try {
                 var reconectando = false
                 while (true) {
-                    val c = empiezaUnaConexion(if (reconectando) AL_VOLVER else AL_ARRANCAR, this)
+                    val c = empiezaUnaConexion(if (algunaConfirmada) AL_VOLVER else AL_ARRANCAR, this)
                     var via = "apertura"
                     var reconecta = false
                     try {
                         if (reconectando) esperar(ESPERA_DE_RECONEXION_MS * reconexiones)
-                        if (!detenida && conectar(c, clave, reconectando)) via = escuchar(c)
+                        if (!detenida && conectar(c, reconectando)) via = escuchar(c)
                     } catch (e: CancellationException) {
                         if (!currentCoroutineContext().isActive) {
                             via = "cancelación"
                             throw e
                         }
                         // Se escapó de un puerto con la voz viva: no es la nuestra, es un corte.
-                        log(TAG, "se cortó la escucha: ${e.message}")
+                        log(TAG, "se cortó la escucha: ${motivoSaneado(e)}")
                         c.cayoSolo = true
                         via = "corte"
                     } finally {
@@ -234,8 +279,8 @@ class ConversacionViva(
      * Lo pide el usuario: corta la espera en curso, y nunca reconecta ni anuncia un fatal. La decisión la toma igual
      * [alTerminarLaEscucha].
      */
-    suspend fun detener() {
-        if (!viva || detenida) return
+    suspend fun detener(): Unit = confinado {
+        if (!viva || detenida) return@confinado
         detenida = true
         espera?.cancel()
         log(TAG, "la voz se detiene a pedido")
@@ -245,11 +290,12 @@ class ConversacionViva(
 
     /**
      * Un trozo de micrófono. Sin sesión confirmada no sale: el servidor aún no escucha. Con la compuerta activa, lo que
-     * Ü suena se sustituye por silencio del mismo tamaño, y el detector es el único oído que queda para la interrupción.
+     * Ü suena se sustituye por silencio del mismo tamaño, y el detector —si está encendido— es el único oído que queda
+     * para la interrupción.
      */
-    suspend fun oirMicrofono(pcm: ByteArray) {
+    suspend fun oirMicrofono(pcm: ByteArray): Unit = confinado {
         val c = conexion
-        if (!viva || detenida || c == null || !c.confirmada) return
+        if (!viva || detenida || c == null || !c.confirmada || c.acabada) return@confinado
         var trozo = pcm
         if (compuertaActiva) {
             val ahora = reloj.ahora()
@@ -258,13 +304,15 @@ class ConversacionViva(
             // crudo, cada parpadeo entre ráfagas re-arrancaba la siembra y no disparó nunca (U, 2026-08-31).
             val trago = filtrado !== pcm
             trozo = filtrado
-            if (trago && detector.oye(rms(pcm), sonando = true, ahora = ahora)) {
+            if (bargeInPorEnergia && trago && detector.oye(rms(pcm), sonando = true, ahora = ahora)) {
                 // La primera sílaba de quien interrumpe es lo que el servidor necesita oír: viaja ESTE trozo, intacto.
                 callar()
                 compuerta.abrir()
                 trozo = pcm
                 log(TAG, "te oí encima: corto mi voz y te escucho")
             } else if (!trago) {
+                // LA COMPUERTA SE REABRIÓ: para el detector, Ü ya no suena. Sin esto seguía en la frase anterior, la siguiente
+                // no sembraba su eco y un eco más fuerte pasaba por alguien encima.
                 detector.oye(0.0, sonando = false, ahora = ahora)
             }
             if (trozo === pcm && compuerta.msTragados > tragadoAnunciado) {
@@ -273,47 +321,58 @@ class ConversacionViva(
             }
         }
         try {
-            canal.enviar(protocolo.audio(trozo))
+            escribiendo { canal.enviar(protocolo.audio(trozo)) }
         } catch (e: Exception) {
             if (e is CancellationException) relanzarSiEsNuestra(e)
             // Un trozo perdido no tira la sesión, pero perderlo en silencio sería un mensaje mudo: una línea por motivo.
-            if (e.message != ultimoFalloDeEnvio) {
-                ultimoFalloDeEnvio = e.message.orEmpty()
-                log(TAG, "un trozo de micrófono no llegó al servidor: ${e.message}")
+            val motivo = motivoSaneado(e)
+            if (motivo != ultimoFalloDeEnvio) {
+                ultimoFalloDeEnvio = motivo
+                log(TAG, "un trozo de micrófono no llegó al servidor: $motivo")
             }
         }
     }
 
-    /** Lo escrito es una petición y pide respuesta: sin el `response.create` el servidor lo acepta y calla (medido). */
-    suspend fun escribir(texto: String) {
-        if (texto.isBlank()) return
+    /**
+     * Lo escrito es una petición y pide respuesta: sin el `response.create` el servidor lo acepta y calla (medido). Con
+     * llamadas sin contestar, ESPERA en la cola de los avisos: su `response.create` es el que el servidor rechazaría.
+     */
+    suspend fun escribir(texto: String): Unit = confinado {
+        if (texto.isBlank()) return@confinado
         val c = conexion
-        if (!viva || detenida || c == null || !c.confirmada) {
+        if (!viva || detenida || c == null || !c.confirmada || c.acabada) {
             log(TAG, "no hay sesión confirmada: lo escrito no sale")
-            return
+            return@confinado
         }
         abrePeticion("texto")
         transcribe(texto, false)
-        enviando("lo escrito") {
-            val (item, pide) = protocolo.texto(texto)
-            mandarItem(c, item)
-            canal.enviar(pide)
+        c.cola.addLast(EnCola(protocolo.texto(texto).first(), esAviso = false))
+        if (c.sinContestar.isNotEmpty()) {
+            log(TAG, "lo escrito espera en cola: sale cuando se contesten las ${c.sinContestar.size} llamada(s) pendientes")
         }
+        enviando("lo escrito") { pedirRespuestaSiToca(c) }
     }
 
     /**
-     * Una nota para la voz que nadie dijo en voz alta («la tarea terminó: …»). NO abre petición, y ESPERA a que no quede
-     * ninguna llamada sin contestar: su `response.create` con una salida pendiente es lo que el servidor rechaza.
+     * Una nota para la voz que nadie dijo en voz alta («la tarea terminó: …»). NO abre petición, y ESPERA a que la sesión
+     * se confirme y a que no quede ninguna llamada sin contestar. Verdadero si saldrá; con la voz muerta no va a ninguna
+     * parte, y eso se devuelve y queda en el log.
      */
-    suspend fun avisar(texto: String): Boolean {
-        if (!viva || detenida || texto.isBlank()) return false
-        avisos.addLast(texto.trim())
-        val c = conexion ?: return true
-        if (c.sinContestar.isNotEmpty()) {
-            log(TAG, "aviso del sistema en cola: sale cuando se contesten las ${c.sinContestar.size} llamada(s) pendientes")
+    suspend fun avisar(texto: String): Boolean = confinado {
+        if (texto.isBlank()) return@confinado false
+        val c = conexion
+        if (!viva || detenida || c == null) {
+            log(TAG, "aviso del sistema descartado: la voz no está viva")
+            return@confinado false
+        }
+        c.cola.addLast(EnCola(protocolo.texto(AVISO_DEL_SISTEMA + texto.trim()).first(), esAviso = true))
+        when {
+            c.acabada -> log(TAG, "aviso del sistema en cola: sale cuando se confirme la conexión siguiente")
+            !c.confirmada -> log(TAG, "aviso del sistema en cola: sale cuando se confirme la sesión")
+            c.sinContestar.isNotEmpty() -> log(TAG, "aviso del sistema en cola: sale cuando se contesten las ${c.sinContestar.size} llamada(s) pendientes")
         }
         enviando("el aviso del sistema") { pedirRespuestaSiToca(c) }
-        return true
+        true
     }
 
     /**
@@ -322,9 +381,9 @@ class ConversacionViva(
      * viene de afuera (la tarea de la fase 2C), el servidor sigue esperando la salida y sin ella rechaza el siguiente
      * `response.create` con `function_call_outputs_required`.
      */
-    suspend fun retirar(ids: List<String>) {
+    suspend fun retirar(ids: List<String>): Unit = confinado {
         val validos = ids.filter { it.isNotEmpty() }
-        if (validos.isEmpty()) return
+        if (validos.isEmpty()) return@confinado
         if (retiradas.size > 200) retiradas.clear()
         retiradas += validos
         log(TAG, "retiradas: ${validos.joinToString()}")
@@ -334,14 +393,14 @@ class ConversacionViva(
      * Otro modo sin reabrir la sesión: otro `session.start` sería otra conversación. Se recuerda, y una reconexión
      * abre ya en este modo: la delegación en el `session.start` y, al confirmarse, el append a la voz.
      */
-    suspend fun cambiarModo(instrucciones: String, utensilios: List<Utensilio>, vuelve: Boolean) {
+    suspend fun cambiarModo(instrucciones: String, utensilios: List<Utensilio>, vuelve: Boolean): Unit = confinado {
         delegado = instrucciones
         herramientas = utensilios
         modoEspecial = !vuelve
         val c = conexion
-        if (!viva || detenida || c == null || !c.confirmada) {
+        if (!viva || detenida || c == null || !c.confirmada || c.acabada) {
             log(TAG, "modo guardado para la próxima apertura: no hay sesión confirmada a la que cambiárselo")
-            return
+            return@confinado
         }
         enviando("el cambio de modo") {
             for (m in protocolo.cambiarDeModo(instrucciones, utensilios, vuelve, instruccionesVoz)) canal.enviar(m)
@@ -353,15 +412,21 @@ class ConversacionViva(
 
     /**
      * Cada conexión nace con su marcador de turnos, sin causa, sin falla y sin confirmar: lo dicho —o una llamada sin
-     * devolver— en la anterior no cierra ni sujeta un turno de esta (W5 en U). Sus segundos se apartan para sumarlos.
+     * devolver— en la anterior no cierra ni sujeta un turno de esta (W5 en U). Sus segundos se apartan para sumarlos, y
+     * sus avisos en cola pasan a esta: siguen siendo verdad.
      */
     private fun empiezaUnaConexion(alConfirmar: String, alcance: CoroutineScope): Conexion {
-        conexion?.let { segundosAnteriores += it.segundos }
+        val anterior = conexion
+        anterior?.let { segundosAnteriores += it.segundos }
         fraseU.clear()
         fraseUsuario.clear()
         conexiones++
         val trabajo = CoroutineScope(alcance.coroutineContext + Job(alcance.coroutineContext.job))
         val c = Conexion(reloj, alConfirmar, trabajo)
+        anterior?.cola?.let {
+            c.cola.addAll(it.filter { e -> e.esAviso })
+            it.clear()
+        }
         // UNA TANDA DETRÁS DE OTRA, en el orden en que llegaron: dos manos sobre la pantalla a la vez no se cruzan.
         trabajo.launch { for (tanda in c.tandas) atender(tanda) }
         conexion = c
@@ -369,16 +434,29 @@ class ConversacionViva(
     }
 
     /** Abre el socket y manda el único `session.start`. Verdadero si hay algo que escuchar. */
-    private suspend fun conectar(c: Conexion, clave: String, reconectando: Boolean): Boolean {
+    private suspend fun conectar(c: Conexion, reconectando: Boolean): Boolean {
         var intento = 0
         while (true) {
+            // LA CREDENCIAL SE PIDE EN CADA APERTURA: el token efímero de mañana caduca, y una clave rotada vale desde la
+            // siguiente (en U se relee en cada reconexión).
+            val clave = credencial()?.trim().orEmpty()
+            if (clave.isEmpty()) {
+                log(TAG, "sin credencial al abrir: no se llama a nadie")
+                c.faltaCredencial = true
+                return false
+            }
             val apertura = try {
                 canal.abrir(protocolo.url, protocolo.cabeceras(clave))
+            } catch (e: CancellationException) {
+                // El `withTimeout` del adaptador que vence no es la cancelación de la voz: es tiempo agotado, y eso es la red.
+                relanzarSiEsNuestra(e)
+                Apertura.SinRed("tiempo agotado (${tipoDe(e)})")
             } catch (e: Exception) {
-                // El canal traduce lo que sabe; lo que no traduce no trae HTTP, y sin HTTP lo único que cabe es la red.
-                // Tampoco lo trae el `withTimeout` del adaptador que vence: su cancelación no es la de la voz.
-                if (e is CancellationException) relanzarSiEsNuestra(e)
-                Apertura.SinRed(e.message ?: "error al abrir")
+                // SOLO LA RED SE REINTENTA, y la red la marca el canal con SinRed. Lo que lanza es otra cosa —TLS roto, URL
+                // mala— y fallaría igual tres veces diciendo «revisa tu internet».
+                c.errorAlAbrir = motivoSaneado(e)
+                log(TAG, "no se pudo abrir la sesión y no es la red: ${c.errorAlAbrir}")
+                return false
             }
             when (apertura) {
                 Apertura.Ok -> {
@@ -387,10 +465,10 @@ class ConversacionViva(
                         return false
                     }
                     try {
-                        canal.enviar(protocolo.apertura(instruccionesVoz, delegado, herramientas))
+                        escribiendo { canal.enviar(protocolo.apertura(instruccionesVoz, delegado, herramientas)) }
                     } catch (e: Exception) {
                         if (e is CancellationException) relanzarSiEsNuestra(e)
-                        log(TAG, "no pude mandar la apertura: ${e.message}")
+                        log(TAG, "no pude mandar la apertura: ${motivoSaneado(e)}")
                         c.cayoSolo = true
                         return false
                     }
@@ -455,7 +533,8 @@ class ConversacionViva(
                         procesar(c, r.texto)
                     } catch (e: Exception) {
                         if (e is CancellationException) relanzarSiEsNuestra(e)
-                        log(TAG, "no pude reaccionar a un mensaje del servidor: ${e.message}")
+                        // Revienta un puerto que maneja lo dicho o lo que suena: de su mensaje, ni una palabra al log.
+                        log(TAG, "no pude reaccionar a un mensaje del servidor: ${tipoDe(e)}")
                     }
 
                     is Recibido.Cierre -> {
@@ -467,7 +546,7 @@ class ConversacionViva(
         } catch (e: Exception) {
             // Un adaptador que cancela su Channel o vence un `withTimeout` en recibir() también es un corte.
             if (e is CancellationException) relanzarSiEsNuestra(e)
-            log(TAG, "se cortó la escucha: ${e.message}")
+            log(TAG, "se cortó la escucha: ${motivoSaneado(e)}")
             c.cayoSolo = true
             return "corte"
         }
@@ -549,10 +628,14 @@ class ConversacionViva(
 
             // SE ANOTAN ANTES DE LANZARLAS: la siguiente de la tanda ya las cuenta aunque esta termine enseguida.
             // Las que actúan en la pantalla van al obrero, de a una; las de control corren ya: «para» no puede esperar a
-            // que acabe lo que se está parando.
+            // que acabe lo que se está parando. Al log, solo los nombres: los argumentos traen lo que se va a escribir.
             is Hecho.Pide -> {
                 log(TAG, "llamada recibida: " + hecho.llamadas.joinToString { it.nombre })
-                for (l in hecho.llamadas) if (c.sinContestar.none { it === l }) c.sinContestar += l
+                for (l in hecho.llamadas) {
+                    if (c.sinContestar.none { it === l }) c.sinContestar += l
+                    // El function_call del delegado también es un item de la sesión del servidor, aunque no lo mande la voz.
+                    contarItem(c)
+                }
                 val (enPantalla, deControl) = hecho.llamadas.partition { actuaEnPantalla(it.nombre) }
                 if (enPantalla.isNotEmpty()) c.tandas.trySend(Tanda(c, enPantalla))
                 for (l in deControl) c.trabajo.launch { atender(Tanda(c, listOf(l))) }
@@ -575,6 +658,7 @@ class ConversacionViva(
             // delegado reabría en un modo y la voz en el de siempre. Antes de confirmar el servidor aún no escucha.
             Hecho.Abierta -> if (!c.confirmada) {
                 c.confirmada = true
+                algunaConfirmada = true
                 log(TAG, "sesión abierta con «${protocolo.modelo}»: el servidor la confirmó")
                 dice(c.alConfirmar)
                 enviando("el modo vigente") {
@@ -611,12 +695,22 @@ class ConversacionViva(
 
     /**
      * Una tanda, llamada por llamada y en orden. La retirada no se ejecuta y se contesta como tal. Lo que revienta o se
-     * para solo se contesta con su motivo, y la tanda sigue. Y la devolución al marcador va en finally: sin ella, tras la
-     * primera herramienta que falla, el turno no se cerraría nunca.
+     * para solo se contesta con su motivo, y la tanda sigue. Y la devolución al marcador va en finally: sin ella, la
+     * herramienta que saca una excepción de la tanda (la que cancela su propia corrutina) dejaba el turno abierto.
      */
     private suspend fun atender(tanda: Tanda) {
         val c = tanda.conexion
         val hechas = mutableListOf<Resultado>()
+        var soltada = false
+
+        /** Devuelta al marcador y fuera de las pendientes, una sola vez. */
+        fun soltar() {
+            if (soltada) return
+            soltada = true
+            c.turnos.devuelta(tanda.llamadas)
+            for (llamada in tanda.llamadas) c.sinContestar.removeAll { it === llamada }
+        }
+
         try {
             for (llamada in tanda.llamadas) {
                 if (llamada.id.isNotEmpty() && llamada.id in retiradas) {
@@ -625,7 +719,7 @@ class ConversacionViva(
                     continue
                 }
                 // Una sesión nueva no sabe de esta llamada: ejecutarla sería actuar por una petición que ya nadie recuerda.
-                if (c !== conexion || detenida) {
+                if (c !== conexion || c.acabada || detenida) {
                     log(TAG, "«${llamada.nombre}» no se ejecuta: la pidió una conexión que ya se cerró")
                     continue
                 }
@@ -635,61 +729,79 @@ class ConversacionViva(
                 } catch (e: Throwable) {
                     // NO SE ESCAPA NADA salvo la cancelación de la voz. Una cancelación ajena (`withTimeout`, el freno de
                     // 3A) mataba al obrero en silencio y la cola ya no se atendía; un Error (`TODO()`) tumbaba la voz.
+                    // Al log, SOLO EL TIPO: el mensaje de una herramienta puede traer lo que se escribió, y el log acaba en
+                    // la telemetría remota. Al modelo, el motivo: es quien tiene que saber por qué.
                     if (e is CancellationException) {
                         relanzarSiEsNuestra(e)
-                        log(TAG, "«${llamada.nombre}» se paró: ${e.message}")
-                        "la herramienta se paró: ${e.message ?: e::class.simpleName}"
+                        log(TAG, "«${llamada.nombre}» se paró (${tipoDe(e)}); el motivo va solo al modelo")
+                        "la herramienta se paró: ${e.message ?: tipoDe(e)}"
                     } else {
-                        log(TAG, "«${llamada.nombre}» reventó: ${e.message}")
-                        "la herramienta falló: ${e.message ?: e::class.simpleName}"
+                        log(TAG, "«${llamada.nombre}» reventó (${tipoDe(e)}); el motivo va solo al modelo")
+                        "la herramienta falló: ${e.message ?: tipoDe(e)}"
                     }
                 }
                 hechas += Resultado(llamada.id, salida)
             }
-        } finally {
-            c.turnos.devuelta(tanda.llamadas)
-            for (llamada in tanda.llamadas) c.sinContestar.removeAll { it === llamada }
-        }
-        if (c !== conexion || detenida) return
-        enviando("el resultado") {
-            // Cada resultado pasa por el recorte de 32 768 B: uno más grande deja la llamada pendiente para siempre.
-            for (m in protocolo.resultados(hechas)) mandarItem(c, m)
-            if (hechas.isNotEmpty()) c.resultadosSinPedir = true
-            if (c.sinContestar.isNotEmpty()) {
-                log(TAG, "resultado devuelto; la respuesta se pide cuando se contesten las ${c.sinContestar.size} llamada(s) que faltan")
+            if (c !== conexion || c.acabada || detenida) return
+            enviando("el resultado") {
+                // Cada resultado pasa por el recorte de 32 768 B: uno más grande deja la llamada pendiente para siempre.
+                for (m in protocolo.resultados(hechas)) mandarItem(c, m)
+                if (hechas.isNotEmpty()) c.resultadosSinPedir = true
+                // SE SUELTA CON LA SALIDA YA MANDADA Y EL ESCRITOR TOMADO. Soltarla antes y esperar al escritor dejaba un
+                // hueco: un aviso pedía respuesta con esta llamada fuera de las pendientes y su salida sin mandar (236).
+                soltar()
+                if (c.sinContestar.isNotEmpty()) {
+                    log(TAG, "resultado devuelto; la respuesta se pide cuando se contesten las ${c.sinContestar.size} llamada(s) que faltan")
+                }
+                pedirRespuestaSiToca(c)
             }
-            pedirRespuestaSiToca(c)
+        } finally {
+            soltar()
         }
     }
 
     /**
      * UN `response.create` Y SOLO SIN LLAMADAS PENDIENTES. Con una salida pendiente el servidor lo rechaza con
-     * `function_call_outputs_required` (medido con dos llamadas a 52 ms). Los avisos en cola salen delante, en el mismo
-     * pedido. Se llama con [envio] tomado.
+     * `function_call_outputs_required` (medido con dos llamadas a 52 ms). La cola —avisos y lo escrito— sale delante, en
+     * el mismo pedido. Se llama con el [escritor] tomado.
      */
     private suspend fun pedirRespuestaSiToca(c: Conexion) {
-        if (c !== conexion || !c.confirmada || c.sinContestar.isNotEmpty()) return
-        if (avisos.isEmpty() && !c.resultadosSinPedir) return
-        while (avisos.isNotEmpty()) mandarItem(c, protocolo.texto(AVISO_DEL_SISTEMA + avisos.removeFirst()).first())
+        if (c !== conexion || c.acabada || !c.confirmada || c.sinContestar.isNotEmpty()) return
+        if (c.cola.isEmpty() && !c.resultadosSinPedir) return
+        while (c.cola.isNotEmpty()) mandarItem(c, c.cola.removeFirst().item)
+        // MANDAR SUSPENDE, y mientras tanto la escucha pudo recibir otra llamada: se mira otra vez justo antes del pedido. Lo
+        // ya mandado queda sin pedir, y lo pide la tanda que conteste la nueva.
+        if (c !== conexion || c.acabada || c.sinContestar.isNotEmpty()) {
+            c.resultadosSinPedir = true
+            return
+        }
         c.resultadosSinPedir = false
         canal.enviar(protocolo.pedirRespuesta())
     }
 
-    /** Un item de la sesión del servidor. Pasado el tope rechaza lo que llegue: se avisa antes, una vez, sin cortar. */
+    /** Un item de la sesión del servidor. Se llama con el [escritor] tomado. */
     private suspend fun mandarItem(c: Conexion, json: String) {
         canal.enviar(json)
+        contarItem(c)
+    }
+
+    /** Pasado el tope el servidor rechaza lo que llegue: se avisa antes, una vez, sin cortar. */
+    private fun contarItem(c: Conexion) {
         c.items++
         if (c.items == AVISO_DE_ITEMS) {
             log(TAG, "la sesión lleva $AVISO_DE_ITEMS items de los $TOPE_DE_ITEMS que admite el servidor; pasado el tope rechaza lo que se le mande (response_input_buffer_full). No se corta nada")
         }
     }
 
+    /** TODO envío al socket pasa por aquí, de a uno. */
+    private suspend fun <T> escribiendo(cuerpo: suspend () -> T): T = escritor.withLock { cuerpo() }
+
     private suspend fun enviando(que: String, cuerpo: suspend () -> Unit) {
         try {
-            envio.withLock { cuerpo() }
+            escribiendo(cuerpo)
         } catch (e: Exception) {
             if (e is CancellationException) relanzarSiEsNuestra(e)
-            log(TAG, "no pude mandar $que: ${e.message}")
+            log(TAG, "no pude mandar $que: ${motivoSaneado(e)}")
         }
     }
 
@@ -704,13 +816,19 @@ class ConversacionViva(
         // La sesión de esta conexión ya no existe: lo que corría por ella no tiene a quién contestar.
         if (c.sinContestar.isNotEmpty()) log(TAG, "se cancelan ${c.sinContestar.size} llamada(s) sin contestar de la conexión que se acabó")
         c.acabar()
+        // Lo escrito esperaba a una sesión que ya no existe, y la nueva no lo recuerda. Los avisos se quedan: pasan a la siguiente.
+        val escritos = c.cola.count { !it.esAviso }
+        if (escritos > 0) {
+            c.cola.removeAll { !it.esAviso }
+            log(TAG, "lo escrito en cola se descarta: $escritos mensaje(s) de la conexión que se acabó")
+        }
         val cancelada = detenida || via == "cancelación"
         val sigue = viva && !cancelada
         val causa = c.causa
         val noAbrio = !c.confirmada && c.fallaAntesDeAbrir.isNotEmpty()
         val por = if (cancelada) "cancelación" else via
 
-        if (sigue && causa == null && !noAbrio && c.cayoSolo && reconexiones < RECONEXIONES) {
+        if (sigue && causa == null && !c.faltaCredencial && c.errorAlAbrir == null && !noAbrio && c.cayoSolo && reconexiones < RECONEXIONES) {
             reconexiones++
             log(TAG, "fin de la escucha por $por: reconecto en ${ESPERA_DE_RECONEXION_MS * reconexiones} ms ($reconexiones/$RECONEXIONES), en una sesión nueva")
             return true
@@ -720,12 +838,17 @@ class ConversacionViva(
             !sigue -> "termina" to null
             causa != null -> "no se reintenta, $causa («${c.dichoDeLaCausa}»): con la misma cuenta, clave y modelo fallaría igual" to
                 "No sigo con la voz en vivo: $causa («${c.dichoDeLaCausa}»)."
+            c.faltaCredencial -> "no hay credencial para abrir otra vez: no se llama a nadie" to SIN_CREDENCIAL
+            c.errorAlAbrir != null -> "abrir falló sin ser la red (${c.errorAlAbrir}): no se reintenta" to
+                "No pude abrir la voz en vivo: ${c.errorAlAbrir}."
             noAbrio -> "no llegó a abrir: el servidor contestó «${c.fallaAntesDeAbrir}» en vez de confirmarla" to
                 "No pude abrir la voz en vivo. El servidor dice: ${c.fallaAntesDeAbrir}"
             c.cayoSolo -> "se cortó ${RECONEXIONES + 1} veces seguidas: se deja" to NO_VUELVE
             else -> "termina" to null
         }
         log(TAG, "fin de la escucha por $por: $veredicto")
+        if (c.cola.isNotEmpty()) log(TAG, "se descartan ${c.cola.size} aviso(s) del sistema en cola: la voz terminó")
+        c.cola.clear()
         terminar()
         frase?.let(dice)
         return false
@@ -746,4 +869,26 @@ class ConversacionViva(
         val decimas = (s * 10).roundToLong()
         return "${decimas / 10}.${decimas % 10}"
     }
+}
+
+/** El nombre del tipo de un error: de una herramienta, lo único que va al log. */
+private fun tipoDe(e: Throwable): String = e::class.simpleName ?: "Throwable"
+
+private val ENTRE_COMILLAS = Regex("«[^»]*»|“[^”]*”|\"[^\"]*\"|(?<![\\p{L}\\p{N}])'[^']*'")
+private val CON_FORMA_DE_CLAVE = Regex("(?i)\\bbearer\\s+\\S+|\\b(?:sk|rk|pk|ek)-\\S+|[\\p{L}\\p{N}_\\-]{20,}")
+
+/**
+ * LO QUE DE UN ERROR DEL CANAL PUEDE IR AL LOG, que `LogBus` reenvía a la telemetría remota: el tipo y la primera línea
+ * del mensaje sin lo que va entre comillas (lo citado es contenido), sin nada con forma de clave o de token, sin
+ * caracteres de control y recortada. De una herramienta, ni eso: solo [tipoDe].
+ */
+private fun motivoSaneado(e: Throwable): String {
+    val linea = e.message?.lineSequence()?.firstOrNull().orEmpty()
+        .replace(ENTRE_COMILLAS, "«…»")
+        .replace(CON_FORMA_DE_CLAVE, "…")
+        .filterNot { it.isISOControl() }
+        .trim()
+    if (linea.isEmpty()) return tipoDe(e)
+    val corta = if (linea.length > ConversacionViva.LARGO_DEL_MOTIVO) linea.take(ConversacionViva.LARGO_DEL_MOTIVO).trimEnd() + "…" else linea
+    return "${tipoDe(e)}: $corta"
 }
