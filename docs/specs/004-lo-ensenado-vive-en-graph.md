@@ -63,6 +63,10 @@ otro en el mismo commit.
 | 410 | La nota de contexto viaja antes de cerrar la sesión; sin nota, la sesión se cierra igual. | 4A2 |
 | 411 | Si cerrar la sesión no sale por un fallo transitorio, queda pendiente en disco y se reintenta al arrancar hasta que sale; una lectura agotada no deja pendiente automático. | 4A2 |
 | 412 | Si procesar el video falla, la sesión se cierra igual y el video queda para reprocesar; una demostración descartada no publica nada. | 4A2 |
+| 413 | Una respuesta de Graph demasiado anidada es un error manejado: nunca tumba la app, ni al leerla ni al registrarla ni al guardarla. | 4A1 · r1 |
+| 414 | Un plan o un video procesado no se pierden por un campo raro: una opción sin value o label y una variable nula se leen como vacías, y un null en notas o preguntas se descarta. | 4A1 · r1 |
+| 415 | Un id de workflow en blanco no llama a Graph y dice por qué. | 4A1 · r1 |
+| 416 | Una respuesta a la que le falta la clave esperada es un error; una que la trae vacía es válida. | 4A1 · r1 |
 
 **La que cierra el asunto es la 401.** Si el protocolo no es el de Windows, Graph recibe algo que
 acepta con HTTP 200 y descarta en silencio (un `actionType` que no conoce, unos `alternativeTargets`

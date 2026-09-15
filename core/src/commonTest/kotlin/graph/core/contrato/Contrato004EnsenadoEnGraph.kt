@@ -301,7 +301,7 @@ class Contrato004EnsenadoEnGraph {
                 ok("""{"workflows":[]}"""),
                 ok("""{"workflow":{"id":"wf 1"}}"""),
                 ok(""),
-                ok("""{"execution_plan":{"workflowId":"wf 1"}}"""),
+                ok("""{"execution_plan":{"workflowId":"wf 1","steps":[]}}"""),
                 ok("{}"),
                 ok("""{"geminiUploadUrl":"https://upload.test/x"}"""),
                 ok("""{"state":"ACTIVE"}"""),
@@ -513,7 +513,7 @@ class Contrato004EnsenadoEnGraph {
 
         assertEquals("com.miui.calculator · Calculadora · 2 sep 13:42 · 1 paso", NombreDeWorkflow.derivar("com.miui.calculator", "Calculadora", t0, 1, bogota), p)
         assertEquals("Claude · 2 sep 13:42 · 2 pasos", NombreDeWorkflow.derivar("Claude", "claude", t0, 2, bogota), "$p · la ventana igual a la app no se repite")
-        for (relleno in listOf("Workflow sin descripción", "workflow sin descripcion", "User workflow summary: registrar", "Resumen:", "No description", "", "  ", null)) {
+        for (relleno in listOf("Workflow sin descripción", "workflow sin descripcion", "User workflow summary: registrar", "user workflow summary - registrar", "Resumen:", "No description", "", "  ", null)) {
             assertTrue(NombreDeWorkflow.esRelleno(relleno), "$p · «$relleno» pasó por nombre")
         }
         assertFalse(NombreDeWorkflow.esRelleno("Radicar factura"), p)
@@ -601,6 +601,20 @@ class Contrato004EnsenadoEnGraph {
             val interpretacion = """{"campos":[{"campo":"Nombre","esDato":true,"significado":"el paciente"}],"recuerdos":[]}"""
             val t = TransporteGuionado(ok("""{"interpretation":$interpretacion}"""))
             assertEquals(Json.parseToJsonElement(interpretacion), cliente(t).interpretSteps("android://com.x/Registro", pasosDeLaDemo), p)
+        }
+        // Una interpretación anidada de más no revienta: el modelo no opinó, y el log no la vuelca.
+        run {
+            val lineas = mutableListOf<String>()
+            val t = TransporteGuionado(ok("""{"interpretation":${"[".repeat(2_000)}${"]".repeat(2_000)}}"""))
+            assertNull(cliente(t, lineas = lineas).interpretSteps("android://com.x/Registro", pasosDeLaDemo), "$p · interpretación anidada")
+            assertTrue(lineas.any { "no opinó" in it } && lineas.none { "[[[" in it }, "$p · interpretación anidada: ${lineas.map { it.take(160) }}")
+        }
+        // Lo que revienta sin ser una Exception —un Error— tampoco sale: lo único que sale es la cancelación.
+        run {
+            val lineas = mutableListOf<String>()
+            val t = TransporteGuionado(antes = { throw StackOverflowError("la pila se agotó en el transporte") })
+            assertNull(cliente(t, lineas = lineas).interpretSteps("android://com.x/Registro", pasosDeLaDemo), "$p · un Error")
+            assertTrue(lineas.any { "no opinó" in it && "la pila se agotó" in it }, "$p · un Error: el log no lo dice: $lineas")
         }
         run {
             val t = TransporteGuionado(ok("{}"), antes = { throw CancellationException("el usuario canceló") })
