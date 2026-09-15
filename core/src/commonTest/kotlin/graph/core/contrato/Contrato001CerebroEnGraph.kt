@@ -64,6 +64,7 @@ class Contrato001CerebroEnGraph {
             12 to "Cada objetivo nuevo abre un hilo nuevo en Graph: el primer turno de cada corrida viaja sin session aunque haya uno de una corrida anterior o uno reanudado.",
             13 to "Un turno de Graph nunca espera más de 6 minutos en total: un fallo de conexión se reintenta, pero una lectura agotada no, porque el turno pudo haberse cobrado.",
             14 to "Cancelar la corrida durante un POST no se registra como fallo de red ni reintenta.",
+            15 to "Las apps instaladas se consultan una sola vez por corrida y viajan en cada turno de esa corrida.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -104,6 +105,7 @@ class Contrato001CerebroEnGraph {
         deviceId: String? = null,
         reloj: TestTimeSource = TestTimeSource(),
         lineas: MutableList<String> = mutableListOf(),
+        alConsultarApps: () -> Unit = {},
     ) = GraphBrain(
         transport = transporte,
         credentials = { key },
@@ -111,7 +113,7 @@ class Contrato001CerebroEnGraph {
         userId = { "u-1" },
         email = { email },
         deviceId = { deviceId },
-        listApps = { listOf("Calculadora", "Ajustes") },
+        listApps = { alConsultarApps(); listOf("Calculadora", "Ajustes") },
         log = GraphLog { tag, m -> lineas += "[$tag] $m" },
         sleep = { esperas += it; reloj += it.milliseconds },
         timeSource = reloj,
@@ -533,6 +535,32 @@ class Contrato001CerebroEnGraph {
         assertEquals(1, t.requests.size, promesa(14) + " · la cancelación se reintentó")
         assertTrue(esperas.isEmpty(), promesa(14))
         assertTrue(lineas.none { "transitorio" in it }, promesa(14) + " · se registró como fallo de red: $lineas")
+    }
+
+    @Test
+    fun promesa15() = corre {
+        var consultas = 0
+        val t = TransporteGuionado(
+            ok("""{"session":"s1","actions":[{"kind":"wait","ms":1}]}"""),
+            ok("""{"session":"s2","actions":[{"kind":"wait","ms":1}]}"""),
+            fin,
+            ok("""{"session":"s3"}"""),
+        )
+        val b = cerebro(t, alConsultarApps = { consultas++ })
+        b.begin("abre la calculadora")
+        b.next(pantalla, emptyList())
+        b.next(pantalla, listOf("ok"))
+        b.next(pantalla, listOf("ok"))
+        assertEquals(1, consultas, promesa(15) + " · una corrida de 3 turnos consultó las apps $consultas veces")
+        for ((i, req) in t.requests.withIndex()) {
+            val apps = req.json["state"]!!.jsonObject.lista("apps")
+            assertEquals(listOf("Calculadora", "Ajustes"), apps, promesa(15) + " · el turno ${i + 1} viajó con apps=$apps")
+        }
+        // Por corrida, no por cerebro: un objetivo nuevo vuelve a consultar (entra la app recién instalada).
+        b.begin("abre los ajustes")
+        b.next(pantalla, emptyList())
+        assertEquals(2, consultas, promesa(15) + " · la corrida 2 reusó las apps de la corrida 1")
+        assertEquals(listOf("Calculadora", "Ajustes"), t.requests[3].json["state"]!!.jsonObject.lista("apps"), promesa(15))
     }
 
     /* ---------- Superficie falsa para correr el motor real ---------- */

@@ -62,13 +62,17 @@ class GraphTransport : TurnTransport {
                 val code = c.responseCode
                 val text = (if (code < 400) c.inputStream else c.errorStream)?.bufferedReader()?.readText() ?: ""
                 val retryAfter = c.getHeaderField("Retry-After")?.trim()?.toIntOrNull()
-                c.disconnect()
                 Result.success(TransportReply(code, text, retryAfter))
             } catch (e: SocketTimeoutException) {
                 // Después de conectar, un timeout es de lectura: el turno pudo haberse cobrado.
                 if (connected) Result.success(TransportReply(TransportReply.TIMED_OUT, causa(e))) else Result.failure(e)
             } catch (e: Throwable) {
                 Result.failure(e)
+            } finally {
+                // Toda salida suelta el socket: desde la promesa 13 una lectura agotada (-1) es un caso
+                // esperado y no puede dejarlo colgado. La conexión no se reutiliza; si ya la cortó
+                // `invokeOnCancellation`, un segundo disconnect() es inocuo.
+                runCatching { c.disconnect() }
             }
             if (cont.isActive) cont.resumeWith(result)
         }
