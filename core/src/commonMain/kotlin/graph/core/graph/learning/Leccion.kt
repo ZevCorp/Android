@@ -4,11 +4,16 @@ import graph.core.domain.GraphLog
 import graph.core.graph.Reintentos
 import graph.core.graph.TransportReply
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -86,9 +91,12 @@ class LeccionEnDisco(
     val motivo: String? = null,
 )
 
-/** Un cierre que no salió por un fallo transitorio: `cierres-pendientes/<sesión>.json`. */
+/**
+ * Un cierre que no salió, o del que todavía no se sabe si salió —el provisional que va a disco antes de la red (420)—:
+ * `cierres-pendientes/<sesión>.json`. [intentos]: cuántas veces lo intentó un arranque; manda el turno del siguiente (411).
+ */
 @Serializable
-class CierrePendiente(val sessionId: String, val workflowId: String, val cuandoMs: Long)
+class CierrePendiente(val sessionId: String, val workflowId: String, val cuandoMs: Long, val intentos: Int = 0)
 
 /** Un video que no se procesó: `videos-por-reprocesar/<sesión>.json`. [leccion] es `null` si la lección no llegó al disco. */
 @Serializable
@@ -130,7 +138,10 @@ class ResultadoDeLeccion(
     val pasosFallidos: Int get() = pasos.count { !it.enviado }
 }
 
-/** Lo que dejó [Leccion.reintentarPendientes]. [descartados]: Graph ya no los conoce o pudo haberlos cerrado. */
+/**
+ * Lo que dejó [Leccion.reintentarPendientes]. [siguen]: los que no salieron y los que el tope dejó para el arranque siguiente.
+ * [descartados]: Graph ya no los conoce o pudo haberlos cerrado.
+ */
 class PendientesReintentados(val cerrados: Int, val siguen: Int, val descartados: Int)
 
 /**
@@ -151,7 +162,12 @@ class PendientesReintentados(val cerrados: Int, val siguen: Int, val descartados
  *    → el video → la nota → el cierre (409-412). Cancelarlo no lo deja a medias: se cierra, o queda pendiente (418);
  *  - [descartar] no publica nada: ni pasos pendientes, ni nota, ni cierre, ni lección (412);
  *  - un cierre que no sale por un transitorio o por la key queda en disco y [reintentarPendientes] lo intenta al
- *    arrancar, una vez por arranque; una lectura agotada no deja pendiente automático (411).
+ *    arrancar, una vez por arranque, hasta [MAX_PENDIENTES_POR_ARRANQUE] en [TOPE_DE_ARRANQUE]; una lectura agotada no deja
+ *    pendiente automático (411);
+ *  - el cierre provisional va a disco con la lección, antes de la red: ni un proceso que muere ni un cierre cancelado que agota
+ *    su [TOPE_DE_CIERRE_CANCELADO] dejan la sesión sin pendiente (420);
+ *  - el log sale del teléfono (en la app, `LogBus` manda cada línea a telemetría): lleva ids, cuentas, estados y códigos. Lo que
+ *    el usuario dijo, escribió o nombró, y el texto de un fallo, van al resultado y a disco, nunca al log (419).
  */
 class Leccion(
     private val cliente: LearningClient,
@@ -187,7 +203,12 @@ class Leccion(
         val pasos = mutableListOf<PasoDeLeccion>()
         val nota = StringBuilder()
         var enCurso: Observado.Paso? = null
-        /** Lo que la cola le entregó al lector cuando ya lo estaban cancelando y no llegó a tomar (`onUndeliveredElement`). */
+        /**
+         * Lo que la cola le entregó al lector cuando ya lo estaban cancelando y no llegó a tomar (`onUndeliveredElement`). Una lista
+         * sin candado, porque sus escrituras van siempre en serie: la del lector, al cancelarse, antes de que termine; las de
+         * `cola.cancel()`, solo en [descartar] y con el lector ya terminado; y [cortar] la lee con el lector terminado. `trySend`
+         * sobre la cola cerrada o cancelada no llama a `onUndeliveredElement` (medido en kotlinx-coroutines 1.8.1).
+         */
         val sinEntregar = mutableListOf<Observado>()
         /** Por qué terminó el lector: `null` si vació la cola; la cancelación o el fallo de su scope, si no. */
         @Volatile var fin: Throwable? = null
@@ -199,6 +220,20 @@ class Leccion(
             nota.append(texto)
         }
     }
+
+    /** Lo que salió mal sin tumbar la enseñanza, dos veces: para el usuario, con su causa, y para el log, medido (419). */
+    private class Avisos {
+        val paraUsuario = mutableListOf<String>()
+        val paraLog = mutableListOf<String>()
+
+        fun anotar(usuario: String, log: String = usuario) {
+            paraUsuario += usuario
+            paraLog += log
+        }
+    }
+
+    /** Lo que dejó la red del cierre: cómo quedó, con qué workflow y, si no salió, por qué, entero y medido. */
+    private class EnGraph(val cierre: Cierre, val workflowId: String, val motivo: String, val medida: String, val faltaElResumen: Boolean)
 
     private class Abierta(
         val sesion: Arranque.Ensenando,
@@ -247,9 +282,8 @@ class Leccion(
             throw e
         } catch (e: Exception) {
             volverANueva()
-            val motivo = "no se puede enseñar: graph no abrió la sesión — ${unaLinea(e)}"
-            log.log(TAG, motivo)
-            return Arranque.NoSePuede(motivo)
+            log.log(TAG, "no se puede enseñar: graph no abrió la sesión — ${medidaDe(e)}")
+            return Arranque.NoSePuede("no se puede enseñar: graph no abrió la sesión — ${unaLinea(e)}")
         }
         val id = checkNotNull(info.id) { "crearSesion devolvió una sesión sin id" }
         val sesion = Arranque.Ensenando(sessionId = id, workflowId = info.workflowId ?: id)
@@ -275,7 +309,7 @@ class Leccion(
                 lector.invokeOnCompletion { leido.fin = it }
                 abierta = Abierta(sesion, identidad, descripcion, empezoMs, cola, leido, lector)
                 estado = Estado.GRABANDO
-                log.log(TAG, "▶ enseñando en ${identidad.url} (sesión ${sesion.sessionId})")
+                log.log(TAG, "▶ enseñando (sesión ${sesion.sessionId}, workflow ${sesion.workflowId})")
                 sesion
             }
         } catch (e: CancellationException) {
@@ -312,18 +346,25 @@ class Leccion(
      *     se había muerto (se canceló o falló su scope), lo que quedó en vuelo o en la cola tampoco salió: cuenta igual,
      *     y la lección no se da por entera ni se anuncia como aprendida (417);
      *  b) escribe la lección en disco ANTES de tocar la red, en una sola escritura: el video, la nota y el
-     *     cierre pueden fallar (429, 504, sin red) y la lección no depende de ninguno;
+     *     cierre pueden fallar (429, 504, sin red) y la lección no depende de ninguno. Con ella va el cierre PROVISIONAL a
+     *     `cierres-pendientes/`: si el proceso muere antes de saber cómo salió `finish` —procesando el video, con `finish` en
+     *     vuelo—, al arrancar queda un pendiente que lo termina (420);
      *  c) procesa el video con [video]; si lanza o devuelve `null`, se sigue y queda marcado para reprocesar;
      *  d) la nota de contexto (lo hablado y el resumen del video), solo si hay: después del cierre ya no hay
      *     sesión a la que adjuntarla;
-     *  e) cierra la sesión. Si no sale por un transitorio, o por la key, el cierre queda pendiente en disco; si
-     *     Graph no respondió a tiempo, pudo haberla cerrado y no se deja pendiente.
+     *  e) cierra la sesión y el provisional se borra. Si no sale por un transitorio, o por la key, se queda como pendiente;
+     *     si Graph no respondió a tiempo, pudo haberla cerrado y se borra, igual que si Graph dijo que no.
+     *
+     * Si el proceso muere después de que `finish` salió y antes de borrar el provisional, el arranque reintenta una sesión que
+     * Graph ya cerró. Si Graph responde 404 o 400, [trasFallo] lo juzga FALLIDO y el pendiente se borra tras ese único intento;
+     * si respondiera 2xx y post-procesara otra vez, cobraría dos veces (supuesto sin verificar de la spec 004).
      *
      * CANCELAR NO LA DEJA A MEDIAS (418). Lo que espera —vaciar la cola, procesar el video— se puede cancelar: lo que
      * no salió cuenta como no enviado y el video queda para reprocesar, sin empezarlo si aún no empezó. Lo que escribe o
      * publica —la lección, la marca del video, la nota, el cierre y su pendiente— corre hasta el final bajo
-     * [NonCancellable], y la cancelación sale después, con la lección ya TERMINADA: tarda en salir lo que tarde el
-     * cierre, hasta sus tres intentos. Windows cierra entero con `CancellationToken.None`, video incluido.
+     * [NonCancellable], y la cancelación sale después, con la lección ya TERMINADA. Y NO LA CUELGA (420): desde que llega la
+     * cancelación, la red del cierre —la nota y `finish`— tiene [TOPE_DE_CIERRE_CANCELADO]; vencido, se corta, queda el
+     * pendiente y la cancelación sale. Windows cierra entero con `CancellationToken.None`, video incluido.
      */
     suspend fun terminar(dondeTermina: String, video: suspend () -> ResumenDeVideo?): ResultadoDeLeccion {
         val a = candado.withLock {
@@ -342,8 +383,10 @@ class Leccion(
 
     private suspend fun cerrar(a: Abierta, dondeTermina: String, video: suspend () -> ResumenDeVideo?): ResultadoDeLeccion {
         val sid = a.sesion.sessionId
-        val avisos = mutableListOf<String>()
+        val avisos = Avisos()
         var cancelada: CancellationException? = null
+        // La corrida de quien llamó: si la cancelan, la red del cierre tiene tope (420).
+        val quienLlama = currentCoroutineContext()[Job]
 
         /** Un fallo de lo que no se cancela, en una línea. Si es una cancelación, se anota para relanzarla al final. */
         fun fallo(e: Exception): String {
@@ -360,26 +403,32 @@ class Leccion(
             cancelada = e
         }
         // El lector se murió solo si nadie lo cortó: ni el tope ni la cancelación de este cierre.
-        val lectorMuerto = if (!topado && cancelada == null && a.lector.isCancelled)
-            "el lector de pasos se detuvo antes de cerrar (${a.leido.fin?.let { unaLinea(it) } ?: "sin causa"})" else null
+        val lectorSeMurio = !topado && cancelada == null && a.lector.isCancelled
+        /** Por qué se detuvo el lector, con su causa entera (para la lección) o medida (para el log, 419); `null` si no se murió. */
+        fun lectorMuerto(causa: (Throwable) -> String): String? =
+            if (lectorSeMurio) "el lector de pasos se detuvo antes de cerrar (${a.leido.fin?.let(causa) ?: "sin causa"})" else null
 
         var pasos = emptyList<PasoDeLeccion>()
         var nota = ""
         var leccion: String? = null
+        var provisional = false
         sinCancelar {
             if (topado || cancelada != null) a.lector.cancelAndJoin()
-            val porQue = when {
+            fun porQue(causa: (Throwable) -> String) = when {
                 topado -> "antes de cerrar (tope de ${Reintentos.corto(topeDeVaciado)})"
                 cancelada != null -> "porque se canceló el cierre"
-                else -> "porque ${lectorMuerto ?: "el lector de pasos se detuvo"}"
+                else -> "porque ${lectorMuerto(causa) ?: "el lector de pasos se detuvo"}"
             }
-            val cortados = cortar(a, "no llegó a enviarse $porQue")
-            if (cortados > 0) avisos += "$cortados paso(s) no llegaron a enviarse $porQue"
+            val cortados = cortar(a, "no llegó a enviarse ${porQue(PARA_EL_USUARIO)}")
+            if (cortados > 0) avisos.anotar(
+                "$cortados paso(s) no llegaron a enviarse ${porQue(PARA_EL_USUARIO)}",
+                "$cortados paso(s) no llegaron a enviarse ${porQue(PARA_EL_LOG)}",
+            )
             pasos = a.leido.pasos.toList()
             nota = a.leido.nota.toString()
 
             // b) La lección, a disco, antes de la red.
-            val faltante = faltante(pasos, dondeTermina, lectorMuerto)
+            val faltante = faltante(pasos, dondeTermina, lectorMuerto(PARA_EL_USUARIO))
             val rutaLeccion = ruta(CARPETA_LECCIONES, sid)
             leccion = try {
                 val entera = LeccionEnDisco(
@@ -398,15 +447,23 @@ class Leccion(
                 almacen.escribirEntero(rutaLeccion, LeccionJson.encodeToString(LeccionEnDisco.serializer(), entera))
                 rutaLeccion
             } catch (e: Exception) {
-                avisos += "la lección no se pudo guardar en disco (${fallo(e)}): graph sigue teniendo los pasos"
+                avisos.anotar(
+                    "la lección no se pudo guardar en disco (${fallo(e)}): graph sigue teniendo los pasos",
+                    "la lección no se pudo guardar en disco (${medidaDe(e)}): graph sigue teniendo los pasos",
+                )
                 null
             }
-            faltante?.let { avisos += "a la lección le falta algo: $it" }
+            faltante?.let { avisos.anotar("a la lección le falta algo: $it", "a la lección le falta algo: ${faltante(pasos, dondeTermina, lectorMuerto(PARA_EL_LOG))}") }
+
+            // Y con ella, el cierre provisional (420): desde aquí, pase lo que pase con el proceso, el arranque sabe cerrar la sesión.
+            provisional = escribirPendiente(CierrePendiente(sid, a.sesion.workflowId, ahoraMs()))
+                ?.also { log.log(TAG, "el cierre provisional de la sesión $sid no se pudo escribir (${medidaDe(it)}): si finish no sale, se intenta otra vez") } == null
         }?.let { if (cancelada == null) cancelada = it }
 
         // c) El video: tarda minutos y se puede cancelar. Si ya se canceló el cierre, ni se empieza.
         var resumen: ResumenDeVideo? = null
         var motivoVideo: String? = null
+        var medidaVideo: String? = null
         if (cancelada != null) {
             motivoVideo = "se canceló el cierre antes de procesarlo"
         } else {
@@ -418,74 +475,72 @@ class Leccion(
                 motivoVideo = "se canceló el cierre mientras se procesaba"
             } catch (e: Exception) {
                 motivoVideo = unaLinea(e)
+                medidaVideo = medidaDe(e)
             }
         }
 
         var resultado: ResultadoDeLeccion? = null
         sinCancelar {
             motivoVideo?.let { m ->
-                val marca = try {
+                var marca = "queda para reprocesar"
+                var marcaMedida = marca
+                try {
                     almacen.escribirEntero(
                         ruta(CARPETA_VIDEOS, sid),
                         LeccionJson.encodeToString(VideoParaReprocesar.serializer(), VideoParaReprocesar(sid, leccion, m, ahoraMs())),
                     )
-                    "queda para reprocesar"
                 } catch (e: Exception) {
-                    "y no se pudo marcar para reprocesar (${fallo(e)})"
+                    marca = "y no se pudo marcar para reprocesar (${fallo(e)})"
+                    marcaMedida = "y no se pudo marcar para reprocesar (${medidaDe(e)})"
                 }
-                avisos += "el video no se procesó ($m): la sesión se cierra con los pasos y el video $marca"
+                avisos.anotar(
+                    "el video no se procesó ($m): la sesión se cierra con los pasos y el video $marca",
+                    "el video no se procesó (${medidaVideo ?: m}): la sesión se cierra con los pasos y el video $marcaMedida",
+                )
             }
 
-            // d) La nota de contexto, antes del cierre.
-            val contexto = listOfNotNull(
-                nota.vacioEsAusente(),
-                resumen?.resumen.vacioEsAusente()?.let { "lo que se vio en el video: ${it.trim()}" },
-            ).joinToString("\n\n")
-            if (contexto.isNotEmpty()) {
-                try {
-                    cliente.notaDeContexto(sid, contexto)
-                } catch (e: Exception) {
-                    avisos += "la nota de contexto no viajó (${fallo(e)}): la sesión se cierra sin ella"
-                }
-            }
-
-            // e) El cierre. Lo que no sale se juzga con el mismo criterio que al arrancar (411).
-            var workflowId = a.sesion.workflowId
-            var motivoCierre = ""
-            var faltaElResumen = false
-            val cierre = try {
-                cliente.terminar(sid, a.sesion.workflowId).workflowId?.let { workflowId = it }
-                Cierre.CERRADA
-            } catch (e: Exception) {
-                motivoCierre = fallo(e)
-                faltaElResumen = e is FinishPendiente
-                trasFallo(e).also { if (it == Cierre.PENDIENTE) guardarPendiente(sid, a.sesion.workflowId, avisos) }
+            // d) y e) La red del cierre. Si ya cancelaron, o cancelan mientras tanto, con tope; vencido, queda pendiente (420).
+            val tope = "se agotó el tope de ${Reintentos.corto(TOPE_DE_CIERRE_CANCELADO)} del cierre cancelado"
+            val enGraph = conTopeSiCancelan(quienLlama) { cerrarEnGraph(a, nota, resumen, avisos) }
+                ?: EnGraph(Cierre.PENDIENTE, a.sesion.workflowId, tope, tope, faltaElResumen = false)
+            val cierre = enGraph.cierre
+            val workflowId = enGraph.workflowId
+            // El provisional se queda si el cierre quedó pendiente; si salió, o no hay nada que reintentar, se borra.
+            if (cierre == Cierre.PENDIENTE) {
+                if (provisional) log.log(TAG, "cierre pendiente guardado (sesión $sid): se reintenta al arrancar")
+                else guardarPendiente(sid, a.sesion.workflowId, avisos)
+            } else if (provisional) {
+                borrarPendiente(ruta(CARPETA_PENDIENTES, sid))
             }
 
             // f) El resultado. Con pasos que no llegaron, o con el lector muerto, lo que Graph tiene está incompleto y
-            //    no se anuncia como aprendido (417).
+            //    no se anuncia como aprendido (417). Se compone dos veces: para el usuario, con el nombre y las causas, y
+            //    para el log, que sale del teléfono, con el id del workflow y las medidas (419).
             val mandados = pasos.count { it.enviado }
             val cuantos = if (mandados == 1) "1 paso" else "$mandados pasos"
             val sinComprobar = Comprobacion.SIN_COMPROBAR.texto
-            val incompleta = listOfNotNull(
-                pasos.count { !it.enviado }.takeIf { it > 0 }?.let { "$it de ${pasos.size} paso(s) no llegaron" },
-                lectorMuerto,
-            ).joinToString("; ").ifEmpty { null }
-            val yFalta = incompleta?.let { "; $it" } ?: ""
-            val nombre = a.descripcion.trim().ifEmpty { workflowId }
-            val mensaje = when (cierre) {
-                Cierre.CERRADA ->
-                    if (incompleta == null) "aprendí «$nombre» ($cuantos), $sinComprobar"
-                    else "«$nombre» quedó incompleto en Graph ($cuantos$yFalta), $sinComprobar"
-                Cierre.PENDIENTE ->
-                    (if (incompleta == null) "aprendido pero pendiente" else "incompleto ($incompleta) y pendiente") +
-                        " de cerrar en Graph: $cuantos ya guardados, " +
-                        (if (faltaElResumen) "falta el resumen" else "no se pudo cerrar ($motivoCierre)") +
-                        " y se reintenta al arrancar; $sinComprobar"
-                Cierre.INCIERTO -> "Graph no respondió a tiempo al cerrar y pudo haberlo cerrado: no se reintenta solo para no cobrar dos veces ($cuantos$yFalta); $sinComprobar"
-                Cierre.FALLIDO -> "Graph no cerró la sesión ($motivoCierre): $cuantos mandados$yFalta; $sinComprobar"
+            fun componer(quien: String, motivoCierre: String, causa: (Throwable) -> String): String {
+                val incompleta = listOfNotNull(
+                    pasos.count { !it.enviado }.takeIf { it > 0 }?.let { "$it de ${pasos.size} paso(s) no llegaron" },
+                    lectorMuerto(causa),
+                ).joinToString("; ").ifEmpty { null }
+                val yFalta = incompleta?.let { "; $it" } ?: ""
+                return when (cierre) {
+                    Cierre.CERRADA ->
+                        if (incompleta == null) "aprendí $quien ($cuantos), $sinComprobar"
+                        else "$quien quedó incompleto en Graph ($cuantos$yFalta), $sinComprobar"
+                    Cierre.PENDIENTE ->
+                        (if (incompleta == null) "aprendido pero pendiente" else "incompleto ($incompleta) y pendiente") +
+                            " de cerrar en Graph: $cuantos ya guardados, " +
+                            (if (enGraph.faltaElResumen) "falta el resumen" else "no se pudo cerrar ($motivoCierre)") +
+                            " y se reintenta al arrancar; $sinComprobar"
+                    Cierre.INCIERTO -> "Graph no respondió a tiempo al cerrar y pudo haberlo cerrado: no se reintenta solo para no cobrar dos veces ($cuantos$yFalta); $sinComprobar"
+                    Cierre.FALLIDO -> "Graph no cerró la sesión ($motivoCierre): $cuantos mandados$yFalta; $sinComprobar"
+                }
             }
-            log.log(TAG, "■ $mensaje" + if (avisos.isEmpty()) "" else " · ${avisos.joinToString(" · ")}")
+            val mensaje = componer("«${a.descripcion.trim().ifEmpty { workflowId }}»", enGraph.motivo, PARA_EL_USUARIO)
+            val medido = componer("el workflow $workflowId", enGraph.medida, PARA_EL_LOG)
+            log.log(TAG, "■ $medido · sesión $sid" + if (avisos.paraLog.isEmpty()) "" else " · ${avisos.paraLog.joinToString(" · ")}")
             resultado = ResultadoDeLeccion(
                 sessionId = sid,
                 workflowId = workflowId,
@@ -494,7 +549,7 @@ class Leccion(
                 leccion = leccion,
                 videoParaReprocesar = motivoVideo != null,
                 resumenDeVideo = resumen,
-                avisos = avisos,
+                avisos = avisos.paraUsuario,
                 mensaje = mensaje,
             )
         }?.let { if (cancelada == null) cancelada = it }
@@ -532,44 +587,61 @@ class Leccion(
             abierta.also { abierta = null }
         }
         if (a != null) {
-            a.lector.cancel()
+            // En serie: el lector suelta lo que la cola le entregó sin tomarlo, y termina, antes de que la cola suelte lo suyo.
+            // Así `onUndeliveredElement` nunca escribe `sinEntregar` desde dos hilos a la vez.
+            a.lector.cancelAndJoin()
             a.cola.cancel()
-            a.lector.join()
         }
         log.log(TAG, "demostración descartada: no se publica nada" + (a?.let { " (la sesión ${it.sesion.sessionId} queda sin cerrar en graph)" } ?: ""))
         return true
     }
 
     /**
-     * Para el arranque de la app: reintenta los cierres que quedaron pendientes, UNA vez cada uno, como Windows
+     * Para el arranque de la app, que lo llama en segundo plano sin bloquear la UI (4C): reintenta los cierres que quedaron pendientes, UNA vez cada uno, como Windows
      * (`PendingFinish.cs:69`): los tres intentos del cierre, con sus esperas y un post-procesado de LLM cada uno, se
      * repetirían en cada arranque y para siempre. El que sale se borra; el que vuelve a no salir por un transitorio,
      * o no se pudo intentar (sin key, la key no vale), se queda. Los que Graph ya no reconoce (la sesión murió con
      * su instancia) o a los que no respondió a tiempo (pudo haberlos cerrado) se borran: reintentarlos sería para
      * siempre, o cobrar dos veces. El criterio es el mismo que al cerrar ([trasFallo]).
+     *
+     * Con tope (411): hasta [MAX_PENDIENTES_POR_ARRANQUE] intentos, y ninguno que empiece pasado [TOPE_DE_ARRANQUE]; con Graph
+     * caído, N pendientes × 90 s se comerían el arranque. El resto queda para el siguiente, que empieza por los que menos veces se
+     * intentaron: sin ese turno, cinco pendientes que nunca salen taparían al sexto para siempre. El intento que ya salió termina en
+     * su propio tope de 90 s: cortarlo a mitad dejaría a Graph cerrando sin que nadie lo sepa.
      */
     suspend fun reintentarPendientes(): PendientesReintentados {
+        val empezo = reloj.markNow()
         val rutas = try {
             almacen.listar(CARPETA_PENDIENTES).sorted()
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.log(TAG, "no pude leer los cierres pendientes: ${unaLinea(e)}")
+            log.log(TAG, "no pude leer los cierres pendientes: ${medidaDe(e)}")
             return PendientesReintentados(0, 0, 0)
         }
         var cerrados = 0
         var siguen = 0
         var descartados = 0
-        for (ruta in rutas) {
-            val pendiente = try {
-                almacen.leer(ruta)?.let { LeccionJson.decodeFromString(CierrePendiente.serializer(), it) } ?: continue
+        val leidos = rutas.mapNotNull { ruta ->
+            try {
+                almacen.leer(ruta)?.let { ruta to LeccionJson.decodeFromString(CierrePendiente.serializer(), it) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Exception) {
-                log.log(TAG, "el cierre pendiente $ruta no se pudo leer (${unaLinea(e)}): se deja")
+                log.log(TAG, "el cierre pendiente $ruta no se pudo leer (${medidaDe(e)}): se deja")
+                siguen++
+                null
+            }
+        }
+        // El turno: primero los que menos veces intentó un arranque; a igual número, los más viejos, y después por ruta.
+        val turno = leidos.sortedWith(compareBy({ it.second.intentos }, { it.second.cuandoMs }))
+        var intentados = 0
+        for ((ruta, pendiente) in turno) {
+            if (intentados == MAX_PENDIENTES_POR_ARRANQUE || empezo.elapsedNow() >= TOPE_DE_ARRANQUE) {
                 siguen++
                 continue
             }
+            intentados++
             try {
                 cliente.terminar(pendiente.sessionId, pendiente.workflowId, intentos = 1)
                 cerrados++
@@ -583,18 +655,22 @@ class Leccion(
                         siguen++
                         log.log(TAG, when (e) {
                             is FinishPendiente -> "el cierre de ${pendiente.sessionId} sigue sin poder completarse (HTTP ${e.status})"
-                            is GraphException -> "el cierre de ${pendiente.sessionId} espera una key que valga: ${unaLinea(e)}"
-                            else -> "el cierre de ${pendiente.sessionId} no se pudo intentar (${unaLinea(e)}): se deja"
+                            is GraphException -> "el cierre de ${pendiente.sessionId} espera una key que valga: ${medidaDe(e)}"
+                            else -> "el cierre de ${pendiente.sessionId} no se pudo intentar (${medidaDe(e)}): se deja"
                         })
+                        anotarIntento(ruta, pendiente)
                     }
                     else -> {
                         descartados++
                         val porque = if ((e as? GraphException)?.status == TransportReply.TIMED_OUT) "graph no respondió a tiempo y pudo haberlo cerrado" else "no es reintentable"
-                        log.log(TAG, "cierre de ${pendiente.sessionId} descartado, $porque: ${unaLinea(e)}")
+                        log.log(TAG, "cierre de ${pendiente.sessionId} descartado, $porque: ${medidaDe(e)}")
                         borrarPendiente(ruta)
                     }
                 }
             }
+        }
+        (turno.size - intentados).takeIf { it > 0 }?.let {
+            log.log(TAG, "$it cierre(s) pendiente(s) quedan para el próximo arranque (tope: $MAX_PENDIENTES_POR_ARRANQUE por arranque y ${Reintentos.corto(TOPE_DE_ARRANQUE)} en total)")
         }
         return PendientesReintentados(cerrados, siguen, descartados)
     }
@@ -618,9 +694,8 @@ class Leccion(
             throw e
         } catch (e: Exception) {
             // Un paso perdido no aborta la grabación: mejor un workflow con un hueco que perder la demostración entera.
-            val motivo = unaLinea(e)
-            log.log(TAG, "el paso $orden no llegó a graph: $motivo")
-            PasoDeLeccion(orden, o.horaMs, o.paso, enviado = false, motivo = motivo)
+            log.log(TAG, "el paso $orden no llegó a graph: ${medidaDe(e)}")
+            PasoDeLeccion(orden, o.horaMs, o.paso, enviado = false, motivo = unaLinea(e))
         }
         leido.pasos += paso
         leido.enCurso = null
@@ -635,21 +710,105 @@ class Leccion(
             try {
                 avisar(aviso)
             } catch (e: Exception) {
-                log.log(TAG, "el aviso no se pudo dar: ${unaLinea(e)}")
+                log.log(TAG, "el aviso no se pudo dar: ${medidaDe(e)}")
             }
         }
     }
 
-    /** Deja el cierre en `cierres-pendientes/` para [reintentarPendientes]. Corre bajo [NonCancellable]: si no puede, lo dice y sigue. */
-    private suspend fun guardarPendiente(sessionId: String, workflowId: String, avisos: MutableList<String>) {
+    /**
+     * Deja el cierre en `cierres-pendientes/` para [reintentarPendientes], cuando el provisional no llegó a disco. Corre bajo
+     * [NonCancellable]: si no puede, lo dice y sigue.
+     */
+    private suspend fun guardarPendiente(sessionId: String, workflowId: String, avisos: Avisos) {
+        val fallo = escribirPendiente(CierrePendiente(sessionId, workflowId, ahoraMs()))
+        if (fallo == null) log.log(TAG, "cierre pendiente guardado (sesión $sessionId): se reintenta al arrancar")
+        else avisos.anotar(
+            "el cierre pendiente no se pudo guardar (${unaLinea(fallo)}): no se reintentará solo",
+            "el cierre pendiente no se pudo guardar (${medidaDe(fallo)}): no se reintentará solo",
+        )
+    }
+
+    /** Escribe [pendiente] en [donde]: `null` si quedó, o lo que falló. La cancelación sale tal cual. */
+    private suspend fun escribirPendiente(pendiente: CierrePendiente, donde: String = ruta(CARPETA_PENDIENTES, pendiente.sessionId)): Exception? = try {
+        almacen.escribirEntero(donde, LeccionJson.encodeToString(CierrePendiente.serializer(), pendiente))
+        null
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        e
+    }
+
+    /** Un intento más en el pendiente de [ruta]: el arranque siguiente empieza por los que menos veces se intentaron (411). */
+    private suspend fun anotarIntento(ruta: String, p: CierrePendiente) {
+        escribirPendiente(CierrePendiente(p.sessionId, p.workflowId, p.cuandoMs, p.intentos + 1), ruta)
+            ?.let { log.log(TAG, "no pude anotar el intento del cierre pendiente $ruta (${medidaDe(it)})") }
+    }
+
+    /**
+     * d) y e) La nota de contexto, solo si hay —después del cierre ya no hay sesión a la que adjuntarla—, y el cierre. Lo que no
+     * sale se juzga con el mismo criterio que al arrancar (411). La cancelación sale tal cual: la manda el tope (420).
+     */
+    private suspend fun cerrarEnGraph(a: Abierta, nota: String, resumen: ResumenDeVideo?, avisos: Avisos): EnGraph {
+        val sid = a.sesion.sessionId
+        val contexto = listOfNotNull(
+            nota.vacioEsAusente(),
+            resumen?.resumen.vacioEsAusente()?.let { "lo que se vio en el video: ${it.trim()}" },
+        ).joinToString("\n\n")
+        if (contexto.isNotEmpty()) {
+            try {
+                cliente.notaDeContexto(sid, contexto)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                avisos.anotar(
+                    "la nota de contexto no viajó (${unaLinea(e)}): la sesión se cierra sin ella",
+                    "la nota de contexto no viajó (${medidaDe(e)}): la sesión se cierra sin ella",
+                )
+            }
+        }
+        return try {
+            val cerrada = cliente.terminar(sid, a.sesion.workflowId)
+            EnGraph(Cierre.CERRADA, cerrada.workflowId ?: a.sesion.workflowId, motivo = "", medida = "", faltaElResumen = false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            EnGraph(trasFallo(e), a.sesion.workflowId, unaLinea(e), medidaDe(e), faltaElResumen = e is FinishPendiente)
+        }
+    }
+
+    /**
+     * Corre [red] —ya bajo [NonCancellable]— sin tope mientras nadie cancele a [quienLlama]. Si ya lo cancelaron, o lo cancelan
+     * mientras tanto, [red] tiene [TOPE_DE_CIERRE_CANCELADO], esperado con [esperarTope]: vencido, se corta y devuelve `null`
+     * (420). Un `viewModelScope` cancelado no queda minutos detrás de una nota y tres `finish` de 90 s. Cortar a tiempo depende de
+     * que el transporte sea cancelable, y el de la app lo es (`GraphTransport`: `disconnect()` al cancelar).
+     */
+    private suspend fun <T> conTopeSiCancelan(quienLlama: Job?, red: suspend () -> T): T? = coroutineScope {
+        val cancelaron = CompletableDeferred<Unit>()
+        // Un hijo de quien llama se entera de su cancelación; lo que corre aquí, bajo NonCancellable, no.
+        val vigia = when {
+            quienLlama == null -> null
+            quienLlama.isCancelled -> null.also { cancelaron.complete(Unit) }
+            else -> CoroutineScope(this.coroutineContext.minusKey(Job) + quienLlama).launch(start = CoroutineStart.UNDISPATCHED) {
+                try {
+                    awaitCancellation()
+                } finally {
+                    cancelaron.complete(Unit)
+                }
+            }
+        }
+        val trabajo = async { red() }
+        val cronometro = launch {
+            cancelaron.await()
+            esperarTope(TOPE_DE_CIERRE_CANCELADO)
+            trabajo.cancel(CancellationException("se agotó el tope del cierre cancelado"))
+        }
         try {
-            almacen.escribirEntero(
-                ruta(CARPETA_PENDIENTES, sessionId),
-                LeccionJson.encodeToString(CierrePendiente.serializer(), CierrePendiente(sessionId, workflowId, ahoraMs())),
-            )
-            log.log(TAG, "cierre pendiente guardado (sesión $sessionId): se reintenta al arrancar")
-        } catch (x: Exception) {
-            avisos += "el cierre pendiente no se pudo guardar (${unaLinea(x)}): no se reintentará solo"
+            trabajo.await()
+        } catch (e: CancellationException) {
+            null
+        } finally {
+            cronometro.cancel()
+            vigia?.cancel()
         }
     }
 
@@ -714,7 +873,7 @@ class Leccion(
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
-            log.log(TAG, "no pude borrar el cierre pendiente $ruta (${unaLinea(e)}): el próximo arranque lo verá cerrado")
+            log.log(TAG, "no pude borrar el cierre pendiente $ruta (${medidaDe(e)}): el próximo arranque lo intentará una vez")
         }
     }
 
@@ -757,8 +916,12 @@ class Leccion(
             else "%" + HEX[b shr 4] + HEX[b and 0xF]
         }
 
-        /** El mensaje de un fallo en una sola línea: lo que se le dice al usuario y lo que queda en disco. */
+        /** El mensaje de un fallo en una sola línea: lo que se le dice al usuario y lo que queda en disco. Nunca va al log (419). */
         private fun unaLinea(e: Throwable): String =
             (e.message ?: e::class.simpleName ?: "sin causa").lines().map { it.trim() }.filter { it.isNotEmpty() }.joinToString(" ").ifEmpty { "sin causa" }
+
+        /** La causa de un fallo como la dice cada destino: entera para el usuario y el disco, medida para el log (419). */
+        private val PARA_EL_USUARIO: (Throwable) -> String = { unaLinea(it) }
+        private val PARA_EL_LOG: (Throwable) -> String = { medidaDe(it) }
     }
 }

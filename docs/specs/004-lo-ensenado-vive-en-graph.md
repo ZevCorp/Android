@@ -4,7 +4,8 @@ Estado: **fase 4A1 implementada** (2026-09-14; promesas 401-406 verdes; cada una
 sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · **fase 4A2 implementada** (promesas
 407-412 verdes; cada una se vio ROJA con un sabotaje real, abajo) · **revisión de la 4A1 cerrada** (promesas 413-416
 verdes y casos nuevos en 404 y 406; cada arreglo se vio ROJO con un sabotaje real, abajo) · **revisión de la 4A2 cerrada** (promesas
-417-418 verdes y casos nuevos en 408 y 410-415; cada arreglo se vio ROJO con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
+417-418 verdes y casos nuevos en 408 y 410-415; cada arreglo se vio ROJO con un sabotaje real, abajo) · **segunda revisión de la
+4A2 cerrada** (promesas 419-420 verdes y caso nuevo en 411; cada arreglo se vio ROJO con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
 workflows en Graph · Rama: `yokh/aprendizaje-graph`
 
 Hoy el Android aprende solo: `ActiveLearning`, `GeminiLearning`, `GeminiWorkflow` y `WorkflowRepo`
@@ -261,7 +262,7 @@ Lo que deja en el almacén, un archivo por sesión (el id de sesión, escapado, 
 | Ruta | Qué | Cuándo |
 |---|---|---|
 | `lecciones/<sesión>.json` | sesión, workflow, descripción, identidad, dónde empezó y terminó, cuándo, cada paso con su resultado, la nota y el motivo si falta algo | al terminar, antes de la red |
-| `cierres-pendientes/<sesión>.json` | `sessionId`, `workflowId`, `cuandoMs` | `finish` no salió tras sus tres intentos, o no se pudo por la key (401/403, sin key) |
+| `cierres-pendientes/<sesión>.json` | `sessionId`, `workflowId`, `cuandoMs`, `intentos` (cuántas veces lo intentó un arranque) | provisional, junto con la lección y antes de la red (420). Se borra si `finish` sale, si Graph no respondió a tiempo o si dijo que no; se queda si no salió tras sus tres intentos, por la key (401/403, sin key) o porque un cierre cancelado agotó su tope |
 | `videos-por-reprocesar/<sesión>.json` | `sessionId`, `leccion`, `motivo`, `cuandoMs` | el video lanzó, no dejó nada o se canceló el cierre |
 
 Pone verdes: **407-412**.
@@ -301,7 +302,7 @@ pase por `LearningClient` no lo cubre esta guarda.
 nombres, la misma firma y el mismo tope a propósito: al integrar queda una sola, en un paquete común a las dos, y ambas
 specs apuntan a ella. Hasta entonces, un arreglo en una se copia en la otra.
 
-### Revisión de la 4A2 — la lección bajo cancelación (esta corrida)
+### Revisión de la 4A2 — la lección bajo cancelación (hecha)
 
 Un revisor independiente aprobó la 4A2 con cambios. Lo que encontró, y cómo quedó:
 
@@ -328,8 +329,78 @@ Un revisor independiente aprobó la 4A2 con cambios. Lo que encontró, y cómo q
 **Lo que no cubre el contrato.** Dos caminos del arreglo de `empezar` necesitan otro hilo y no se producen en el hilo único
 del contrato: la carrera entre la vuelta a NUEVA y un `descartar` concurrente (por eso va bajo candado), y la cancelación
 mientras se espera el segundo candado, porque ningún dueño del candado lo retiene tras suspender. El caso de la 408 cancela en
-el último instante antes de abrir, que es el vecino observable. Tampoco se cubre que muera el proceso a mitad del cierre: el
-pendiente se escribe cuando `finish` ya no salió, no antes.
+el último instante antes de abrir, que es el vecino observable. Que muera el proceso a mitad del cierre lo cubre ahora la 420 (abajo).
+
+### Segunda revisión de la 4A2 — el log, el cierre que muere y el arranque (esta corrida)
+
+Un control independiente del diff `3f370e1..00b6d7b` encontró cuatro cosas. Cómo quedaron:
+
+- **Lo dicho iba al log, y el log sale del teléfono (419).** En la app, el log de la lección y del cliente es `LogBus`, que
+  manda cada línea a `Telemetry.enqueue` (`app/…/platform/LogBus.kt:25`). La línea «■» llevaba la descripción («aprendí
+  «Registrar a Ana Pérez CC 1037»») y los avisos enteros —el motivo del video, el error de la nota—; el paso que no llegaba
+  llevaba el mensaje de Graph, que en un error de validación repite el valor, o 200 caracteres de una respuesta ilegible; «▶»
+  llevaba la url de la pantalla; `interpretSteps` y `prependAlignment`, el mensaje de lo que falló. El criterio es el que el
+  Capitán fijó para la voz: a remoto llega la medida, nunca el contenido. Ahora `GraphException` trae su `medida` —status, ruta
+  con sus ids, intentos, bytes—, al log va `medidaDe(e)` (la medida, o el tipo de lo que no es de Graph), y la lección compone
+  dos veces lo que dice: para el usuario y el disco, con el nombre y las causas; para el log, con el id del workflow, la sesión y
+  las medidas. El texto entero sigue en el resultado (`mensaje`, `avisos`, el `motivo` de cada paso) y en disco. Las 405 y 406
+  juzgan ahora la causa medida.
+- **El cierre cancelado colgaba a quien llamaba, y un proceso muerto no dejaba pendiente (420).** Cancelado, el cierre corría
+  bajo `NonCancellable` sin tope: una nota y tres `finish` de 90 s con sus esperas, unos 4,7 min con el `viewModelScope`
+  esperando. Y el pendiente se escribía cuando `finish` ya no había salido: si el proceso moría antes, no quedaba nada que el
+  arranque supiera cerrar. Ahora el cierre provisional va a disco **con la lección, antes de la red**, y no solo antes de
+  `finish`: el video tarda minutos y es donde más probable es que Android mate el proceso. Si `finish` sale, se borra; si Graph
+  no respondió a tiempo o dijo que no, también; si queda pendiente, ya está. Y desde que llega la cancelación, la red del cierre
+  tiene `TOPE_DE_CIERRE_CANCELADO` (2 min): un hijo de la corrida de quien llama se entera de la cancelación y arranca el
+  cronómetro, que al vencer corta la red; queda el pendiente y la cancelación sale. Cortar a tiempo depende de que el transporte
+  sea cancelable, y `GraphTransport` lo es (`disconnect()` al cancelar). El supuesto: si el proceso muere después de un `finish`
+  que salió y antes de borrar el provisional, el arranque reintenta una sesión que Graph ya cerró; con 404 o 400, `trasFallo` lo
+  juzga FALLIDO y el pendiente se borra tras ese único `finish` (juzgado). Si Graph respondiera 2xx y post-procesara otra vez,
+  cobraría dos veces (ver «Supuestos»).
+- **El arranque no tenía tope (411).** Con Graph caído, N pendientes × 90 s. Ahora intenta hasta `MAX_PENDIENTES_POR_ARRANQUE`
+  (5) y ninguno que empiece pasados `TOPE_DE_ARRANQUE` (2 min), medidos con un reloj inyectable. El tope se mira antes de cada
+  intento: el que ya salió termina en su propio tope de 90 s, porque cortarlo a mitad dejaría a Graph cerrando sin que nadie lo
+  sepa, así que un arranque dura como mucho 2 min más un intento. El resto queda para el siguiente, que empieza por los que
+  menos veces se intentaron (`intentos` en el pendiente): con un orden fijo, cinco pendientes que nunca salen —un flujo largo que
+  siempre da 504— taparían al sexto para siempre. 4C lo llama en segundo plano, sin bloquear la UI.
+- **`Leido.sinEntregar` se escribía desde dos hilos (sin juez).** `descartar` cancelaba el lector y enseguida la cola: la
+  cancelación del lector puede disparar `onUndeliveredElement` en su hilo mientras `cola.cancel()` lo dispara en el de quien
+  descarta, sobre una lista sin candado. Ahora `descartar` hace `lector.cancelAndJoin()` antes de `cola.cancel()`, y todas las
+  escrituras quedan en serie; `trySend` sobre la cola cerrada o cancelada no llama a `onUndeliveredElement` (medido en
+  kotlinx-coroutines 1.8.1). **No hay juez multihilo**: una sonda sobre el código con el defecto —300 rondas de `descartar` y 300
+  de `terminar` con un tope de vaciado de 1 ms, el lector en `Dispatchers.Default` y un hilo de superficie encolando 3000 pasos—
+  no detectó ni una carrera. El único par concurrente eran una escritura del lector contra las de `cola.cancel()`, y esa lista
+  nadie la lee después de descartar: lo único observable sería una excepción dentro de `ArrayList.add`, y un test que la espere
+  daría verde por suerte.
+
+**Lo que no cubre el contrato, además.** Si el proceso muere procesando el video, el arranque cierra la sesión sin la nota ni
+el resumen, y el video no queda marcado para reprocesar: la marca se escribe cuando el video falla, no antes. Y el tope del
+cierre cancelado se juzga con una espera inyectada, no con el reloj: cortar una llamada colgada exige un tiempo que despierte a
+la corrutina, y el contrato no trae `kotlinx-coroutines-test`.
+
+### Verificación de la segunda revisión de la 4A2 (2026-09-15)
+
+Las pruebas se escribieron primero (`2b1a8eb`), contra el código de `00b6d7b` con una sola novedad: la firma de `Leccion` (`reloj`,
+`esperarTope` y los topes), con el defecto intacto. El juez: `CONTRATO ROTO: 4 promesa(s) incumplida(s)`. La 406 dijo «un Error:
+el log no lo dice» (el log traía el mensaje, no el tipo); la 411, «al arrancar con 7 pendientes no hubo tope de cantidad» (siete
+`finish` donde iban cinco); la 419, «el log llevó lo que el usuario dijo, escribió o nombró: [■ aprendí «Registrar a Ana Pérez CC
+1037» …, el paso 1 no llegó a graph: value «Ana Pérez» …]»; la 420, «el pendiente provisional no se escribió antes del primer
+finish». La 405 siguió verde: el mensaje que volcaba el log ya traía el status que ahora juzga. La implementación lo dejó en `CONTRATO INTACTO: 35
+promesas.` Después, 6 sabotajes sobre el código sin commitear, revertidos con copia y sha256; cada uno rompió **solo** su promesa:
+
+| # | Sabotaje | Lo que dijo el juez |
+|---|---|---|
+| 419 | la línea «■» vuelve a llevar el nombre | `el log llevó lo que el usuario dijo, escribió o nombró: [[leccion] ■ aprendí «Registrar a Ana Pérez CC 1037» (3 pasos), SIN comprobar · sesión ses-419-0, …` |
+| 419 | en el cliente, la medida de un no-2xx lleva el `error` de Graph | `el log llevó …: [[leccion] el paso 1 no llegó a graph: value «Ana Pérez» no cabe en «Nombre de Ana Pérez» (HTTP 400 …), … la nota de contexto no viajó (nota rechazada: la señora Lucía Gómez tiene VIH …` |
+| 420 | el provisional no se escribe: el pendiente solo queda cuando `finish` no salió | `el pendiente provisional no se escribió antes del primer finish: [… disco escribe lecciones/ses-1.json, disco escribe videos-por-reprocesar/ses-1.json, red POST …/ses-1/finish]` |
+| 420 | sin tope para el cierre cancelado | `la demostración no terminó en 20 s: quedó algo abierto` (el cierre cancelado esperó los 90 s de `finish`) |
+| 411 | el arranque sin tope | `al arrancar con 7 pendientes no hubo tope de cantidad expected:<[ses-t1, …, ses-t5]> but was:<[ses-t1, …, ses-t7]>` |
+| 411 | el arranque sin turno: orden fijo por ruta | `el arranque siguiente no empezó por los que quedaron sin intentar expected:<[ses-t6, ses-t7]> but was:<[ses-t1, ses-t2]>` |
+
+Sin sabotaje que el juez vea: la serie de `descartar` (`cancelAndJoin` antes de `cola.cancel()`), porque no hay juez multihilo
+(ver arriba).
+
+`./gradlew :app:compileReleaseKotlin -q --rerun` → exit 0. `app/` no se toca.
 
 ### Lo que viene (specs y fases propias, sobre este cliente)
 
@@ -356,9 +427,9 @@ pendiente se escribe cuando `finish` ya no salió, no antes.
 | El video que no se procesa | se dice en el log y se cierra con los pasos; el mp4 queda en 🎞 Videos sin marca | se cierra igual y queda una marca en `videos-por-reprocesar/` | sin marca, nadie vuelve a procesarlo (Gemini de Graph sin créditos desde 2026-09-03) |
 | Vaciar la cola al parar | espera 30 s y cierra con el lector todavía vivo: un paso colgado puede llegar después de `finish` | pasados los 30 s se corta el lector antes de escribir la lección; lo que no salió cuenta como no enviado, con su motivo | ningún paso viaja después del cierre, y la lección dice la verdad |
 | Nota de contexto | viaja el resumen del video, no lo hablado | una sola nota con lo hablado y el resumen del video, si hay | lo que el usuario explica de viva voz es el contexto más fiel |
-| Cierres pendientes | un solo `pending-finish.json` que se reescribe entero; al cerrar, solo el transitorio deja pendiente; al arrancar, un intento por pendiente y todo lo no transitorio se descarta | un archivo por sesión con escritura atómica; `-1` no deja pendiente y al arrancar se descarta; `401`/`403` y sin key dejan pendiente al cerrar y se conservan al arrancar, con un solo criterio (`trasFallo`); al arrancar, un intento por pendiente, como Windows | reescribir una lista entera es perder todas por un corte; una key mal puesta se arregla, la sesión no murió por eso; tres intentos con esperas y un post-procesado cada uno se repetirían en cada arranque |
+| Cierres pendientes | un solo `pending-finish.json` que se reescribe entero; al cerrar, solo el transitorio deja pendiente; al arrancar, un intento por pendiente y todo lo no transitorio se descarta | un archivo por sesión con escritura atómica, provisional desde antes de la red; `-1` no deja pendiente y al arrancar se descarta; `401`/`403` y sin key dejan pendiente al cerrar y se conservan al arrancar, con un solo criterio (`trasFallo`); al arrancar, un intento por pendiente, como Windows, hasta 5 y 2 min, empezando por los que menos se intentaron | reescribir una lista entera es perder todas por un corte; un proceso que muere a mitad del cierre no pierde la sesión (420); una key mal puesta se arregla, la sesión no murió por eso; tres intentos con esperas y un post-procesado cada uno se repetirían en cada arranque; con Graph caído, N pendientes × 90 s se comerían el arranque (411) |
 | Cuándo se vacía la cola | en `recorder.StopAsync`, después del video y de la nota (`WorkflowTeachSession.cs:374`) | lo primero de `terminar`, antes de la lección, el video y la nota | la lección lleva los últimos pasos, y ninguno viaja después de que el video y la nota ya se mandaron |
-| Cancelar el cierre | `StopAsync(CancellationToken.None)` (`FaceWindow.xaml.cs:3193`): nada del cierre se cancela, ni el video | se cancela lo que espera —vaciar la cola, el video, que queda para reprocesar y ni se empieza si ya se canceló—; la lección, la nota, el cierre y su pendiente corren bajo `NonCancellable` y la cancelación sale después, con la lección TERMINADA | un `viewModelScope` se cancela al salir de la pantalla: minutos de video para nadie no sirven, pero una sesión sin cerrar ni pendiente se pierde (418) |
+| Cancelar el cierre | `StopAsync(CancellationToken.None)` (`FaceWindow.xaml.cs:3193`): nada del cierre se cancela, ni el video | se cancela lo que espera —vaciar la cola, el video, que queda para reprocesar y ni se empieza si ya se canceló—; la lección, la nota, el cierre y su pendiente corren bajo `NonCancellable` y la cancelación sale después, con la lección TERMINADA; la red del cierre, con 2 min de tope desde la cancelación | un `viewModelScope` se cancela al salir de la pantalla: minutos de video para nadie no sirven, pero una sesión sin cerrar ni pendiente se pierde (418), y quien cancela no puede quedar esperando 4,7 min (420) |
 | El lector de pasos se muere | el lector es de `WorkflowRecorder` y vive lo que vive la grabación | vive en el `scope` que le pasan: si se cancela o falla, lo que no viajó cuenta como no enviado y la lección sale incompleta; `pasoObservado` dice `false` | un scope ajeno se puede cancelar sin que la lección se entere; `join()` no es «cola vacía» (417) |
 | Descartar | `DiscardAsync` para el video y borra el mp4, sin llamar a Graph, y no tiene llamadores; `WorkflowRecorder` no tiene descarte | `descartar` corta el lector, suelta la cola y la nota; no llama a Graph ni escribe nada | el único «cerrar» que tiene Graph es `finish`, que post-procesa y persiste: cerrar sería publicar |
 | Lista sin `workflows` o plan sin `steps` | `= new()`: lista vacía o plan de 0 pasos | `GraphException` que nombra la clave; vacías sí valen | una respuesta rota no se presenta como «no tienes workflows» ni como un plan que no hace nada (416) |
@@ -394,7 +465,8 @@ riesgo abierto.
   `process-video` puede llegar a 4 cobros por un solo video.
 - Qué responde `finish` reintentado sobre una sesión cerrada o perdida (¿404? ¿400?). Hoy, un transitorio seguido de un
   404 da `GraphException` y no `FinishPendiente`: la lección lo cuenta como `FALLIDO` aunque el primer intento pudo
-  haberla cerrado.
+  haberla cerrado. Con el provisional (420) pasa también al arrancar, cuando el proceso murió entre un `finish` que salió y el
+  borrado: con 404 o 400 el pendiente se borra tras un solo intento; con 2xx, Graph podría post-procesar y cobrar dos veces.
 - `execution_intent.surface = "native"` es un valor válido desde Android.
 - `allowedOptions` trae `value` y `label` no nulos, y los valores de `variables` son texto. Desde la 414 el cliente tolera
   lo contrario, pero Graph no lo promete.
