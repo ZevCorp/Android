@@ -106,6 +106,11 @@ class Contrato002VozGptLive {
             236 to "La conversación se atiende de a una cosa por vez aunque la llamen desde varios hilos: ninguna llamada queda en curso por una carrera y ningún envío se intercala con otro.",
             237 to "Al log de la voz nunca llega el contenido de una herramienta ni de un error: solo su tipo y un motivo saneado.",
             238 to "Lo escrito con llamadas sin contestar abre su petición y espera en la misma cola que los avisos, sin prefijo, hasta salir con un solo pedido de respuesta; si la conexión muere, lo escrito en cola se descarta y los avisos pasan a la siguiente.",
+            239 to "El canal real entrega un apretón de manos rechazado como rechazo con su código HTTP y su código de error de cabecera; un 401 nunca se confunde con falta de red.",
+            240 to "Un servidor inalcanzable es falta de red con un motivo que no trae la clave ni la URL completa.",
+            241 to "Los mensajes del servidor llegan en el orden en que se mandaron y enviar no espera a que se lea lo recibido.",
+            242 to "Un cierre del servidor llega con su código y motivo; una conexión que se cae sin cerrar llega como cierre por red.",
+            243 to "La clave viaja solo en la cabecera, nunca en la URL ni en el log, y cerrar el canal dos veces no rompe nada ni deja hilos vivos.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }

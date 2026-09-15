@@ -100,6 +100,11 @@ si cambia uno, cambia el otro en el mismo commit.
 | 236 | La conversación se atiende de a una cosa por vez aunque la llamen desde varios hilos: ninguna llamada queda en curso por una carrera y ningún envío se intercala con otro. | A2 |
 | 237 | Al log de la voz nunca llega el contenido de una herramienta ni de un error: solo su tipo y un motivo saneado. | A2 |
 | 238 | Lo escrito con llamadas sin contestar abre su petición y espera en la misma cola que los avisos, sin prefijo, hasta salir con un solo pedido de respuesta; si la conexión muere, lo escrito en cola se descarta y los avisos pasan a la siguiente. | A2 |
+| 239 | El canal real entrega un apretón de manos rechazado como rechazo con su código HTTP y su código de error de cabecera; un 401 nunca se confunde con falta de red. | B1a |
+| 240 | Un servidor inalcanzable es falta de red con un motivo que no trae la clave ni la URL completa. | B1a |
+| 241 | Los mensajes del servidor llegan en el orden en que se mandaron y enviar no espera a que se lea lo recibido. | B1a |
+| 242 | Un cierre del servidor llega con su código y motivo; una conexión que se cae sin cerrar llega como cierre por red. | B1a |
+| 243 | La clave viaja solo en la cabecera, nunca en la URL ni en el log, y cerrar el canal dos veces no rompe nada ni deja hilos vivos. | B1a |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -110,7 +115,9 @@ sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás prote
 Todas son **entradas y relojes a mano dentro de la propia prueba**: mensajes JSON copiados
 de las capturas de U, PCM construido byte a byte y un reloj que es una variable. Ninguna toca red,
 micrófono, altavoz ni Android. La 236 es la única que no cabe en `commonTest`: allí `corre` es un
-`runBlocking` de un solo hilo, que no ve una carrera nunca; vive en `jvmTest` con hilos de verdad.
+`runBlocking` de un solo hilo, que no ve una carrera nunca; vive en `jvmTest` con hilos de verdad. Las 239-243
+juzgan el canal real, que es OkHttp y solo existe en jvm: también viven en `jvmTest`, contra un servidor
+WebSocket por localhost (MockWebServer, y un `ServerSocket` a mano para la caída). Ninguna abre una sesión con OpenAI.
 
 | # | Cómo se juzga sin tocar nada |
 |---|---|
@@ -152,6 +159,11 @@ micrófono, altavoz ni Android. La 236 es la única que no cabe en `commonTest`:
 | 236 | `jvmTest`, despachador por defecto y seis hilos de `Executors` con semilla fija que llaman `oirMicrofono`, `retirar` y `avisar` mientras llegan 48 llamadas de pantalla y de control, 25 rondas en menos de 9 s. El canal cuenta envíos solapados (cede a mitad de cada uno) y anota cada llamada al entregarla. Nunca dos envíos a la vez; cada llamada con una salida; ningún `response.create` con una llamada entregada y sin salida; tras lo último, un pedido de respuesta; cada aviso aceptado, una vez; y el turno se cierra, así que ninguna quedó en curso |
 | 237 | Herramientas que lanzan `IllegalStateException`, `CancellationException` y `TODO()` con «mi clave es 1234»: al modelo le llega el motivo, al log solo el tipo. Un canal que revienta con el secreto entre comillas: «se cortó la escucha: IllegalStateException». `abrir` que lanza con `Bearer sk-…`, un token largo, el secreto entre comillas, 800 caracteres y una segunda línea: ni lo dicho ni el log los traen, y la línea queda corta |
 | 238 | Una llamada retenida, un aviso y un texto escrito: no sale nada y la petición del texto ya se abrió; al contestarla, salida, aviso, texto sin prefijo y un único `response.create`. Con la llamada colgada y un corte: lo escrito se descarta con una línea en el log y el aviso sale en la conexión nueva |
+| 239 | MockWebServer: un 401 con `x-openai-ide-error-code: invalid_api_key` da `Rechazo(401, "invalid_api_key")`; un 403 sin cabecera, un 200 sin upgrade y un 302 hacia un upgrade que sí abriría dan su rechazo con código nulo. El servidor recibe 4 pedidos: nadie reintenta ni sigue la redirección por dentro |
+| 240 | Un puerto de localhost recién cerrado da `SinRed`. Un servidor que acepta y nunca contesta da `SinRed` en menos de 3 s con un tope inyectado de 300 ms (el de OkHttp es 10 s). Ningún motivo trae la clave, «Bearer», la URL, su ruta ni un esquema `://` |
+| 241 | Recién abierto, el servidor manda 200 mensajes y el canal manda 200 sin leer ninguno: el servidor recibe los suyos en orden y después llegan los del servidor, en orden. Una escucha que ya espera no frena un envío: el servidor lo recibe y su respuesta despierta a esa escucha. Una ráfaga de 200 leída con esperas de 1 ms que se cancelan una y otra vez llega entera y en orden |
+| 242 | El servidor manda un mensaje y cierra con 4000 «invalid_request_error.response_input_buffer_full»: llegan el mensaje y `Cierre(4000, …, porRed = false)`; recibir otra vez repite el cierre y enviar lanza sin colgarse. Un `ServerSocket` a mano contesta el 101, manda un mensaje y suelta el socket sin trama: llegan el mensaje y `Cierre(1006, motivo, porRed = true)`, con un motivo sin la clave |
+| 243 | El servidor ve `Authorization: Bearer …` y una URL sin la clave. Tras un mensaje en cada sentido, cerrar dos veces no lanza y el servidor recibe una sola trama 1000 «fin»; recibir da ese cierre y enviar lanza. En 3 s no queda vivo ningún hilo de OkHttp nacido con el canal, y ninguna línea del log trae la clave, «Bearer», la URL ni el contenido de un mensaje |
 
 ---
 
@@ -191,6 +203,19 @@ Todo en `core/src/commonMain/kotlin/graph/core/voz/`, sin dependencias nuevas:
   si termina, dice por qué o reconecta.
 
 Pone verdes: **218-238**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
+
+### Fase B1a — el canal real sobre OkHttp (esta corrida)
+
+`core/src/jvmMain/kotlin/graph/core/voz/CanalOkHttp.kt`: `CanalDeVoz` sobre el WebSocket de OkHttp 4.12. `core` tiene
+target jvm y Android lo consume, así que el canal se juzga en `jvmTest` sin teléfono. Sin audio, sin app y sin abrir
+nunca una sesión real: eso cuesta plata y lo confirma el Capitán.
+
+- Dependencias: `okhttp` en `jvmMain`; `mockwebserver` solo en `jvmTest`.
+- Un apretón de manos con HTTP distinto de 101 es `Rechazo` con su código y `x-openai-ide-error-code`; sin respuesta
+  HTTP es `SinRed` con un motivo saneado. Las redirecciones no se siguen: también son un no.
+- Cada apertura tiene su propio `OkHttpClient`, y cerrar o caer apaga su despachador y su pool: no quedan hilos.
+
+Pone verdes: **239-243**.
 
 ### Fase B — el cableado en `app` (otra corrida)
 

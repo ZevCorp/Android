@@ -18,5 +18,13 @@ kotlin {
         commonTest.dependencies {
             implementation(kotlin("test"))
         }
+        // El socket de la voz (docs/specs/002, fase B1a): OkHttp vive solo en jvm, que es lo que consume Android. Se juzga
+        // contra un servidor WebSocket local, nunca contra OpenAI.
+        jvmMain.dependencies {
+            implementation("com.squareup.okhttp3:okhttp:4.12.0")
+        }
+        jvmTest.dependencies {
+            implementation("com.squareup.okhttp3:mockwebserver:4.12.0")
+        }
     }
 }
