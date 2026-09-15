@@ -944,7 +944,7 @@ class Contrato002VozGptLive {
         compuertaActiva: Boolean = false,
         ejecutor: suspend (Llamada) -> String = { "hecho: ${it.nombre}" },
         actuaEnPantalla: (String) -> Boolean = { true },
-        bargeIn: Boolean = false,
+        bargeIn: Boolean? = null,
     ) {
         /** La que devuelve `credencial()` en este momento: se puede rotar entre conexiones. */
         var credencialVigente = credencial
@@ -956,26 +956,32 @@ class Contrato002VozGptLive {
         val sonado = mutableListOf<ByteArray>()
         var sonando = false
         var callado = 0
-        val conv = ConversacionViva(
-            canal = canal,
-            protocolo = ProtocoloGptLive(),
-            credencial = { credencialVigente },
-            instruccionesVoz = "Eres Ü. Hablas corto y delegas.",
-            instruccionesDelegado = "ERES Ü Y ESTAS SON TUS INSTRUCCIONES COMPLETAS",
-            utensilios = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar")))),
-            ejecutar = { ejecutadas += it.id; ejecutor(it) },
-            reproducir = { sonado += it },
-            callar = { callado++; sonando = false },   // callar vacía la cola: deja de sonar
-            sonando = { sonando },
-            dice = { dicho += it },
-            log = { tag, m -> log += "$tag: $m" },
-            reloj = reloj,
-            compuertaActiva = compuertaActiva,
-            actuaEnPantalla = actuaEnPantalla,
-            bargeInPorEnergia = bargeIn,
-            // El contrato común corre en el hilo único de `corre`: la voz se queda en él. El despachador de verdad lo juzga la 236.
-            hilo = EmptyCoroutineContext,
-        )
+        private val instruccionesVoz = "Eres Ü. Hablas corto y delegas."
+        private val instruccionesDelegado = "ERES Ü Y ESTAS SON TUS INSTRUCCIONES COMPLETAS"
+        private val utensilios = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar"))))
+        private val ejecutar: suspend (Llamada) -> String = { ejecutadas += it.id; ejecutor(it) }
+        private val reproducir: (ByteArray) -> Unit = { sonado += it }
+        private val callar: () -> Unit = { callado++; sonando = false }   // callar vacía la cola: deja de sonar
+        private val registrar: (String, String) -> Unit = { tag, m -> log += "$tag: $m" }
+
+        // El contrato común corre en el hilo único de `corre`: la voz se queda en él. El despachador de verdad lo juzga la 236.
+        // SIN `bargeIn` LA BANDERA NO SE PASA: lo que se juzga «por defecto» es el default de la clase, no el de esta prueba.
+        val conv = if (bargeIn == null) {
+            ConversacionViva(
+                canal = canal, credencial = { credencialVigente }, instruccionesVoz = instruccionesVoz,
+                instruccionesDelegado = instruccionesDelegado, utensilios = utensilios, ejecutar = ejecutar, reproducir = reproducir,
+                callar = callar, sonando = { sonando }, dice = { dicho += it }, log = registrar, reloj = reloj,
+                compuertaActiva = compuertaActiva, actuaEnPantalla = actuaEnPantalla, hilo = EmptyCoroutineContext,
+            )
+        } else {
+            ConversacionViva(
+                canal = canal, credencial = { credencialVigente }, instruccionesVoz = instruccionesVoz,
+                instruccionesDelegado = instruccionesDelegado, utensilios = utensilios, ejecutar = ejecutar, reproducir = reproducir,
+                callar = callar, sonando = { sonando }, dice = { dicho += it }, log = registrar, reloj = reloj,
+                compuertaActiva = compuertaActiva, actuaEnPantalla = actuaEnPantalla, hilo = EmptyCoroutineContext,
+                bargeInPorEnergia = bargeIn,
+            )
+        }
 
         init {
             canal.alAcabarElGuion = { conv.detener() }

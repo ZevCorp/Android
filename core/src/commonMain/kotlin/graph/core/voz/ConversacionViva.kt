@@ -423,8 +423,9 @@ class ConversacionViva(
         conexiones++
         val trabajo = CoroutineScope(alcance.coroutineContext + Job(alcance.coroutineContext.job))
         val c = Conexion(reloj, alConfirmar, trabajo)
+        // Lo escrito ya se descartó en [alTerminarLaEscucha]: lo que queda en la cola anterior son avisos.
         anterior?.cola?.let {
-            c.cola.addAll(it.filter { e -> e.esAviso })
+            c.cola.addAll(it)
             it.clear()
         }
         // UNA TANDA DETRÁS DE OTRA, en el orden en que llegaron: dos manos sobre la pantalla a la vez no se cruzan.
