@@ -184,6 +184,9 @@ class LearningClient(
         return (cuerpo as? JsonObject)?.get("workflow") ?: cuerpo
     }
 
+    /** ¿Graph ya cerró la sesión de [workflowId]? (421) */
+    suspend fun cerradaEnGraph(workflowId: String): Boolean = TODO("421")
+
     /** Borra un workflow. Si Graph dice 404, ya no existe: es lo que se pedía, cuenta como borrado. */
     suspend fun borrar(id: String) {
         val reply = llamar("DELETE", workflowRuta(conId(id, "borrar")), null, aceptados = setOf(404))

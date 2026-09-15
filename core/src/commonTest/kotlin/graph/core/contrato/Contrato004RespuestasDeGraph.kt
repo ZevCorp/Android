@@ -55,6 +55,7 @@ class Contrato004RespuestasDeGraph {
             414 to "Un plan o un video procesado no se pierden por un campo raro: una opción sin value o label y una variable nula se leen como vacías, y un null en notas o preguntas se descarta.",
             415 to "Un id de workflow en blanco no llama a Graph y dice por qué.",
             416 to "Una respuesta a la que le falta la clave esperada es un error; una que la trae vacía es válida.",
+            423 to "Lo que Graph responde de verdad se lee sin romperse: el workflow con sus variables en lista y sus fechas Neo4j, el plan con su eco y su contexto de ramas, y la alineación dice en el log si ya estaba o se aprendió.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -148,6 +149,7 @@ class Contrato004RespuestasDeGraph {
                 Triple("cerrar la sesión", """{"workflow_id":"wf-1","workflow":$hondo}""", { it.terminar("ses-1") }),
                 Triple("listar", """{"workflows":[$hondo]}""", { it.listarWorkflows() }),
                 Triple("traer un workflow", """{"workflow":$hondo}""", { it.workflow("wf-1") }),
+                Triple("preguntar si ya se cerró", """{"workflow":$hondo}""", { it.cerradaEnGraph("wf-1") }),
                 Triple("planificar", """{"execution_plan":{"steps":[{"stepOrder":1,"surfaceHints":{"alternativeTargets":$hondo}}]}}""", { it.plan("wf-1") }),
                 Triple("pedir dónde subir", """{"geminiUploadUrl":"https://upload.test/x","extra":$hondo}""", { it.uploadToken(1, "u-1") }),
                 Triple("consultar el video", """{"state":"ACTIVE","extra":$hondo}""", { it.fileState("files/a") }),
@@ -322,5 +324,89 @@ class Contrato004RespuestasDeGraph {
         val plan = c.plan("wf-1")
         assertEquals("wf-1", plan.workflowId, p)
         assertEquals(emptyList(), plan.steps, "$p · un plan de 0 pasos es válido")
+    }
+
+    @Test
+    fun promesa423() = corre {
+        val p = promesa(423)
+        val cerrado = Contrato004LeccionEnGraph.workflowDeGraph("wf_1789054200000", "done")
+        val abierto = Contrato004LeccionEnGraph.workflowDeGraph("wf_1789054140000", "recording", creadoMs = AHORA - 60_000)
+
+        // La lista, un workflow y el cierre, como los arma Graph: variables en lista de objetos, fechas {low, high} y ramas.
+        run {
+            val t = TransporteGuionado(
+                ok("""{"workflows":[$abierto,$cerrado]}"""),
+                ok("""{"workflow":$cerrado}"""),
+                ok("""{"workflow_id":"wf_1789054200000","summary":"registra pacientes","workflow":$cerrado}"""),
+            )
+            val c = cliente(t)
+            val lista = c.listarWorkflows()
+            assertEquals(listOf("wf_1789054200000", "wf_1789054140000"), lista.map { it.id }, "$p · la lista con la forma real")
+            assertEquals(listOf(AHORA, AHORA - 60_000), lista.map { it.creadoEnMs }, "$p · createdAt Neo4j")
+            assertEquals(listOf(1, 1), lista.map { it.totalSteps }, p)
+            val wf = c.workflow("wf_1789054200000").jsonObject
+            assertEquals(1, wf["variables"]!!.jsonArray.size, "$p · las variables del workflow no llegaron como la lista que manda Graph")
+            assertEquals("done", wf["status"]!!.jsonPrimitive.content, p)
+            val fin = c.terminar("wf_1789054200000")
+            assertEquals("wf_1789054200000" to "registra pacientes", fin.workflowId to fin.summary, p)
+            assertEquals("done", fin.workflow?.jsonObject?.get("status")?.jsonPrimitive?.content, "$p · el workflow del cierre se perdió")
+        }
+
+        // El plan de `WorkflowExecutor.buildExecutionPlan`: eco de variables e intención, runtimeIntelligence, branchContext (objeto o
+        // null), el paso de alineación en orden 0 y `key`/`scroll`, que Graph deja pasar con value o selector. Sus errores: 404 y 500.
+        run {
+            fun paso(tipo: String, selector: String, value: String, orden: Int, pistas: String = "null") =
+                """{"actionType":"$tipo","selector":"$selector","value":"$value","url":"${if (tipo == "navigation") "android://com.x" else ""}","explanation":"",
+                   "label":"","controlType":"","selectedValue":"","selectedLabel":"","semanticTarget":"","surfaceSection":"","surfaceHints":$pistas,
+                   "nodeKey":"","nodePath":"","nodeAction":"","allowedOptions":[],"valueMode":"fixed","bindTo":"","valueModeExplicit":false,"stepOrder":$orden}"""
+            fun plan(ramas: String) = """{"execution_plan":{"workflowId":"wf_1","description":"Registrar paciente","appId":"dev-1",
+                "sourceUrl":"android://com.x/RegistroActivity","sourceOrigin":"android://com.x","sourcePathname":"/RegistroActivity","sourceTitle":"Registro",
+                "executionGuide":"1. toca Guardar","variables":{"paciente":"Ana"},"executionIntent":{"source":"android_app","surface":"native"},
+                "runtimeIntelligence":{"maxCallsPerStep":5,"decisions":[]},"branchContext":$ramas,
+                "steps":[${paso("navigation", "app:com.x", "", 0, """{"kind":"surface-alignment","appId":"com.x"}""")},${paso("key", "", "ENTER", 2)},${paso("scroll", "a11y:id=com.x:id/lista", "", 3)}]}}"""
+            val t = TransporteGuionado(
+                ok(plan("""{"id":"br-1","branchKey":"nuevo","stepPatches":[],"insertedSteps":[],"appliedBranchId":"br-1","applied":true}""")),
+                ok(plan("null")),
+                TransportReply(404, """{"error":"Workflow wf_x not found or has no steps."}"""),
+                TransportReply(500, """{"error":"Workflow wf_1 has no executable steps."}"""),
+            )
+            val c = cliente(t)
+            for (caso in listOf("con ramas", "sin ramas")) {
+                val leido = c.plan("wf_1", mapOf("paciente" to "Ana"))
+                assertEquals(listOf("navigation", "key", "scroll"), leido.steps.map { it.actionType }, "$p · plan $caso")
+                assertEquals(listOf(0, 2, 3), leido.steps.map { it.stepOrder }, "$p · plan $caso")
+                assertEquals("app:com.x" to "android://com.x", leido.steps[0].selector to leido.steps[0].url, "$p · la alineación, $caso")
+                assertEquals(null to "ENTER", leido.steps[1].selector to leido.steps[1].value, "$p · una tecla sin selector, $caso")
+                assertEquals(mapOf("paciente" to "Ana"), leido.variables, "$p · el eco de las variables, $caso")
+            }
+            val sinPasos = lanzaExacto<GraphException>("$p · plan de un workflow sin pasos") { c.plan("wf_x") }
+            assertEquals(404, sinPasos.status, p)
+            val sinEjecutables = lanzaExacto<GraphException>("$p · plan sin pasos ejecutables") { c.plan("wf_1") }
+            assertEquals(500, sinEjecutables.status, p)
+            assertEquals(4, t.llamadas.size, "$p · un 404 o un 500 del plan se reintentó")
+        }
+
+        // La alineación: best-effort, y el log dice cuál de las dos respuestas dio Graph —ya estaba o la aprendió—, sin el workflow.
+        run {
+            val lineas = mutableListOf<String>()
+            val t = TransporteGuionado(
+                ok("""{"workflow":$cerrado,"already_present":true}"""),
+                ok("""{"workflow":$cerrado,"learned":true}"""),
+                TransportReply(404, """{"error":"Workflow not found"}"""),
+                TransportReply(400, """{"error":"El workflow no tiene superficie de origen."}"""),
+            )
+            val c = cliente(t, lineas)
+            assertTrue(c.prependAlignment("wf_ya"), p)
+            val yaEstaba = lineas.toList()
+            assertTrue(c.prependAlignment("wf_nuevo"), p)
+            val aprendida = lineas.drop(yaEstaba.size)
+            assertTrue(yaEstaba.any { "wf_ya" in it && "already_present" in it } && yaEstaba.none { "learned" in it }, "$p · ya estaba: el log no lo dice: $yaEstaba")
+            assertTrue(aprendida.any { "wf_nuevo" in it && "learned" in it } && aprendida.none { "already_present" in it }, "$p · la aprendió: el log no lo dice: $aprendida")
+            assertFalse(c.prependAlignment("wf_ido"), p)
+            assertTrue(lineas.any { "wf_ido" in it && "HTTP 404" in it }, "$p · un 404: $lineas")
+            assertFalse(c.prependAlignment("wf_sin_origen"), p)
+            assertTrue(lineas.any { "wf_sin_origen" in it && "HTTP 400" in it }, "$p · un 400: $lineas")
+            assertTrue(lineas.none { "Registrar paciente" in it || "android://" in it || "superficie de origen" in it }, "$p · el log de la alineación volcó el workflow o el texto de Graph: $lineas")
+        }
     }
 }
