@@ -10,6 +10,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
@@ -21,7 +22,9 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonElement
 import kotlin.time.Duration
+import kotlin.time.Duration.Companion.minutes
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TimeSource
 
 private val SIN_LOG = GraphLog { _, _ -> }
 
@@ -166,6 +169,10 @@ class Leccion(
     private val avisar: (String) -> Unit = {},
     /** Cuánto se espera a que salgan los pasos encolados al terminar (`WorkflowRecorder.cs`: 30 s). */
     private val topeDeVaciado: Duration = TOPE_DE_VACIADO,
+    /** El reloj del tope de [reintentarPendientes]; inyectable para que el contrato mida sin esperar. */
+    private val reloj: TimeSource = TimeSource.Monotonic,
+    /** Cómo espera un cierre cancelado su [TOPE_DE_CIERRE_CANCELADO]; inyectable para que el contrato decida cuándo vence. */
+    private val esperarTope: suspend (Duration) -> Unit = { delay(it) },
 ) {
     private enum class Estado { NUEVA, ABRIENDO, GRABANDO, CERRANDO, TERMINADA, DESCARTADA }
 
@@ -731,6 +738,12 @@ class Leccion(
         /** `WorkflowTeachSession.cs`: `AvisoPasos`. */
         const val AVISO_PASOS = 30
         val TOPE_DE_VACIADO: Duration = 30.seconds
+        /** Lo que un cierre cancelado le da a la red antes de dejar el pendiente y soltar (420). */
+        val TOPE_DE_CIERRE_CANCELADO: Duration = 2.minutes
+        /** Cuántos cierres pendientes intenta un arranque; el resto, en el siguiente (411). */
+        const val MAX_PENDIENTES_POR_ARRANQUE = 5
+        /** Lo que puede tardar un arranque en total antes de dejar el resto para el siguiente (411). */
+        val TOPE_DE_ARRANQUE: Duration = 2.minutes
         private const val TAG = "leccion"
         private const val HEX = "0123456789ABCDEF"
 

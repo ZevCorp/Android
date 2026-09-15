@@ -541,18 +541,18 @@ class Contrato004EnsenadoEnGraph {
             assertEquals(500, e.status, p)
             assertTrue("neo4j caído" in e.message.orEmpty(), "$p · mensaje: ${e.message}")
         }
-        // Alinear: best-effort, pero su error queda en el log.
+        // Alinear: best-effort, pero su error queda en el log, medido: el id y el status, no el texto de Graph (419).
         run {
             val lineas = mutableListOf<String>()
             val t = TransporteGuionado(TransportReply(500, """{"error":"no sé alinear esta app"}"""))
             assertFalse(cliente(t, lineas = lineas).prependAlignment("wf_7"), p)
-            assertTrue(lineas.any { "wf_7" in it && "no sé alinear esta app" in it }, "$p · el log no lo dice: $lineas")
+            assertTrue(lineas.any { "wf_7" in it && "HTTP 500" in it }, "$p · el log no lo dice: $lineas")
         }
         run {
             val lineas = mutableListOf<String>()
             val t = TransporteGuionado(antes = { throw IllegalStateException("socket cerrado") })
             assertFalse(cliente(t, lineas = lineas).prependAlignment("wf_7"), p)
-            assertTrue(lineas.any { "wf_7" in it && "socket cerrado" in it }, "$p · el log no lo dice: $lineas")
+            assertTrue(lineas.any { "wf_7" in it && "HTTP 0" in it }, "$p · el log no lo dice: $lineas")
         }
         run {
             val lineas = mutableListOf<String>()
@@ -572,12 +572,13 @@ class Contrato004EnsenadoEnGraph {
         val sinRespuesta = listOf(
             Triple("503 ×4", arrayOf(TransportReply(503, ""), TransportReply(503, ""), TransportReply(503, ""), TransportReply(503, "")), "HTTP 503"),
             Triple("lectura agotada", arrayOf(TransportReply(-1, "Read timed out")), "no respondió a tiempo"),
-            Triple("HTTP 500", arrayOf(TransportReply(500, """{"error":"gemini sin créditos"}""")), "gemini sin créditos"),
+            Triple("HTTP 500", arrayOf(TransportReply(500, """{"error":"gemini sin créditos"}""")), "HTTP 500"),
             Triple("cuerpo ilegible", arrayOf(ok("<html>504</html>")), "no se pudo leer"),
             Triple("sin interpretation", arrayOf(ok("{}")), "sin interpretación"),
             Triple("interpretation null", arrayOf(ok("""{"interpretation":null}""")), "sin interpretación"),
             Triple("interpretation vacía", arrayOf(ok("""{"interpretation":""}""")), "sin interpretación"),
         )
+        // La causa que va al log es su medida —el status, «no respondió a tiempo», «no se pudo leer»—, nunca el texto de Graph (419).
         for ((caso, guion, causa) in sinRespuesta) {
             val lineas = mutableListOf<String>()
             val t = TransporteGuionado(*guion)
@@ -588,7 +589,7 @@ class Contrato004EnsenadoEnGraph {
             val lineas = mutableListOf<String>()
             val t = TransporteGuionado(antes = { throw IllegalArgumentException("no protocol: htps//graph.test") })
             assertNull(cliente(t, lineas = lineas).interpretSteps("android://com.x/Registro", pasosDeLaDemo), p)
-            assertTrue(lineas.any { "no opinó" in it && "no protocol" in it }, "$p · el log no lo dice: $lineas")
+            assertTrue(lineas.any { "no opinó" in it && "HTTP 0" in it }, "$p · el log no lo dice: $lineas")
         }
         for ((caso, key, pasos) in listOf(Triple("sin key", " ", pasosDeLaDemo), Triple("sin pasos", "miracle_k", emptyList()))) {
             val lineas = mutableListOf<String>()
@@ -614,7 +615,7 @@ class Contrato004EnsenadoEnGraph {
             val lineas = mutableListOf<String>()
             val t = TransporteGuionado(antes = { throw StackOverflowError("la pila se agotó en el transporte") })
             assertNull(cliente(t, lineas = lineas).interpretSteps("android://com.x/Registro", pasosDeLaDemo), "$p · un Error")
-            assertTrue(lineas.any { "no opinó" in it && "la pila se agotó" in it }, "$p · un Error: el log no lo dice: $lineas")
+            assertTrue(lineas.any { "no opinó" in it && "StackOverflowError" in it }, "$p · un Error: el log no lo dice: $lineas")
         }
         run {
             val t = TransporteGuionado(ok("{}"), antes = { throw CancellationException("el usuario canceló") })
