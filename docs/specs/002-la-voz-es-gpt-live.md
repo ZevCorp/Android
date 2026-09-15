@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1 y A2 implementadas** (2026-09-14; promesas 201-235 verdes; B pendiente) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1 y A2 implementadas** (2026-09-15; promesas 201-238 verdes; B pendiente) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -79,24 +79,27 @@ si cambia uno, cambia el otro en el mismo commit.
 | 215 | Por defecto el micrófono viaja siempre sin compuerta; con AEC no actúa; forzarla la activa siempre. | A1 |
 | 216 | La voz sostenida sobre la línea base dispara la interrupción; un golpe corto y el eco fuerte no disparan; tras disparar no vuelve a disparar hasta que Ü suene otra vez. | A1 |
 | 217 | Sin crédito, clave inválida (incluido HTTP 401) o modelo inexistente son fatales y se dicen con su causa; cualquier otro código, prosa o vacío se puede reintentar. | A1 |
-| 218 | Sin credencial la voz no llama a nadie y dice qué falta; un error de red al abrir se reintenta hasta 3 veces con esperas de 1 s y 2 s; un 401 del apretón de manos o una causa fatal no se reintentan. | A2 |
-| 219 | «Sesión abierta» y el mensaje de conexión se dicen una sola vez y solo al confirmarse la sesión, nunca al conectar el socket; sin sesión confirmada el micrófono no viaja. | A2 |
+| 218 | Sin credencial la voz no llama a nadie y dice qué falta, y la credencial se pide de nuevo en cada apertura; un error de red al abrir se reintenta hasta 3 veces con esperas de 1 s y 2 s; un 401 del apretón de manos, una causa fatal o un fallo al abrir que no es de red no se reintentan. | A2. Un `Rechazo(403, "invalid_api_key")`: la cabecera también es causa, una apertura. Una credencial rotada entre conexiones: la reapertura va con la nueva; en blanco al reabrir, no se abre y se dice qué falta. `abrir` que lanza una excepción que no es la red: una apertura, ninguna espera, «No pude abrir la voz en vivo: IllegalStateException: …» |
+| 219 | «Sesión abierta» y el mensaje de conexión se dicen una sola vez y solo al confirmarse la sesión, nunca al conectar el socket, y «olvidé lo último» solo si antes se confirmó alguna; sin sesión confirmada el micrófono no viaja. | A2. Si el `session.start` de la primera conexión no llega a salir, la que confirma dice «Te escucho.», no «Sigo…» |
 | 220 | Una tanda de llamadas se contesta entera y pide respuesta una sola vez, solo cuando no queda ninguna llamada sin contestar; una llamada retirada no se ejecuta. | A2 |
-| 221 | Una herramienta que revienta se contesta con su error y nunca deja el turno abierto; su resultado pasa por el recorte. | A2 |
+| 221 | Una herramienta que revienta se contesta con su error y nunca deja el turno abierto; su resultado pasa por el recorte. | A2. Una herramienta de control que cancela su propia corrutina: la excepción sale de la tanda y la devolución, en `finally`, cierra igual el turno a los 2000 ms |
 | 222 | El turno se cierra por silencio incluso cuando llega un mensaje sin hechos; con una llamada en curso no se cierra. | A2 |
 | 223 | Una causa fatal termina la voz y se dice una sola vez, llegue por error, por cierre o por el apretón de manos; un corte de red reconecta hasta 4 veces con espera creciente, y cerrar un turno devuelve el contador a cero. | A2 |
 | 224 | Todas las vías de terminar la escucha (cierre, excepción, cancelación) pasan por la misma decisión; detener nunca reconecta ni anuncia un fatal, y una cancelación que llega del canal con la voz viva es un corte y reconecta. | A2 |
 | 225 | Cada conexión empieza con el marcador de turnos nuevo y sin la falla de antes de abrir de la anterior; los segundos de voz se suman entre conexiones y se reportan al detener. | A2 |
-| 226 | Un aviso del sistema espera a que no queden llamadas pendientes, sale una sola vez con su respuesta pedida y no abre una petición del usuario. | A2 |
-| 227 | El audio y las transcripciones del delegado nunca se escriben en el log. | A2 |
-| 228 | Al acercarse al tope de 128 items por sesión se avisa una vez en el log, sin cortar la conversación. | A2 |
-| 229 | Cuando el detector dispara, el altavoz se calla, la compuerta se reabre y el trozo viaja intacto; sin compuerta activa el detector no actúa. | A2 |
+| 226 | Un aviso del sistema espera a que la sesión se confirme y a que no queden llamadas pendientes, sale una sola vez con su respuesta pedida y no abre una petición del usuario; con la voz muerta se descarta, lo devuelve y lo deja en el log. | A2. Con la voz muerta `avisar` devuelve falso y deja «aviso del sistema descartado». Un aviso antes de `session.started`: se acepta, no sale, y al confirmar sale con su `response.create` |
+| 227 | El audio, las transcripciones y los mensajes del delegado y los argumentos de las llamadas nunca se escriben en el log. | A2. Un `output_item.done` con un mensaje del delegado: solo su tipo. Llamadas con `{"texto":"mi clave es 1234"}` y un número: ningún argumento en el log |
+| 228 | Al acercarse al tope de 128 items por sesión, contando cada llamada del delegado, se avisa una vez en el log, sin cortar la conversación. | A2 |
+| 229 | Con el barge-in por energía encendido, cuando el detector dispara el altavoz se calla, la compuerta se reabre y el trozo viaja intacto, y cada frase nueva de Ü vuelve a sembrar su eco; por defecto está apagado, y sin compuerta activa el detector no actúa. | A2. Con la bandera: tras disparar, Ü vuelve a hablar con un eco de 3000 que no dispara y una voz de 12 000 encima que sí (rearme). Ü calla, pasa la gracia y la frase siguiente con eco de 3000 no dispara: la compuerta al reabrirse le dice al detector que no suena (siembra por frase). Por defecto, compuerta activa y voz encima: nunca calla y todo se traga |
 | 230 | Cambiar de modo en plena sesión manda la delegación nueva sin reabrir, y si la sesión se corta, la reapertura ya abre en el modo vigente. | A2 |
 | 231 | Detener corta cualquier espera en curso: la voz termina enseguida, no cuando vence la espera. | A2 |
 | 232 | Una herramienta que se cancela por su cuenta o lanza un error grave se contesta con su motivo y la voz sigue atendiendo las siguientes; solo terminar la conversación la cancela, y entonces no se contesta. | A2 |
 | 233 | Al reconectar, lo que quedó corriendo de la conexión anterior se cancela, no se contesta en la nueva y no bloquea sus herramientas. | A2 |
 | 234 | Parar y las herramientas de control no esperan detrás de una herramienta que actúa en la pantalla; las que actúan en la pantalla siguen yendo de a una. | A2 |
 | 235 | Retirar una llamada la contesta como no ejecutada, para que el servidor no quede esperando su salida. | A2 |
+| 236 | La conversación se atiende de a una cosa por vez aunque la llamen desde varios hilos: ninguna llamada queda en curso por una carrera y ningún envío se intercala con otro. | A2 |
+| 237 | Al log de la voz nunca llega el contenido de una herramienta ni de un error: solo su tipo y un motivo saneado. | A2 |
+| 238 | Lo escrito con llamadas sin contestar abre su petición y espera en la misma cola que los avisos, sin prefijo, hasta salir con un solo pedido de respuesta; si la conexión muere, lo escrito en cola se descarta y los avisos pasan a la siguiente. | A2 |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -104,9 +107,10 @@ sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás prote
 
 ### Con qué se juzga cada una
 
-Las diecisiete son **entradas y relojes a mano dentro de la propia prueba**: mensajes JSON copiados
+Todas son **entradas y relojes a mano dentro de la propia prueba**: mensajes JSON copiados
 de las capturas de U, PCM construido byte a byte y un reloj que es una variable. Ninguna toca red,
-micrófono, altavoz ni Android.
+micrófono, altavoz ni Android. La 236 es la única que no cabe en `commonTest`: allí `corre` es un
+`runBlocking` de un solo hilo, que no ve una carrera nunca; vive en `jvmTest` con hilos de verdad.
 
 | # | Cómo se juzga sin tocar nada |
 |---|---|
@@ -137,7 +141,7 @@ micrófono, altavoz ni Android.
 | 225 | Una llamada retenida en la conexión 1 no sujeta el turno de la 3. Un error de antes de abrir en la 1 no convierte en «no pude abrir» un corte sin confirmar de la 2. Duraciones 12, 25 y luego 7: se reportan 32 s al detener |
 | 226 | Aviso con una llamada retenida: no sale nada; al contestarla, salida + aviso + un `response.create`. Sin pendientes sale ya. El contador de peticiones no se mueve |
 | 227 | Audio con voz, ceros, delta vacío, `output_text.delta` y `function_call_arguments.delta` del delegado: ni el base64 ni el texto del delegado aparecen en el log; lo que dijo Ü, una sola vez al cerrar el turno; un evento desconocido sí se vuelca |
-| 228 | Un resultado, un aviso y 117 textos: 119 items y ningún aviso; el 120 deja una línea; 15 más no dejan otra y siguen saliendo. La conexión nueva empieza en cero |
+| 228 | Una llamada, su resultado, un aviso y 116 textos: 119 items y ningún aviso (la llamada del delegado ocupa un item); el 120 deja una línea; 15 más no dejan otra y siguen saliendo. La conexión nueva empieza en cero |
 | 229 | Compuerta activa: eco 800 y voz 6000 sostenida con Ü sonando; dispara, calla una vez, el trozo que dispara viaja idéntico y el siguiente también (reabierta, sin gracia). Sin compuerta: nunca calla y todo viaja idéntico |
 | 230 | Canal con guion: cambiar al modo aprendiz en plena sesión da `session.update` y el append, sin otro `session.start` ni otra URL. Tras un corte, el `session.start` de la reapertura lleva las instrucciones y herramientas del aprendiz; tras otro cambio y otro corte, las del último. La voz reabre siempre con su persona, y en un modo especial, confirmada la sesión y no antes, recibe el append con el prefijo de cambio de modo y las reglas vigentes. De vuelta al modo de siempre, la reapertura no manda append |
 | 231 | Un reloj cuya espera no vence sola: detener durante la espera de 1 s de un reintento de abrir, y durante la de 300 ms de una reconexión, termina la voz sin avanzar el reloj, sin reabrir y sin decir nada más. Si no termina, la prueba abre la espera y sale roja, no colgada |
@@ -145,6 +149,9 @@ micrófono, altavoz ni Android.
 | 233 | Una llamada colgada en la conexión 1 y un corte: confirmada la 2, la colgada ya recibió su cancelación; una llamada de la 2 corre, se contesta sola (la vieja no), pide respuesta y su turno cierra a los 2000 ms |
 | 234 | `actuaEnPantalla` solo para `pulsar`. Dos `pulsar` retenidos y detrás `parar`, `como_va` y `self_mute`: las tres de control corren y se contestan con la primera de pantalla retenida, sin `response.create`; la segunda de pantalla corre solo al soltar la primera; un único `response.create` al final |
 | 235 | Una llamada retenida y otra en cola que se retira: la retirada no se ejecuta, su salida es «retirada: no se ejecutó» y el único `response.create` va detrás. Retirada antes de llegar y sola: `session.start`, su salida y un `response.create` |
+| 236 | `jvmTest`, despachador por defecto y seis hilos de `Executors` con semilla fija que llaman `oirMicrofono`, `retirar` y `avisar` mientras llegan 48 llamadas de pantalla y de control, 25 rondas en menos de 9 s. El canal cuenta envíos solapados (cede a mitad de cada uno) y anota cada llamada al entregarla. Nunca dos envíos a la vez; cada llamada con una salida; ningún `response.create` con una llamada entregada y sin salida; tras lo último, un pedido de respuesta; cada aviso aceptado, una vez; y el turno se cierra, así que ninguna quedó en curso |
+| 237 | Herramientas que lanzan `IllegalStateException`, `CancellationException` y `TODO()` con «mi clave es 1234»: al modelo le llega el motivo, al log solo el tipo. Un canal que revienta con el secreto entre comillas: «se cortó la escucha: IllegalStateException». `abrir` que lanza con `Bearer sk-…`, un token largo, el secreto entre comillas, 800 caracteres y una segunda línea: ni lo dicho ni el log los traen, y la línea queda corta |
+| 238 | Una llamada retenida, un aviso y un texto escrito: no sale nada y la petición del texto ya se abrió; al contestarla, salida, aviso, texto sin prefijo y un único `response.create`. Con la llamada colgada y un corte: lo escrito se descarta con una línea en el log y el aviso sale en la conexión nueva |
 
 ---
 
@@ -183,7 +190,7 @@ Todo en `core/src/commonMain/kotlin/graph/core/voz/`, sin dependencias nuevas:
   reacciona a cada hecho, ejecuta las herramientas por un puerto, cierra turnos y decide en un solo sitio
   si termina, dice por qué o reconecta.
 
-Pone verdes: **218-235**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
+Pone verdes: **218-238**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
 
 ### Fase B — el cableado en `app` (otra corrida)
 
@@ -206,7 +213,8 @@ Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer �
 | El prefijo de dictar | lo compone `ConversacionEnVivo.cs:1262`, y en blanco sale sin mandar nada | lo pone `dictar()`, y en blanco devuelve lista vacía | el prefijo es parte del protocolo medido, no de quien llama |
 | Default de la compuerta | `CompuertaActiva(..., sinCaminoDeEco = false)` y la variable `U_SIN_ECO` lo invierte | `sinCaminoDeEco = true` en la firma | en el teléfono no hay variables de entorno: el default de la decisión del dueño lo dice el código |
 | `PaseParaVolver`, `Consumo`, `Fotograma` | existen para otros protocolos | no existen | GPT-Live nunca los produce y `mira = false`; se añaden cuando haya un protocolo que los use |
-| Concurrencia de `TurnosSinMarca` | `lock` interno | sin candado | commonMain no tiene `synchronized`; A2 lo confina a un solo hilo o corrutina |
+| Concurrencia de `TurnosSinMarca` | `lock` interno | sin candado | commonMain no tiene `synchronized`; `ConversacionViva` lo confina: todo método público salta a su despachador de un hilo (`limitedParallelism(1)`, promesa 236) |
+| Quién escribe en el socket | un único escritor con semáforo (`ConversacionEnVivo.cs:1341-1350`) | igual: todo envío, también el micrófono y la apertura, pasa por un `Mutex` | confinar a un hilo no basta: entre dos puntos de suspensión de un envío cabe otro (promesa 236) |
 | Varias tandas de llamadas | cada `Pide` corre en su propio `Task.Run`, en paralelo | las que actúan en la pantalla, un obrero por conexión en el orden en que llegaron; las de control (`parar`, `como_va`, `self_*`, según `actuaEnPantalla`) corren aparte, en el acto | dos manos sobre la pantalla del teléfono a la vez no se cruzan, y «para» no puede esperar a que acabe lo que para (promesa 234); la escucha sigue libre igual |
 | Una llamada retirada | la retira el modelo al hablarle encima; ni se ejecuta ni se contesta, porque contestarla la hacía repetirse (`ConversacionEnVivo.cs:1688, 2035`) | no se ejecuta y se contesta «retirada: no se ejecutó»; como toda salida, sin pendientes pide respuesta | GPT-Live nunca emite la retirada: viene de afuera (fase 2C), el servidor no se enteró y sin la salida rechaza el siguiente `response.create` con `function_call_outputs_required` (promesa 235). Que el delegado no la vuelva a pedir se mide en la fase B |
 | Una herramienta que se cancela sola o lanza un `Error` | `catch (Exception)`, que en .NET también atrapa la cancelación: se contesta «falló» (`ConversacionEnVivo.cs:2061`) | cancelación ajena: «la herramienta se paró: …»; `Error`: «la herramienta falló: …»; la tanda sigue. Solo la cancelación de la voz la cancela, y entonces no se contesta | en Kotlin un `withTimeout` o el freno de 3A (`Paraste`) lanzan la misma excepción que cancelar la corrutina, y un `TODO()` no es `Exception`: sin distinguirlos, el obrero moría en silencio o la voz caía (promesa 232) |
@@ -221,6 +229,13 @@ Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer �
 | Pedir respuesta a lo escrito | el `response.create` lo añade quien arma `MensajesDeTexto` | `texto()` devuelve el mensaje y su `response.create` | sin él el servidor acepta y calla (medido): es protocolo, no de quien llama |
 | JSON demasiado anidado | System.Text.Json corta a 64 niveles con una `JsonException` que se captura | un escáner lineal mide antes de parsear, con el mismo tope de 64 | kotlinx 1.7.1 no tiene tope: miles de niveles lanzan `StackOverflowError`, que no es `Exception` y se llevaba la voz (promesa 203) |
 | Un `error` sin message | `GetRawText()` del error, entero | su texto crudo tal como llegó, recortado a 400 caracteres | acaba en el log y en lo que se dice; nunca se re-serializa |
+| Barge-in por energía | apagado por defecto; `U_BARGEIN_ENERGIA=1` lo enciende (`ConversacionEnVivo.cs:1183-1196`) | `bargeInPorEnergia = false` por defecto, en la firma | allí se midió que la voz del usuario llegaba ~3× más débil que el eco y solo disparaba en falso; en el teléfono no hay variables de entorno y el default lo dice el código (promesa 229) |
+| El micrófono antes de `session.started` | viaja en cuanto el socket está abierto (`ConversacionEnVivo.cs:1223, 1339`) | no viaja hasta que la sesión se confirma | mejora: el servidor aún no escucha, y lo que se mandara antes se pierde o confunde (promesa 219) |
+| Avisos del sistema con llamadas pendientes | salen en el acto (`ConversacionEnVivo.cs:2009-2015`) | esperan a que no quede ninguna sin contestar, y a la confirmación | su `response.create` con una salida pendiente es lo que el servidor rechaza con `function_call_outputs_required` (promesa 226) |
+| Lo escrito con llamadas pendientes | sale en el acto con su `response.create` (`ConversacionEnVivo.cs:1296-1305`) | abre la petición al escribirse y espera en la cola de los avisos, sin prefijo; sale con un único `response.create`. La cola es de la conexión: al morir, lo escrito se descarta y los avisos pasan a la siguiente | el mismo rechazo del servidor; lo escrito esperaba a una sesión que ya no existe, y un aviso sigue siendo verdad (promesa 238) |
+| La apertura no sale en la primera conexión | la reconexión dice siempre «Sigo, pero olvidé lo último…» (`ConversacionEnVivo.cs:1504`) | «olvidé lo último» solo si antes se confirmó alguna sesión; si no, «Te escucho.» | no se olvida lo que nunca empezó (promesa 219) |
+| `abrir` lanza algo que no es la red | — (el socket traduce a estado 0) | solo `Apertura.SinRed` se reintenta; otra excepción se dice una vez con su motivo saneado | un TLS roto o una URL mala fallan igual tres veces, y culpar al internet mandaba a buscar donde no era (promesa 218) |
+| El mensaje de un error en el log | `e.Message` tal cual | de una herramienta, solo el tipo; del canal, el tipo y la primera línea sin comillas ni nada con forma de clave, recortada a 120 car. Al modelo sí le llega el motivo | `LogBus` reenvía cada línea a la telemetría remota, y el mensaje de una herramienta puede traer lo que se escribió (promesa 237) |
 | Base64, `call_id` o argumentos inválidos | lanza | lista vacía, id vacío o mapa vacío | mejora: un mensaje raro no se lleva el socket |
 | Orden de la compuerta | `CompuertaActiva(aecDelSistema, forzada, sinCaminoDeEco)` | `ModoDeCaptura.activa(forzada, aec, sinCaminoDeEco)` | invertido: dos `Boolean` seguidos se cruzan sin error, así que todos los llamadores usan parámetros nombrados y así debe seguir |
 | `seconds` de la duración | cualquier número | solo finito y no negativo | un `NaN` envenenaba el acumulado, y un negativo o un infinito no son una duración (promesa 206) |

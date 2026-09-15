@@ -25,6 +25,8 @@ import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -36,6 +38,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
+import kotlin.coroutines.EmptyCoroutineContext
 import kotlin.io.encoding.Base64
 import kotlin.io.encoding.ExperimentalEncodingApi
 import kotlin.math.PI
@@ -82,24 +85,27 @@ class Contrato002VozGptLive {
             215 to "Por defecto el micrófono viaja siempre sin compuerta; con AEC no actúa; forzarla la activa siempre.",
             216 to "La voz sostenida sobre la línea base dispara la interrupción; un golpe corto y el eco fuerte no disparan; tras disparar no vuelve a disparar hasta que Ü suene otra vez.",
             217 to "Sin crédito, clave inválida (incluido HTTP 401) o modelo inexistente son fatales y se dicen con su causa; cualquier otro código, prosa o vacío se puede reintentar.",
-            218 to "Sin credencial la voz no llama a nadie y dice qué falta; un error de red al abrir se reintenta hasta 3 veces con esperas de 1 s y 2 s; un 401 del apretón de manos o una causa fatal no se reintentan.",
-            219 to "«Sesión abierta» y el mensaje de conexión se dicen una sola vez y solo al confirmarse la sesión, nunca al conectar el socket; sin sesión confirmada el micrófono no viaja.",
+            218 to "Sin credencial la voz no llama a nadie y dice qué falta, y la credencial se pide de nuevo en cada apertura; un error de red al abrir se reintenta hasta 3 veces con esperas de 1 s y 2 s; un 401 del apretón de manos, una causa fatal o un fallo al abrir que no es de red no se reintentan.",
+            219 to "«Sesión abierta» y el mensaje de conexión se dicen una sola vez y solo al confirmarse la sesión, nunca al conectar el socket, y «olvidé lo último» solo si antes se confirmó alguna; sin sesión confirmada el micrófono no viaja.",
             220 to "Una tanda de llamadas se contesta entera y pide respuesta una sola vez, solo cuando no queda ninguna llamada sin contestar; una llamada retirada no se ejecuta.",
             221 to "Una herramienta que revienta se contesta con su error y nunca deja el turno abierto; su resultado pasa por el recorte.",
             222 to "El turno se cierra por silencio incluso cuando llega un mensaje sin hechos; con una llamada en curso no se cierra.",
             223 to "Una causa fatal termina la voz y se dice una sola vez, llegue por error, por cierre o por el apretón de manos; un corte de red reconecta hasta 4 veces con espera creciente, y cerrar un turno devuelve el contador a cero.",
             224 to "Todas las vías de terminar la escucha (cierre, excepción, cancelación) pasan por la misma decisión; detener nunca reconecta ni anuncia un fatal, y una cancelación que llega del canal con la voz viva es un corte y reconecta.",
             225 to "Cada conexión empieza con el marcador de turnos nuevo y sin la falla de antes de abrir de la anterior; los segundos de voz se suman entre conexiones y se reportan al detener.",
-            226 to "Un aviso del sistema espera a que no queden llamadas pendientes, sale una sola vez con su respuesta pedida y no abre una petición del usuario.",
-            227 to "El audio y las transcripciones del delegado nunca se escriben en el log.",
-            228 to "Al acercarse al tope de 128 items por sesión se avisa una vez en el log, sin cortar la conversación.",
-            229 to "Cuando el detector dispara, el altavoz se calla, la compuerta se reabre y el trozo viaja intacto; sin compuerta activa el detector no actúa.",
+            226 to "Un aviso del sistema espera a que la sesión se confirme y a que no queden llamadas pendientes, sale una sola vez con su respuesta pedida y no abre una petición del usuario; con la voz muerta se descarta, lo devuelve y lo deja en el log.",
+            227 to "El audio, las transcripciones y los mensajes del delegado y los argumentos de las llamadas nunca se escriben en el log.",
+            228 to "Al acercarse al tope de 128 items por sesión, contando cada llamada del delegado, se avisa una vez en el log, sin cortar la conversación.",
+            229 to "Con el barge-in por energía encendido, cuando el detector dispara el altavoz se calla, la compuerta se reabre y el trozo viaja intacto, y cada frase nueva de Ü vuelve a sembrar su eco; por defecto está apagado, y sin compuerta activa el detector no actúa.",
             230 to "Cambiar de modo en plena sesión manda la delegación nueva sin reabrir, y si la sesión se corta, la reapertura ya abre en el modo vigente.",
             231 to "Detener corta cualquier espera en curso: la voz termina enseguida, no cuando vence la espera.",
             232 to "Una herramienta que se cancela por su cuenta o lanza un error grave se contesta con su motivo y la voz sigue atendiendo las siguientes; solo terminar la conversación la cancela, y entonces no se contesta.",
             233 to "Al reconectar, lo que quedó corriendo de la conexión anterior se cancela, no se contesta en la nueva y no bloquea sus herramientas.",
             234 to "Parar y las herramientas de control no esperan detrás de una herramienta que actúa en la pantalla; las que actúan en la pantalla siguen yendo de a una.",
             235 to "Retirar una llamada la contesta como no ejecutada, para que el servidor no quede esperando su salida.",
+            236 to "La conversación se atiende de a una cosa por vez aunque la llamen desde varios hilos: ninguna llamada queda en curso por una carrera y ningún envío se intercala con otro.",
+            237 to "Al log de la voz nunca llega el contenido de una herramienta ni de un error: solo su tipo y un motivo saneado.",
+            238 to "Lo escrito con llamadas sin contestar abre su petición y espera en la misma cola que los avisos, sin prefijo, hasta salir con un solo pedido de respuesta; si la conexión muere, lo escrito en cola se descarta y los avisos pasan a la siguiente.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -861,11 +867,17 @@ class Contrato002VozGptLive {
         val enviados = mutableListOf<String>()
         val cierres = mutableListOf<String>()
         val guion = ArrayDeque<Paso>()
-        var alAcabarElGuion: () -> Unit = {}
+        var alAcabarElGuion: suspend () -> Unit = {}
         private var cerrado = true
 
         /** Las aperturas, contadas desde 1, en las que vence un `withTimeout` del adaptador: una cancelación que no es de la voz. */
         val vencenAlAbrir = mutableSetOf<Int>()
+
+        /** Las aperturas, contadas desde 1, en las que el adaptador lanza algo que no es la red: TLS roto, URL mala. */
+        val lanzanAlAbrir = mutableMapOf<Int, Exception>()
+
+        /** Los envíos que fallan como si el socket hubiera muerto al mandarlos: no quedan en [enviados]. */
+        var fallaAlEnviar: (String) -> Boolean = { false }
 
         override suspend fun abrir(url: String, cabeceras: Map<String, String>): Apertura {
             urls += url
@@ -874,12 +886,17 @@ class Contrato002VozGptLive {
                 cerrado = true
                 withTimeout(0) { awaitCancellation() }
             }
+            lanzanAlAbrir[urls.size]?.let {
+                cerrado = true
+                throw it
+            }
             val a = aperturas.removeFirstOrNull() ?: Apertura.Ok
             cerrado = a != Apertura.Ok
             return a
         }
 
         override suspend fun enviar(texto: String) {
+            if (fallaAlEnviar(texto)) throw IllegalStateException("el socket murió al mandar")
             enviados += texto
         }
 
@@ -913,6 +930,8 @@ class Contrato002VozGptLive {
     private val sinHechos = """{"type":"session.updated","session":{"id":"live_u2_ENOy6GhblDeLrMlDOGSX1","model":"gpt-live-1","status":"active"}}"""
     private fun usuario(t: String) = """{"type":"session.input_transcript.delta","delta":${JsonPrimitive(t)}}"""
     private fun dichoPorU(t: String) = """{"type":"session.output_transcript.delta","delta":${JsonPrimitive(t)}}"""
+    private fun pideCon(id: String, nombre: String, argumentos: String) =
+        """{"type":"response.event","event":{"type":"response.output_item.done","item":{"type":"function_call","call_id":"$id","name":"$nombre","arguments":${JsonPrimitive(argumentos)}}}}"""
     private fun pide(id: String, nombre: String) =
         """{"type":"response.event","event":{"type":"response.output_item.done","item":{"type":"function_call","call_id":"$id","name":"$nombre","arguments":"{}"}}}"""
     private fun fallo(code: String, message: String) =
@@ -925,7 +944,10 @@ class Contrato002VozGptLive {
         compuertaActiva: Boolean = false,
         ejecutor: suspend (Llamada) -> String = { "hecho: ${it.nombre}" },
         actuaEnPantalla: (String) -> Boolean = { true },
+        bargeIn: Boolean = false,
     ) {
+        /** La que devuelve `credencial()` en este momento: se puede rotar entre conexiones. */
+        var credencialVigente = credencial
         val canal = CanalGuionado()
         val reloj = RelojAMano()
         val dicho = mutableListOf<String>()
@@ -937,7 +959,7 @@ class Contrato002VozGptLive {
         val conv = ConversacionViva(
             canal = canal,
             protocolo = ProtocoloGptLive(),
-            credencial = { credencial },
+            credencial = { credencialVigente },
             instruccionesVoz = "Eres Ü. Hablas corto y delegas.",
             instruccionesDelegado = "ERES Ü Y ESTAS SON TUS INSTRUCCIONES COMPLETAS",
             utensilios = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar")))),
@@ -950,6 +972,9 @@ class Contrato002VozGptLive {
             reloj = reloj,
             compuertaActiva = compuertaActiva,
             actuaEnPantalla = actuaEnPantalla,
+            bargeInPorEnergia = bargeIn,
+            // El contrato común corre en el hilo único de `corre`: la voz se queda en él. El despachador de verdad lo juzga la 236.
+            hilo = EmptyCoroutineContext,
         )
 
         init {
@@ -962,6 +987,7 @@ class Contrato002VozGptLive {
         fun cuenta(tipo: String) = tipos().count { it == tipo }
         fun enLog(texto: String) = log.count { texto in it }
         fun salidas() = enviados().filter { it.texto("item", "type") == "function_call_output" }
+        fun textos() = enviados().filter { it.texto("item", "type") == "message" }.map { (it.en("item", "content") as JsonArray)[0].texto("text") }
         fun audios() = enviados().filter { it.texto("type") == "session.input_audio.append" }.map { Base64.decode(it.texto("audio")!!) }
     }
 
@@ -1015,6 +1041,34 @@ class Contrato002VozGptLive {
         sinCredito.conv.conversar()
         assertEquals(1, sinCredito.canal.urls.size, promesa(218) + " · una causa fatal no se reintenta")
         assertEquals(listOf("No sigo con la voz en vivo: la cuenta no tiene crédito («You have no credits remaining.»)."), sinCredito.dicho, promesa(218))
+
+        // LA CABECERA TAMBIÉN ES UNA PUERTA: un HTTP que por sí solo no es fatal con `invalid_api_key` en la cabecera es la clave.
+        val cabeceraFatal = Voz()
+        cabeceraFatal.canal.aperturas += Apertura.Rechazo(403, "invalid_api_key")
+        cabeceraFatal.conv.conversar()
+        assertEquals(1, cabeceraFatal.canal.urls.size, promesa(218) + " · la causa de la cabecera no se reintenta")
+        assertEquals(listOf("No sigo con la voz en vivo: la clave (OPENAI_API_KEY) no vale («HTTP 403 invalid_api_key»)."), cabeceraFatal.dicho, promesa(218))
+
+        // LA CREDENCIAL SE PIDE EN CADA APERTURA: el token efímero de mañana caduca, y una clave rotada vale desde la siguiente.
+        val rotada = Voz()
+        rotada.guion(
+            llega(sesionAbierta), hace { rotada.credencialVigente = "sk-rotada" }, corte(),
+            llega(sesionAbierta), hace { rotada.credencialVigente = "   " }, corte(),
+        )
+        rotada.conv.conversar()
+        assertEquals(listOf<String?>("Bearer $clave", "Bearer sk-rotada"), rotada.canal.cabeceras.map { it["Authorization"] }, promesa(218) + " · la reapertura va con la credencial vigente")
+        assertEquals(2, rotada.canal.urls.size, promesa(218) + " · sin credencial al reabrir no se llama a nadie")
+        assertEquals("No hay voz en vivo: falta la clave de la voz (OPENAI_API_KEY).", rotada.dicho.last(), promesa(218) + " · y se dice qué falta: ${rotada.dicho}")
+        assertFalse(rotada.conv.viva, promesa(218))
+
+        // SOLO LA RED SE REINTENTA. Un TLS roto o una URL mala fallan igual tres veces: se dicen una vez, sin culpar al internet.
+        val tlsRoto = Voz()
+        tlsRoto.canal.lanzanAlAbrir[1] = IllegalStateException("Handshake failed")
+        tlsRoto.conv.conversar()
+        assertEquals(1, tlsRoto.canal.urls.size, promesa(218) + " · un fallo que no es de red no se reintenta")
+        assertTrue(tlsRoto.reloj.esperas.isEmpty(), promesa(218) + " · ${tlsRoto.reloj.esperas}")
+        assertEquals(listOf("No pude abrir la voz en vivo: IllegalStateException: Handshake failed."), tlsRoto.dicho, promesa(218))
+        assertFalse(tlsRoto.conv.viva, promesa(218))
     }
 
     @Test
@@ -1047,6 +1101,15 @@ class Contrato002VozGptLive {
         assertEquals(1, v.audios().size, promesa(219) + " · solo viaja el trozo oído con la sesión confirmada")
         assertContentEquals(mic, v.audios().single(), promesa(219))
         assertEquals(2, v.cuenta("session.start"), promesa(219))
+
+        // SIN CONFIRMAR NO HUBO CONVERSACIÓN: si la apertura de la primera conexión no llegó a salir, la que confirma arranca.
+        val sinApertura = Voz()
+        var aperturasFallidas = 0
+        sinApertura.canal.fallaAlEnviar = { json(it).texto("type") == "session.start" && aperturasFallidas++ == 0 }
+        sinApertura.guion(llega(sesionAbierta))
+        sinApertura.conv.conversar()
+        assertEquals(2, sinApertura.canal.urls.size, promesa(219) + " · la apertura que no salió reconecta")
+        assertEquals(listOf("Te escucho."), sinApertura.dicho, promesa(219) + " · y no se dice «olvidé lo último» de algo que nunca empezó")
     }
 
     @Test
@@ -1098,6 +1161,28 @@ class Contrato002VozGptLive {
         val bytesLeer = bytes(v.canal.enviados.first { "call_leer" in it })
         assertTrue(bytesLeer <= 32_768, promesa(221) + " · $bytesLeer B")
         assertTrue("…[recortado: " in leer.texto("item", "output").orEmpty(), promesa(221))
+
+        // LA DEVOLUCIÓN VA EN FINALLY. Una herramienta que cancela su propia corrutina saca la excepción de la tanda: sin el
+        // finally, la llamada quedaba en curso y el turno no se cerraba nunca.
+        val seCancela = Voz(actuaEnPantalla = { false }, ejecutor = {
+            if (it.nombre == "cortar") {
+                currentCoroutineContext().cancel()
+                awaitCancellation()
+            }
+            "hecho: ${it.nombre}"
+        })
+        seCancela.guion(
+            llega(sesionAbierta),
+            hace { seCancela.reloj.ms = 1_000 }, llega(usuario("corta y mira")),
+            llega(pide("call_cortar", "cortar")), llega(pide("call_mirar", "que_veo")),
+            llega(sinHechos),
+            hace { seCancela.reloj.ms = 2_999 }, llega(sinHechos),
+            hace { assertEquals(0, seCancela.enLog("usuario dijo"), promesa(221) + " · 1999 ms") },
+            hace { seCancela.reloj.ms = 3_000 }, llega(sinHechos),
+        )
+        seCancela.conv.conversar()
+        assertEquals(listOf("call_cortar", "call_mirar"), seCancela.ejecutadas, promesa(221))
+        assertEquals(1, seCancela.enLog("usuario dijo: corta y mira"), promesa(221) + " · la que se canceló a sí misma no deja el turno abierto: ${seCancela.log}")
     }
 
     @Test
@@ -1285,6 +1370,24 @@ class Contrato002VozGptLive {
         assertEquals("call_hacer", v.enviados()[1].texto("item", "call_id"), promesa(226) + " · la salida va antes que el aviso")
         assertEquals(listOf<String?>("[aviso del sistema] la tarea terminó: abrí la cámara", "[aviso del sistema] la tarea terminó: grabé 10 s"), avisos(), promesa(226) + " · cada aviso una sola vez")
         assertEquals(1, v.conv.peticiones, promesa(226) + " · el aviso no abre una petición del usuario")
+
+        // Muerta la voz, el aviso no va a ninguna parte: lo devuelve, y queda la línea de por qué.
+        assertFalse(v.conv.avisar("la tarea terminó: tarde"), promesa(226) + " · con la voz muerta se descarta")
+        assertEquals(1, v.enLog("aviso del sistema descartado"), promesa(226) + " · ${v.log}")
+        assertTrue(v.textos().none { "tarde" in it.orEmpty() }, promesa(226))
+
+        // ANTES DE CONFIRMAR EL SERVIDOR NO ESCUCHA: el aviso se acepta y espera a `session.started`.
+        val temprano = Voz()
+        temprano.guion(
+            hace { assertTrue(temprano.conv.avisar("la tarea terminó: temprano"), promesa(226) + " · con la voz viva se acepta") },
+            llega(sinHechos),
+            hace { assertEquals(listOf<String?>("session.start"), temprano.tipos(), promesa(226) + " · antes de session.started no sale") },
+            llega(sesionAbierta),
+            llega(sinHechos),
+        )
+        temprano.conv.conversar()
+        assertEquals(listOf<String?>("session.start", "response.item.create", "response.create"), temprano.tipos(), promesa(226) + " · sale al confirmarse, una vez")
+        assertEquals(listOf<String?>("[aviso del sistema] la tarea terminó: temprano"), temprano.textos(), promesa(226))
     }
 
     @Test
@@ -1299,6 +1402,9 @@ class Contrato002VozGptLive {
             llega("""{"type":"session.output_audio.delta","delta":""}"""),
             llega("""{"type":"response.event","delegation_id":"item_1","event":{"type":"response.output_text.delta","delta":"$secreto"}}"""),
             llega("""{"type":"response.event","delegation_id":"item_1","event":{"type":"response.function_call_arguments.delta","delta":"{\"que\":\"$secreto"}}"""),
+            llega("""{"type":"response.event","delegation_id":"item_1","event":{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"$secreto"}]}}}"""),
+            llega(pideCon("call_escribir", "escribir", """{"texto":"mi clave es 1234"}""")),
+            llega(pideCon("call_buscar", "buscar", """{"que":"$secreto","cuantos":4321}""")),
             llega(dichoPorU("Veo la cámara")), llega(dichoPorU(" abierta.")),
             llega("""{"type":"session.delegation.created","delegation":{"id":"item_1","type":"delegation"}}"""),
             hace { v.reloj.ms = 5_000 }, llega(sinHechos),
@@ -1308,6 +1414,9 @@ class Contrato002VozGptLive {
         assertTrue(v.log.none { b64.substring(8, 72) in it }, promesa(227) + " · el audio de Ü")
         assertTrue(v.log.none { "AAAAAAAAAAAAAAAA" in it }, promesa(227) + " · ni el silencio")
         assertTrue(v.log.none { secreto in it }, promesa(227) + " · ni lo que teclea el delegado: ${v.log.filter { secreto in it }}")
+        assertEquals(listOf("call_escribir", "call_buscar"), v.ejecutadas, promesa(227))
+        assertTrue(v.log.none { "mi clave" in it || "1234" in it || "4321" in it }, promesa(227) + " · ni los argumentos de una llamada: ${v.log.filter { "1234" in it || "4321" in it }}")
+        assertEquals(1, v.enLog("response.event «response.output_item.done»"), promesa(227) + " · del mensaje del delegado, solo su tipo: ${v.log}")
         assertEquals(1, v.enLog("Veo la cámara"), promesa(227) + " · lo que dijo Ü, una vez y al cerrar el turno: ${v.log}")
         assertEquals(1, v.enLog("Ü dijo: Veo la cámara abierta."), promesa(227))
         assertEquals(1, v.enLog("session.delegation.created"), promesa(227) + " · lo que no se traduce sí se vuelca")
@@ -1323,10 +1432,10 @@ class Contrato002VozGptLive {
             llega(usuario("mira")), llega(pide("call_mirar", "que_veo")),
             llega(sinHechos),
             hace {
-                assertEquals(1, v.conv.itemsEnSesion, promesa(228) + " · un resultado es un item")
+                assertEquals(2, v.conv.itemsEnSesion, promesa(228) + " · la llamada del delegado ocupa un item del servidor, y su resultado otro")
                 v.conv.avisar("la tarea terminó")
-                assertEquals(2, v.conv.itemsEnSesion, promesa(228) + " · un aviso también")
-                repeat(117) { v.conv.escribir("frase $it") }
+                assertEquals(3, v.conv.itemsEnSesion, promesa(228) + " · un aviso también")
+                repeat(116) { v.conv.escribir("frase $it") }
                 assertEquals(119, v.conv.itemsEnSesion, promesa(228))
                 assertEquals(0, v.enLog(aviso), promesa(228))
                 v.conv.escribir("la 120")
@@ -1340,7 +1449,7 @@ class Contrato002VozGptLive {
             hace { assertEquals(0, v.conv.itemsEnSesion, promesa(228) + " · la sesión nueva empieza de cero") },
         )
         v.conv.conversar()
-        assertEquals(134, v.enviados().count { it.texto("item", "type") == "message" }, promesa(228) + " · nada se cortó")
+        assertEquals(133, v.enviados().count { it.texto("item", "type") == "message" }, promesa(228) + " · nada se cortó")
         assertTrue(v.enviados().any { (it.en("item", "content") as? JsonArray)?.get(0).texto("text") == "más 14" }, promesa(228))
     }
 
@@ -1348,14 +1457,17 @@ class Contrato002VozGptLive {
     fun promesa229() = corre {
         fun cuadrada(a: Int) = pcm(*IntArray(2400) { if (it % 2 == 0) a else -a })
         val eco = cuadrada(800)
+        val ecoFuerte = cuadrada(3000)
+        val quedo = cuadrada(100)
         val encima = cuadrada(6000)
+        val gritando = cuadrada(12000)
         suspend fun Voz.oye(trozo: ByteArray) {
             reloj.ms += 100
             conv.oirMicrofono(trozo)
         }
         fun ceros(a: ByteArray) = a.all { it == 0.toByte() }
 
-        val v = Voz(compuertaActiva = true)
+        val v = Voz(compuertaActiva = true, bargeIn = true)
         v.guion(llega(sesionAbierta), hace {
             v.sonando = true
             repeat(10) { v.oye(eco) }
@@ -1369,10 +1481,49 @@ class Contrato002VozGptLive {
             v.oye(encima)
             assertContentEquals(encima, v.audios().last(), promesa(229) + " · la compuerta se reabrió sin esperar la gracia")
             assertEquals(1, v.callado, promesa(229))
+
+            // EL REARME. Ü vuelve a hablar, y más fuerte: sus primeros 250 ms son eco por decreto y siembran la base de esta
+            // frase. Rearmado, quien le habla encima la vuelve a callar.
+            repeat(3) { v.oye(quedo) }
+            v.sonando = true
+            repeat(8) { v.oye(ecoFuerte) }
+            assertEquals(1, v.callado, promesa(229) + " · la frase nueva de Ü no se toma por interrupción")
+            trozos = 0
+            while (v.callado == 1 && trozos < 10) { v.oye(gritando); trozos++ }
+            assertEquals(2, v.callado, promesa(229) + " · tras disparar se rearma cuando Ü suena otra vez")
+            assertContentEquals(gritando, v.audios().last(), promesa(229))
         })
         v.conv.conversar()
 
-        val sin = Voz()
+        // LA SIEMBRA ES POR FRASE. Ü calla, el eco muere en la gracia y el micrófono vuelve a viajar: el detector lo oye en
+        // silencio. Sin eso seguía en la frase anterior, y el eco más fuerte de la siguiente pasaba por alguien encima.
+        val frases = Voz(compuertaActiva = true, bargeIn = true)
+        frases.guion(llega(sesionAbierta), hace {
+            frases.sonando = true
+            repeat(10) { frases.oye(eco) }
+            frases.sonando = false
+            repeat(4) { frases.oye(quedo) }
+            assertContentEquals(quedo, frases.audios().last(), promesa(229) + " · pasada la gracia, el micrófono viaja")
+            frases.sonando = true
+            repeat(8) { frases.oye(ecoFuerte) }
+            assertEquals(0, frases.callado, promesa(229) + " · el eco de la frase nueva siembra, no dispara")
+            assertTrue(frases.audios().takeLast(8).all(::ceros), promesa(229))
+        })
+        frases.conv.conversar()
+
+        // POR DEFECTO, APAGADO, como en U (`U_BARGEIN_ENERGIA`): allí la voz del usuario llegaba más débil que el eco y el
+        // detector solo disparaba en falso. La compuerta sigue tragando.
+        val porDefecto = Voz(compuertaActiva = true)
+        porDefecto.guion(llega(sesionAbierta), hace {
+            porDefecto.sonando = true
+            repeat(10) { porDefecto.oye(eco) }
+            repeat(6) { porDefecto.oye(encima) }
+            assertEquals(0, porDefecto.callado, promesa(229) + " · por defecto el barge-in por energía no actúa")
+            assertTrue(porDefecto.audios().all(::ceros), promesa(229) + " · y lo que suena encima se traga")
+        })
+        porDefecto.conv.conversar()
+
+        val sin = Voz(bargeIn = true)
         // Se juzga DENTRO del guion: al terminar, la voz calla el altavoz por su cuenta, y eso no es el detector.
         sin.guion(llega(sesionAbierta), hace {
             sin.sonando = true
@@ -1655,5 +1806,91 @@ class Contrato002VozGptLive {
         assertTrue(antes.ejecutadas.isEmpty(), promesa(235))
         assertEquals(listOf<String?>("session.start", "response.item.create", "response.create"), antes.tipos(), promesa(235))
         assertEquals("retirada: no se ejecutó", antes.salidas().single().texto("item", "output"), promesa(235))
+    }
+
+    @Test
+    fun promesa237() = corre {
+        val secreto = "mi clave es 1234"
+        val v = Voz(ejecutor = {
+            when (it.nombre) {
+                "escribir" -> throw IllegalStateException("no pude escribir «$secreto»")
+                "parada" -> throw CancellationException("se paró escribiendo $secreto")
+                else -> TODO(secreto)
+            }
+        })
+        v.guion(
+            llega(sesionAbierta),
+            llega(pide("call_escribir", "escribir")), llega(pide("call_parada", "parada")), llega(pide("call_todo", "sin_hacer")),
+            llega(sinHechos),
+            Paso.Revienta("murió leyendo «$secreto»"),
+        )
+        v.conv.conversar()
+        assertEquals(
+            listOf<String?>("la herramienta falló: no pude escribir «$secreto»", "la herramienta se paró: se paró escribiendo $secreto", "la herramienta falló: An operation is not implemented: $secreto"),
+            v.salidas().map { it.texto("item", "output") }, promesa(237) + " · al modelo le llega el motivo",
+        )
+        assertTrue(v.log.none { "1234" in it || "mi clave" in it }, promesa(237) + " · al log no: ${v.log.filter { "1234" in it }}")
+        for (tipo in listOf("IllegalStateException", "CancellationException", "NotImplementedError")) {
+            assertEquals(1, v.log.count { tipo in it && ("reventó" in it || "se paró" in it) }, promesa(237) + " · el tipo sí: $tipo en ${v.log}")
+        }
+        assertEquals(1, v.enLog("se cortó la escucha: IllegalStateException"), promesa(237) + " · el error del canal, con su tipo: ${v.log}")
+
+        // EL ERROR DEL CANAL SE SANEA: primera línea, sin lo que va entre comillas ni lo que tiene forma de clave, y corto.
+        val canalRoto = Voz()
+        canalRoto.canal.lanzanAlAbrir[1] = IllegalStateException("TLS falló para Bearer sk-prueba-99 y tok_0123456789abcdefghijklmn con «$secreto» " + "x y ".repeat(200) + "\nsegunda línea")
+        canalRoto.conv.conversar()
+        val todo = canalRoto.log + canalRoto.dicho
+        assertTrue(todo.none { "sk-prueba" in it || "0123456789abcdefghij" in it || "1234" in it || "segunda línea" in it }, promesa(237) + " · $todo")
+        assertTrue(todo.all { it.length < 300 }, promesa(237) + " · recortado: ${todo.map { it.length }}")
+        assertEquals(1, canalRoto.dicho.size, promesa(237))
+        assertTrue(canalRoto.dicho.single().startsWith("No pude abrir la voz en vivo: IllegalStateException: TLS falló para "), promesa(237) + " · «${canalRoto.dicho.single()}»")
+    }
+
+    @Test
+    fun promesa238() = corre {
+        val puerta = CompletableDeferred<String>()
+        val v = Voz(ejecutor = { puerta.await() })
+        v.guion(
+            llega(sesionAbierta),
+            llega(usuario("abre la cámara")), llega(pide("call_abrir", "abrir_app")),
+            hace {
+                v.conv.avisar("la tarea terminó: busqué la app")
+                v.conv.escribir("y después graba")
+            },
+            llega(sinHechos),
+            hace {
+                assertEquals(listOf<String?>("session.start"), v.tipos(), promesa(238) + " · con la llamada sin contestar no sale ni el aviso ni lo escrito")
+                assertEquals(2, v.conv.peticiones, promesa(238) + " · lo escrito abre su petición al escribirse")
+            },
+            hace { puerta.complete("cámara abierta") },
+            llega(sinHechos),
+        )
+        v.conv.conversar()
+        assertEquals(
+            listOf<String?>("session.start", "response.item.create", "response.item.create", "response.item.create", "response.create"),
+            v.tipos(), promesa(238) + " · la salida, la cola entera y un solo pedido de respuesta",
+        )
+        assertEquals("call_abrir", v.enviados()[1].texto("item", "call_id"), promesa(238))
+        assertEquals(listOf<String?>("[aviso del sistema] la tarea terminó: busqué la app", "y después graba"), v.textos(), promesa(238) + " · en orden, y lo escrito sin prefijo")
+        assertEquals(2, v.conv.peticiones, promesa(238))
+
+        // LA COLA ES DE LA CONEXIÓN. Lo escrito esperaba a una llamada de una sesión que ya no existe: la nueva no lo recuerda
+        // y se descarta. Un aviso sigue siendo verdad, y pasa a la siguiente.
+        val muere = Voz(ejecutor = { awaitCancellation() })
+        muere.guion(
+            llega(sesionAbierta), llega(pide("call_colgada", "pulsar")),
+            hace {
+                muere.conv.escribir("esto era para la sesión que murió")
+                muere.conv.avisar("la tarea terminó: grabé")
+            },
+            llega(sinHechos),
+            corte(),
+            llega(sesionAbierta),
+            llega(sinHechos),
+        )
+        muere.conv.conversar()
+        assertEquals(listOf<String?>("session.start", "session.start", "response.item.create", "response.create"), muere.tipos(), promesa(238))
+        assertEquals(listOf<String?>("[aviso del sistema] la tarea terminó: grabé"), muere.textos(), promesa(238))
+        assertEquals(1, muere.enLog("lo escrito en cola se descarta"), promesa(238) + " · ${muere.log}")
     }
 }

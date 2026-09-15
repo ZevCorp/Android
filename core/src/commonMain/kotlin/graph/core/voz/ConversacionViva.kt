@@ -2,6 +2,7 @@ package graph.core.voz
 
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.channels.Channel
@@ -14,6 +15,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlin.coroutines.CoroutineContext
 import kotlin.math.max
 import kotlin.math.roundToLong
 
@@ -61,6 +63,8 @@ class ConversacionViva(
      * de a una; las de control (`parar`, `como_va`, `self_*`) corren en el acto. Por defecto todas actúan: nada se cruza.
      */
     private val actuaEnPantalla: (nombre: String) -> Boolean = { true },
+    private val bargeInPorEnergia: Boolean = false,
+    private val hilo: CoroutineContext = Dispatchers.Default.limitedParallelism(1),
 ) {
 
     companion object {
@@ -230,7 +234,7 @@ class ConversacionViva(
      * Lo pide el usuario: corta la espera en curso, y nunca reconecta ni anuncia un fatal. La decisión la toma igual
      * [alTerminarLaEscucha].
      */
-    fun detener() {
+    suspend fun detener() {
         if (!viva || detenida) return
         detenida = true
         espera?.cancel()
@@ -301,14 +305,15 @@ class ConversacionViva(
      * Una nota para la voz que nadie dijo en voz alta («la tarea terminó: …»). NO abre petición, y ESPERA a que no quede
      * ninguna llamada sin contestar: su `response.create` con una salida pendiente es lo que el servidor rechaza.
      */
-    suspend fun avisar(texto: String) {
-        if (!viva || detenida || texto.isBlank()) return
+    suspend fun avisar(texto: String): Boolean {
+        if (!viva || detenida || texto.isBlank()) return false
         avisos.addLast(texto.trim())
-        val c = conexion ?: return
+        val c = conexion ?: return true
         if (c.sinContestar.isNotEmpty()) {
             log(TAG, "aviso del sistema en cola: sale cuando se contesten las ${c.sinContestar.size} llamada(s) pendientes")
         }
         enviando("el aviso del sistema") { pedirRespuestaSiToca(c) }
+        return true
     }
 
     /**
@@ -317,7 +322,7 @@ class ConversacionViva(
      * viene de afuera (la tarea de la fase 2C), el servidor sigue esperando la salida y sin ella rechaza el siguiente
      * `response.create` con `function_call_outputs_required`.
      */
-    fun retirar(ids: List<String>) {
+    suspend fun retirar(ids: List<String>) {
         val validos = ids.filter { it.isNotEmpty() }
         if (validos.isEmpty()) return
         if (retiradas.size > 200) retiradas.clear()
