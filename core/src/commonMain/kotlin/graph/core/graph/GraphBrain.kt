@@ -28,6 +28,8 @@ private val NO_LOG = GraphLog { _, _ -> }
  *  - `results` van en el mismo orden que las acciones; la respuesta a una pregunta va en `inform`,
  *    aparte y una sola vez (Graph la enruta al `ask_user` pendiente; en `results` se perdería);
  *  - la captura viaja solo si el turno anterior pidió `needsScreenshot`;
+ *  - las apps instaladas se consultan una vez por corrida, en su primer turno, y viajan en todos
+ *    (promesa 15): pedirlas en cada turno repetía una consulta cara que no cambia en segundos;
  *  - un `error` en el cuerpo termina el turno con ese texto, también con HTTP 200.
  *
  * Diferencia deliberada con Windows: los HTTP transitorios (0, 408, 429, 502, 503, 504) se
@@ -47,7 +49,8 @@ class GraphBrain(
     private val userId: () -> String?,
     private val email: () -> String?,
     private val deviceId: () -> String?,
-    private val listApps: () -> List<String>,
+    /** Las apps instaladas. `suspend` para que la app la saque del hilo principal; se llama una vez por corrida. */
+    private val listApps: suspend () -> List<String>,
     private val log: GraphLog = NO_LOG,
     /** Espera entre reintentos; inyectable para que el contrato no duerma. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
@@ -61,6 +64,8 @@ class GraphBrain(
     private var pendingInform: String? = null
     private var wantShot = false
     private var turns = 0
+    /** Las apps de esta corrida: se consultan en el primer `next` y se reinician en `begin` (promesa 15). */
+    private var apps: List<String>? = null
 
     /** El `session` opaco de Graph hace de hilo: es lo que el composition root persiste entre activaciones. */
     override val interactionId: String get() = session ?: ""
@@ -85,6 +90,7 @@ class GraphBrain(
         pendingInform = null
         wantShot = false
         turns = 0
+        apps = null // corrida nueva, consulta nueva: entra la app que se instaló entre una y otra
     }
 
     override fun inform(message: String) { pendingInform = message }
@@ -92,6 +98,7 @@ class GraphBrain(
     override suspend fun next(state: ScreenState, actionResults: List<String>): BrainTurn {
         val key = credentials().trim()
         check(key.isNotEmpty()) { GraphCredentials.FALTA }
+        val installed = apps ?: listApps().also { apps = it }
 
         val request = TurnRequest(
             session = session,
@@ -100,7 +107,7 @@ class GraphBrain(
             goal = if (firstTurn) goal else null,
             userId = userId()?.ifBlank { null },
             state = state.toTurnState(
-                apps = listApps().ifEmpty { null },
+                apps = installed.ifEmpty { null },
                 surface = AndroidSurface.from(state.screen),
                 withScreenshot = wantShot,
             ),
@@ -198,7 +205,11 @@ class GraphBrain(
         runCatching { TurnJson.decodeFromString(TurnResponse.serializer(), body).error }.getOrNull()?.takeIf { it.isNotBlank() }
             ?: body.trim().take(200).ifBlank { null }
 
-    /** Dónde se rompió la lectura, según kotlinx («… at path: $.actions[0].args»); sin ruta, el cuerpo entero (`$`). */
+    /**
+     * Dónde se rompió la lectura, sacado del TEXTO del mensaje de kotlinx («… at path: $.actions[0].args»).
+     * Ese texto no es API estable de kotlinx: si cambia el formato, esto degrada a `$` (el cuerpo
+     * entero) y el mensaje sigue trayendo el cuerpo, que es lo que importa para diagnosticar.
+     */
     private fun ruta(e: Throwable?): String =
         e?.message?.let { Regex("at path: (\\S+)").find(it)?.groupValues?.get(1) } ?: "\$"
 

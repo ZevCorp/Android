@@ -1,6 +1,6 @@
 # Plan de implementación: el cerebro vive en Graph — Android pasa a ser cliente tonto
 
-Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · **promesa 12 verde** (2026-09-14; el hallazgo del Nivel 4, corregido y medido otra vez en el teléfono) · **revisión R1: promesas 13-14 verdes y el juez endurecido** (2026-09-14; cada test nuevo se vio ROJO con un sabotaje real; la corrida en el teléfono va en R2) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
+Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · **promesa 12 verde** (2026-09-14; el hallazgo del Nivel 4, corregido y medido otra vez en el teléfono) · **revisión R1: promesas 13-14 verdes y el juez endurecido** (2026-09-14; cada test nuevo se vio ROJO con un sabotaje real; la corrida en el teléfono va en R2) · **revisión R2: promesa 15 verde, el portero juzga lo que se empuja y corrida en el teléfono** (2026-09-14) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
 habla con Graph · Rama: `yokh/cliente-graph`
 
 Hoy el Android piensa solo: `OpenAiBrain` y `GeminiBrain` (en `app/…/platform/`) arman el system
@@ -69,6 +69,7 @@ método `promesaNN`); si cambia uno, cambia el otro en el mismo commit.
 | 12 | Cada objetivo nuevo abre un hilo nuevo en Graph: el primer turno de cada corrida viaja sin session aunque haya uno de una corrida anterior o uno reanudado. | B |
 | 13 | Un turno de Graph nunca espera más de 6 minutos en total: un fallo de conexión se reintenta, pero una lectura agotada no, porque el turno pudo haberse cobrado. | B · revisión |
 | 14 | Cancelar la corrida durante un POST no se registra como fallo de red ni reintenta. | B · revisión |
+| 15 | Las apps instaladas se consultan una sola vez por corrida y viajan en cada turno de esa corrida. | B · revisión R2 |
 
 **La que cierra el asunto es la 7.** Mientras el cliente mande prompt o catálogo, no es tonto: es
 el cerebro viejo con otro transporte. Las otras diez protegen el camino; la 7 es la que define qué
@@ -79,6 +80,10 @@ Graph siguió el hilo viejo y reabrió la calculadora en vez de los ajustes. Se 
 (`AgentLoop.cs:96`, `session = null` por objetivo). **La promesa 1 no cambia:** su test nunca fijó
 que un hilo reanudado se adopta; esa regla vivía solo en el comentario y en el `begin()` de
 `GraphBrain` («con un hilo reanudado viaja igual»), y es lo que la 12 contradice y retira.
+
+**La 15 nació de la revisión** (ronda R2): `GraphBrain` pedía las apps en cada turno, y desde
+`MainActivity` esa consulta (una llamada al `PackageManager` por paquete instalado) corría en el
+hilo principal.
 
 **La 13 y la 14 nacieron de la revisión** (ronda R1): con 30 s para conectar y 5 min para leer por
 intento, cuatro intentos podían tener el turno colgado más de 20 minutos, y una lectura agotada
@@ -107,6 +112,7 @@ Ninguna toca red, Android ni disco.
 | 12 | (a) Corrida 1 guionada hasta `done` con `session:"s-fin"`, luego `begin("abre los ajustes")` en la misma instancia → el request 3 no tiene `session` y sí `goal`. (b) `resume("s-fin")` y `begin(goal)` → el request 1 no tiene `session` y sí `goal` |
 | 13 | Reloj `TestTimeSource` que avanzan el guion y las esperas. (a) `-1` → 1 request, 0 esperas, mensaje «no respondió a tiempo … no se reintentó para no cobrar dos veces». (b) `0` → se reintenta. (c) `504` que tarda 179,5 s → 2 requests, esperas `[800]`, el turno no pasa de 6 min y el mensaje lo dice. (d) Con 200 ms de turno por delante, un transporte que se cuelga se corta en el tope (real, `withTimeout` de 3 s alrededor para que un fallo no cuelgue el juez) |
 | 14 | El transporte lanza `CancellationException` → sale tal cual de `next`, 1 request, 0 esperas y ninguna línea de log con «transitorio» |
+| 15 | Un `listApps` que cuenta sus llamadas. Corrida de 3 turnos → 1 llamada y `state.apps` en los 3 requests. `begin` de un objetivo nuevo y un turno → 2 llamadas: la cuenta es por corrida, no por cerebro |
 
 ---
 
@@ -136,10 +142,11 @@ Lo que quedó, archivo por archivo:
   `DEFAULT_GRAPH_API_KEY`** con `GraphCredentials` (no pasa por `RemoteConfig`: Graph ES el backend
   nuevo); `graphBaseUrl` = pref o `https://graph-eight-pied.vercel.app`; `userId`/`email` de la sesión
   Supabase si existe; `deviceId` = `Settings.Secure.ANDROID_ID`; `listApps` del `PackageManager`
-  (una consulta por cerebro, compartida con los otros dos proveedores). Con `Falta`, `run()` no
+  (desde R2: una consulta por corrida en `Dispatchers.IO`, promesa 15; antes, una por turno y en el
+  hilo principal). Con `Falta`, `run()` no
   instancia el cerebro: loguea `[graph]`, lo dice por voz y devuelve la línea (promesa 9).
 - `app/…/platform/GraphTransport.kt` — el `TurnTransport` real: `HttpURLConnection`, 30 s conectar
-  / 5 min leer, cancelable (`disconnect()` al cancelar), cuerpo también en errores, status 0 cuando no
+  / 5 min leer, cancelable (`disconnect()` al cancelar; desde R2, también en toda otra salida, lectura agotada incluida), cuerpo también en errores, status 0 cuando no
   conectó y -1 cuando conectó y la lectura se agotó (con `connect()` explícito, el timeout de conexión
   solo salta ahí dentro), `Retry-After` en segundos, y la cancelación sale como cancelación (R1).
 - `app/…/ui/MainActivity.kt` — «Graph — cerebro remoto» en el selector de modelo; campos
@@ -219,6 +226,31 @@ mCurrentFocus=Window{55a6616 u0 com.android.settings/com.android.settings.MiuiSe
 
 Con hilo nuevo, la corrida 2 abrió Ajustes en 2 turnos y 10 s (antes: 5 turnos, 39 s y la calculadora
 otra vez). El hilo se sigue usando dentro de cada corrida (`session=continúa` en el turno 2).
+
+**Corrida R2 (2026-09-14, mismo teléfono, APK release 0.42 con la ronda R2: apps una vez por corrida
+en `Dispatchers.IO`, campo de key sin precarga, conexión liberada en toda salida).** Mismo guion: dos
+prompts seguidos, `am start` entre uno y otro.
+
+```
+22:33:42.353 [run] ▶ "abre la calculadora"
+22:33:48.645 [graph] turno 1 · session=nuevo · HTTP 200 · 4840ms · 1 acciones
+22:33:48.646 [run] turno 1 · 6292ms · 📝 texto · "com.miui.home · Launcher del sistema" · decide: MCP launch_app {app=Calculadora}
+22:33:50.122 [api] launch_app → com.miui.calculator
+22:33:53.678 [graph] turno 2 · session=continúa · HTTP 200 · 3051ms · 0 acciones
+22:33:53.681 [run] ■ 2 turnos · 1 acciones · 11s · ¡Calculadora abierta! 🧮
+
+22:34:44.770 [run] ▶ "abre los ajustes"
+22:34:48.366 [graph] turno 1 · session=nuevo · HTTP 200 · 3108ms · 1 acciones
+22:34:48.367 [run] turno 1 · 3597ms · 📝 texto · "com.miui.calculator" · decide: MCP open_settings {section=general}
+22:34:48.393 [api] Intent android.settings.SETTINGS → lanzado
+22:34:51.716 [graph] turno 2 · session=continúa · HTTP 200 · 2818ms · 0 acciones
+22:34:51.723 [run] ■ 2 turnos · 1 acciones · 6s · Listo, ajustes abiertos.
+mCurrentFocus=Window{55a6616 u0 com.android.settings/com.android.settings.MiuiSettings}
+```
+
+Graph resolvió `launch_app {app=Calculadora}` con las apps consultadas una sola vez en la corrida, y
+cada objetivo abrió hilo nuevo. No medido: el `-1` real de `HttpURLConnection` en Android (la lectura
+se agota a los 5 min; no hay forma barata de provocarlo sin un build de prueba).
 
 Efecto colateral visto, fuera de esta spec: el destilador de memoria y la anticipación siguen
 llamando a Gemini y hoy devuelven `HTTP 429` (créditos agotados). No afectan al turno de Graph;

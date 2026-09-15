@@ -44,11 +44,13 @@ Se activa **una vez por clon**:
 git config core.hooksPath .githooks
 ```
 
-Antes de cada push comprueba, en este orden: que la rama no sea `main`; que compile
+Antes de cada push comprueba, en este orden: que no se empuje a `main`; que compile
 (`:app:compileReleaseKotlin`, lo que se distribuye); que el contrato esté intacto
 (`scripts/contrato.sh`); y que una rama que cambia código traiga su propia promesa
-(`core/src/commonTest/**`). Se prueba sin empujar con `bash .githooks/pre-push`. Si el portero
-se equivoca, la conversación es sobre la promesa, no sobre `--no-verify`.
+(`core/src/commonTest/**`, contra `origin/main`). Si el portero se equivoca, la conversación es
+sobre la promesa, no sobre `--no-verify`.
+
+Juzga **lo que se empuja, no el árbol de trabajo**: cada sha que git le pasa por stdin se compila y se juzga en un worktree temporal; se prueba sin empujar con `printf 'refs/heads/<rama> %s refs/heads/<rama> 0000000000000000000000000000000000000000\n' "$(git rev-parse HEAD)" | bash .githooks/pre-push` (sin stdin juzga HEAD y el árbol, y lo avisa).
 
 ## La compuerta de cuatro niveles
 

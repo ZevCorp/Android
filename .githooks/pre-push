@@ -4,8 +4,17 @@
 # explican el porqué. Se activa con UNA línea:
 #     git config core.hooksPath .githooks
 #
-# Tarda ~1-2 min con el daemon de Gradle caliente. Si algún día tarda más, se recorta el hook,
-# no la paciencia: un portero que cansa es un portero que alguien acaba saltándose con --no-verify.
+# Juzga LO QUE SE EMPUJA, no el árbol de trabajo. Git le pasa por stdin una línea por ref:
+#     <local_ref> <local_sha> <remote_ref> <remote_sha>
+# y cada local_sha se compila y se juzga en un worktree desacoplado temporal sobre ese sha: un
+# cambio sin commitear no puede dar verde a un commit que no lo trae. Se prueba sin empujar:
+#     printf 'refs/heads/<rama> %s refs/heads/<rama> 0000000000000000000000000000000000000000\n' \
+#         "$(git rev-parse HEAD)" | bash .githooks/pre-push
+# Sin stdin (corrido a mano, sin la tubería) juzga HEAD y el árbol de trabajo, y lo avisa.
+#
+# Tarda ~1-2 min con el daemon de Gradle caliente: el worktree compila en limpio. Si algún día tarda
+# más, se recorta el hook, no la paciencia: un portero que cansa es un portero que alguien acaba
+# saltándose con --no-verify.
 
 set -u
 
@@ -25,73 +34,161 @@ if [ -z "${ANDROID_HOME:-}" ]; then
   export ANDROID_HOME
 fi
 
-rama="$(git rev-parse --abbrev-ref HEAD)"
 fallos=0
-log="${TMPDIR:-/tmp}/android-portero-build.log"
 
-echo
-echo "  ── el portero ──────────────────────────────────"
-echo
+# Todo lo temporal vive en un solo directorio, y se borra al salir pase lo que pase: verde, rojo,
+# Ctrl-C o un gradle que revienta. Un worktree olvidado deja el sha «ocupado» para el siguiente push.
+tmp="$(mktemp -d "${TMPDIR:-/tmp}/android-portero.XXXXXX")" || { rojo "  ✘  no se pudo crear el directorio temporal"; exit 1; }
+limpiar() {
+  local arbol
+  for arbol in "$tmp"/arbol-*; do
+    [ -d "$arbol" ] && git -C "$raiz" worktree remove --force "$arbol" > /dev/null 2>&1
+  done
+  rm -rf "$tmp"
+  git -C "$raiz" worktree prune > /dev/null 2>&1
+}
+trap limpiar EXIT
+trap 'exit 130' INT TERM HUP
 
-# ── 0. a main no se empuja directo ───────────────────────────────────────────────────────────
-if [ "$rama" = "main" ]; then
+# Git exporta GIT_DIR y compañía a los hooks; dentro del worktree temporal apuntarían al repo de afuera.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
+
+a_main() {
   rojo "  ✘  a main no se empuja directo"
   echo "     Haz tu rama, empújala, y abre el PR:"
   echo "         git switch -c <persona>/<que-hace>"
   echo
   exit 1
-fi
+}
 
-# ── 1. compila ───────────────────────────────────────────────────────────────────────────────
-# Se juzga lo que se distribuye: el build type release, no el debug.
-gris "  … compilando (release)"
-if ./gradlew :app:compileReleaseKotlin -q > "$log" 2>&1; then
-  verde "  ✔  compila"
-else
-  rojo  "  ✘  NO compila"
-  grep -E "^e: |error:" "$log" | head -5 | sed 's/^/     /'
-  fallos=$((fallos+1))
-fi
-
-# ── 2. el contrato ───────────────────────────────────────────────────────────────────────────
-# No son «tests» genéricos: son las promesas que el sistema dice cumplir. Rojo aquí significa que
-# algo que prometíamos dejó de ser cierto, y eso no entra en main aunque compile.
-if [ -f scripts/contrato.sh ]; then
-  gris "  … el contrato"
-  salida="$(bash scripts/contrato.sh 2>&1)"
-  if printf '%s' "$salida" | grep -q "CONTRATO INTACTO"; then
-    verde "  ✔  contrato intacto"
+# ── 1 y 2. compila y el contrato, en <dir> ───────────────────────────────────────────────────
+construir() {
+  local dir="$1" log="$2" salida codigo
+  # Se juzga lo que se distribuye: el build type release, no el debug.
+  gris "  … compilando (release)"
+  if [ ! -x "$dir/gradlew" ]; then
+    rojo  "  ✘  NO compila: el commit no trae ./gradlew"
+    fallos=$((fallos+1))
+  elif (cd "$dir" && ./gradlew :app:compileReleaseKotlin -q) > "$log" 2>&1; then
+    verde "  ✔  compila"
   else
-    rojo  "  ✘  CONTRATO ROTO"
-    printf '%s' "$salida" | grep -E "✘|⧗|ROTO|incumplid" | head -5 | sed 's/^/     /'
+    rojo  "  ✘  NO compila"
+    if grep -qE "^e: |error:" "$log"; then
+      grep -E "^e: |error:" "$log" | head -5 | sed 's/^/     /'
+    else
+      tail -5 "$log" | sed 's/^/     /'
+    fi
     fallos=$((fallos+1))
   fi
-else
-  gris "  ·  contrato: no está scripts/contrato.sh, se salta"
-fi
+
+  # No son «tests» genéricos: son las promesas que el sistema dice cumplir. Rojo aquí significa que
+  # algo que prometíamos dejó de ser cierto, y eso no entra en main aunque compile. Sin juez no hay
+  # veredicto: un commit sin scripts/contrato.sh no se salta, se rechaza.
+  if [ -f "$dir/scripts/contrato.sh" ]; then
+    gris "  … el contrato"
+    salida="$(cd "$dir" && bash scripts/contrato.sh 2>&1)"
+    codigo=$?
+    if [ "$codigo" -eq 0 ] && printf '%s' "$salida" | grep -q "CONTRATO INTACTO"; then
+      verde "  ✔  $(printf '%s' "$salida" | grep -o 'CONTRATO INTACTO: [0-9]* promesas' | tail -1 | tr 'A-Z' 'a-z')"
+    else
+      rojo  "  ✘  CONTRATO ROTO"
+      printf '%s' "$salida" | grep -E "✘|⧗|ROTO|incumplid|NO SE PUDO" | head -5 | sed 's/^/     /'
+      fallos=$((fallos+1))
+    fi
+  else
+    rojo  "  ✘  el commit no trae scripts/contrato.sh: sin juez no hay veredicto"
+    fallos=$((fallos+1))
+  fi
+}
 
 # ── 3. la funcionalidad trae su propio test ──────────────────────────────────────────────────
 # Es la promesa que hace crecer la carpeta de contrato SOLA, en vez de por disciplina.
 # Se exime lo que por definición no añade comportamiento: chore/, docs/, refactor/ y hotfix/.
-case "$rama" in
-  chore/*|docs/*|refactor/*|hotfix/*)
-    gris "  ·  test propio: no se exige en «${rama%%/*}/»"
-    ;;
-  *)
-    base="$(git merge-base HEAD origin/main 2>/dev/null || echo main)"
-    tocado_codigo="$(git diff --name-only "$base"...HEAD -- 'core/src/commonMain/**/*.kt' 'app/src/main/**/*.kt' | wc -l)"
-    tocado_test="$(git diff --name-only "$base"...HEAD -- 'core/src/commonTest/**' 'app/src/test/**' | wc -l)"
-    if [ "$tocado_codigo" -gt 0 ] && [ "$tocado_test" -eq 0 ]; then
-      rojo "  ✘  esta rama cambia código y no añade ninguna promesa"
-      echo "     $tocado_codigo archivo(s) de código, 0 de contrato."
-      echo "     Añade lo que esta funcionalidad promete en core/src/commonTest/kotlin/graph/core/contrato/"
-      echo "     —o renómbrala a chore/ o refactor/ si de verdad no cambia comportamiento."
-      fallos=$((fallos+1))
-    else
-      verde "  ✔  trae su propio test"
+trae_test() {
+  local rev="$1" rama="$2" base codigo_tocado test_tocado
+  case "$rama" in
+    chore/*|docs/*|refactor/*|hotfix/*)
+      gris "  ·  test propio: no se exige en «${rama%%/*}/»"
+      return
+      ;;
+  esac
+  if git rev-parse -q --verify origin/main > /dev/null; then base="origin/main"
+  elif git rev-parse -q --verify main > /dev/null; then base="main"
+  else
+    rojo "  ✘  NO HAY origin/main NI main: no hay contra qué saber si esta rama trae su propio test"
+    echo "     Trae la base y vuelve a empujar:  git fetch origin main"
+    fallos=$((fallos+1))
+    return
+  fi
+  if ! codigo_tocado="$(git diff --name-only "$base...$rev" -- 'core/src/commonMain/**/*.kt' 'app/src/main/**/*.kt' 2>&1)" \
+     || ! test_tocado="$(git diff --name-only "$base...$rev" -- 'core/src/commonTest/**' 'app/src/test/**' 2>&1)"; then
+    rojo "  ✘  no se pudo comparar $base...${rev:0:9}: no se sabe si trae su propio test"
+    printf '%s\n' "$codigo_tocado" | head -2 | sed 's/^/     /'
+    fallos=$((fallos+1))
+    return
+  fi
+  codigo_tocado="$(printf '%s' "$codigo_tocado" | grep -c .)"
+  test_tocado="$(printf '%s' "$test_tocado" | grep -c .)"
+  if [ "$codigo_tocado" -gt 0 ] && [ "$test_tocado" -eq 0 ]; then
+    rojo "  ✘  esta rama cambia código y no añade ninguna promesa"
+    echo "     $codigo_tocado archivo(s) de código, 0 de contrato (contra $base)."
+    echo "     Añade lo que esta funcionalidad promete en core/src/commonTest/kotlin/graph/core/contrato/"
+    echo "     —o renómbrala a chore/ o refactor/ si de verdad no cambia comportamiento."
+    fallos=$((fallos+1))
+  else
+    verde "  ✔  trae su propio test"
+  fi
+}
+
+refs=""
+[ -t 0 ] || refs="$(cat)"
+
+echo
+echo "  ── el portero ──────────────────────────────────"
+echo
+
+if [ -z "$refs" ]; then
+  # ── corrido a mano: no hay refs, se juzga HEAD con el árbol de trabajo tal como está ─────────
+  gris "  ·  sin refs por stdin (corrido a mano): se juzga HEAD y el árbol de trabajo, no lo que se empujaría"
+  rama="$(git rev-parse --abbrev-ref HEAD)"
+  [ "$rama" = "main" ] && a_main
+  construir "$raiz" "$tmp/build.log"
+  trae_test HEAD "$rama"
+else
+  # ── 0. a main no se empuja directo: antes de compilar nada ───────────────────────────────────
+  while read -r _ _ remote_ref _; do
+    [ "$remote_ref" = "refs/heads/main" ] && a_main
+  done <<< "$refs"
+
+  juzgados=" "
+  while read -r local_ref local_sha remote_ref _; do
+    [ -n "${local_sha:-}" ] || continue
+    rama="${remote_ref#refs/heads/}"
+    echo "  $rama ← ${local_sha:0:9}"
+    if [[ "$local_sha" =~ ^0+$ ]]; then
+      gris "  ·  borrado de la rama remota: no hay nada que compilar"
+      echo
+      continue
     fi
-    ;;
-esac
+    # Un mismo sha empujado a dos refs se compila una vez; el test propio depende de la rama.
+    case "$juzgados" in
+      *" $local_sha "*) gris "  ·  compila y contrato: ya juzgado arriba" ;;
+      *)
+        arbol="$tmp/arbol-${local_sha:0:12}"
+        if git worktree add --detach --quiet "$arbol" "$local_sha" > "$tmp/worktree.log" 2>&1; then
+          construir "$arbol" "$tmp/build-${local_sha:0:12}.log"
+        else
+          rojo "  ✘  no se pudo abrir ${local_sha:0:9} en un worktree temporal: no hay veredicto"
+          head -3 "$tmp/worktree.log" | sed 's/^/     /'
+          fallos=$((fallos+1))
+        fi
+        juzgados="$juzgados$local_sha "
+        ;;
+    esac
+    trae_test "$local_sha" "$rama"
+    echo
+  done <<< "$refs"
+fi
 
 echo
 if [ "$fallos" -gt 0 ]; then
