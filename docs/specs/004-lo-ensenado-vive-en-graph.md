@@ -126,7 +126,7 @@ recortado a 100 ms, como la llamada colgada de la 403.
 
 Las 413-416 viven en `Contrato004RespuestasDeGraph.kt` y reusan los dos mapas: el transporte guionado de la 401 y, para la
 lección de la 413, el transporte por rutas, la crónica y el almacén en memoria de la 407. La 413 corre entera en un hilo
-de 512 KB de pila (`correConPilaChica`, en `Corre.kt`): sin guarda, lo que desborda desborda siempre, y el
+de 512 KB de pila (`enPilaChica { corre { … } }`, en `Corre.kt`: el mismo hilo de la 203 y el mismo tope de 30 s de `corre`): sin guarda, lo que desborda desborda siempre, y el
 `StackOverflowError` sale como un AssertionError que lo dice en vez de llevarse el runner.
 
 Las 421-422 viven con ellas y suman `GraphDeVerdad`: un Graph con la memoria y las reglas de `e9d0d44` —la sesión en `recording`,

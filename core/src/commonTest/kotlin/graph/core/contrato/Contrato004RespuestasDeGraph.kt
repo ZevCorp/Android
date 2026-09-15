@@ -113,7 +113,7 @@ class Contrato004RespuestasDeGraph {
     /* ---------- Las promesas ---------- */
 
     @Test
-    fun promesa413() = correConPilaChica {
+    fun promesa413() = enPilaChica { corre {
         val p = promesa(413)
         val hondo = anidado(HONDO)
 
@@ -224,7 +224,7 @@ class Contrato004RespuestasDeGraph {
                 assertTrue(almacen.archivos.values.none { "[[[" in it }, "$p · el disco guardó una respuesta de Graph")
             }
         }
-    }
+    } }.getOrThrow()
 
     @Test
     fun promesa414() = corre {

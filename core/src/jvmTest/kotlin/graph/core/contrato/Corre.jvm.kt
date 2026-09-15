@@ -17,19 +17,24 @@ actual fun corre(block: suspend () -> Unit) = runBlocking {
         ?: fail("la prueba no terminó en ${TOPE_DE_UNA_PRUEBA_MS / 1000} s: algo quedó colgado")
 }
 
-/** 512 KB: sobra para lo que el contrato hace de verdad, y 2000 niveles pasados a texto la agotan con seguridad. */
+/**
+ * 512 KB: sobra para lo que el contrato hace de verdad, y el `toString` de un JSON desborda desde ~1000 niveles con 1 MB
+ * de pila, así que con la mitad los 1000 de la 203 y los 2000 de la 413 la agotan con seguridad.
+ */
 private const val PILA_CHICA_BYTES = 512L * 1024
 
-actual fun correConPilaChica(block: suspend () -> Unit) {
-    var fallo: Throwable? = null
-    val hilo = Thread(null, { try { runBlocking { block() } } catch (e: Throwable) { fallo = e } }, "pila-chica", PILA_CHICA_BYTES)
+actual fun <T> enPilaChica(bloque: () -> T): Result<T> {
+    var resultado: Result<T> = Result.failure(IllegalStateException("el hilo de pila chica no llegó a correr"))
+    val hilo = Thread(null, { resultado = runCatching(bloque) }, "pila-chica", PILA_CHICA_BYTES)
     hilo.start()
     hilo.join()
-    when (val e = fallo) {
-        null -> Unit
-        is StackOverflowError -> throw AssertionError(
-            "reventó con StackOverflowError en una pila de ${PILA_CHICA_BYTES / 1024} KB: " + e.stackTrace.take(4).joinToString(" ← "),
+    return when (val e = resultado.exceptionOrNull()) {
+        is StackOverflowError -> Result.failure(
+            AssertionError(
+                "reventó con StackOverflowError en una pila de ${PILA_CHICA_BYTES / 1024} KB: " + e.stackTrace.take(4).joinToString(" ← "),
+                e,
+            ),
         )
-        else -> throw e
+        else -> resultado
     }
 }
