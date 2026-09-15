@@ -303,6 +303,12 @@ class Contrato005SoloSalenMedidas {
         assertTrue("«send_sms»" in tope && "«#0f1e2d3c»" in tope, promesa(p) + " · tope: $tope")
         val consciente = puerta.mensaje("step consciente falló (IllegalStateException)")
         assertTrue(consciente.endsWith("(IllegalStateException)") && "consciente" in consciente, promesa(p) + " · workflow: $consciente")
+        val transitorio = puerta.mensaje("step consciente falló (SocketTimeoutException)")
+        assertTrue(transitorio.endsWith("(SocketTimeoutException)") && "consciente" in transitorio, promesa(p) + " · workflow: $transitorio")
+        val desconocida = puerta.mensaje("step consciente falló (AnaMariaError)")
+        assertTrue(desconocida.endsWith("(‹${n("AnaMariaError")}›)") && "consciente" in desconocida, promesa(p) + " · workflow: $desconocida")
+        val ajena = puerta.mensaje("step consciente falló (JuanPerezException)")
+        assertTrue(ajena.endsWith("(‹${n("JuanPerezException")}›)") && "consciente" in ajena, promesa(p) + " · workflow: $ajena")
         val etiquetaSellada = puerta.mensaje("✋ tercera entrada a «#9e8d7c6b» · 3 turnos · 4 acciones · 9s · no sigo")
         assertTrue(etiquetaSellada.endsWith("«#9e8d7c6b» · 3 turnos · 4 acciones · 9s · no sigo"), promesa(p) + " · motor: $etiquetaSellada")
 

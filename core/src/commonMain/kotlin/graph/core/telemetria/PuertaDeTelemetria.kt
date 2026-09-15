@@ -146,7 +146,16 @@ object PuertaDeTelemetria {
     private val NUMERO = Regex("-?\\d+(?:[.,]\\d+)?(?:/\\d+)?(?:ms|s|KB|MB|%)?")
     /** Las unidades pegadas que escriben los logs de verdad. `B` y `h` no: `301B` es un portal y `1234h` un pin (510). */
     private val CON_UNIDAD = Regex("-?\\d+(?:[.,]\\d+)?(?:ms|s|KB|MB|%)")
-    private val EXCEPCION = Regex("[A-Z][A-Za-z0-9]*(?:Exception|Error)")
+    /** Las clases de excepción que la app y el core realmente loguean (`::class.simpleName`, `javaClass.simpleName`, los
+     *  `catch` de verdad) más las estándar que pueden llegar desde OkHttp, kotlinx y coroutines. Fuera de esta lista, un
+     *  nombre con forma de excepción no es una clase conocida: cae y sale como su largo, no como texto libre. */
+    private val EXCEPCIONES = setOf(
+        "IOException", "SocketTimeoutException", "UnknownHostException", "ConnectException", "SSLException", "SSLHandshakeException",
+        "EOFException", "InterruptedIOException", "IllegalStateException", "IllegalArgumentException", "CancellationException",
+        "TimeoutCancellationException", "SerializationException", "JsonDecodingException", "NumberFormatException",
+        "NullPointerException", "StackOverflowError", "OutOfMemoryError", "SecurityException",
+    )
+    private val EXCEPCION = Regex(EXCEPCIONES.joinToString("|"))
     private val VERSION = Regex("\\d{1,4}(?:\\.\\d{1,4}){0,3}(?:-(?:debug|release|beta\\d*|rc\\d*|alpha\\d*))?")
     private val TAG_DE_VOZ = Regex("voz-[a-z]{1,16}")
     private const val FIN_DE_PALABRA = "(?![\\p{L}\\p{N}_])"
