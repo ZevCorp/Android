@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **spec escrita, fase A1 en curso** (2026-09-14) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fase A1 implementada** (2026-09-14; promesas 201-217 verdes; A2 y B pendientes) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
