@@ -1,9 +1,13 @@
 package graph.core.graph.learning
 
+import kotlinx.serialization.EncodeDefault
 import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.KSerializer
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.builtins.MapSerializer
+import kotlinx.serialization.builtins.serializer
 import kotlinx.serialization.descriptors.PrimitiveKind
 import kotlinx.serialization.descriptors.PrimitiveSerialDescriptor
 import kotlinx.serialization.descriptors.SerialDescriptor
@@ -28,7 +32,12 @@ import kotlinx.serialization.json.JsonPrimitive
  *  - un texto vacío de Graph es AUSENTE. Graph serializa lo que no hay como `""`, y en C# `??` no cae
  *    con `""`. Aquí esos campos se leen con [VacioEsAusente] y llegan `null`: `?:` sí cae;
  *  - los campos del request que tienen que viajar siempre NO tienen valor por defecto (con
- *    `encodeDefaults = false` un campo igual a su default se omite); los opcionales son `null` y no viajan.
+ *    `encodeDefaults = false` un campo igual a su default se omite); los opcionales son `null` y no viajan. Si
+ *    además se leen de Graph y Windows les pone `""` por defecto ([FieldOption]), llevan el default y
+ *    `@EncodeDefault`: viajan siempre y un `null` o una clave que falta no tiran la respuesta (414).
+ *
+ * Y dos de lectura (413, 416): toda respuesta pasa por [demasiadoAnidado] antes de parsearse, y una lista o un plan
+ * sin su clave (`workflows`, `steps`) es un fallo, no una lista vacía.
  */
 
 /** El Json de aprendizaje: no manda nulos ni defaults, un campo nuevo de Graph no rompe y un `null` donde no cabe toma el default. */
@@ -67,6 +76,48 @@ object VacioEsAusente : KSerializer<String?> {
     override fun serialize(encoder: Encoder, value: String?) =
         if (value == null) encoder.encodeNull() else encoder.encodeString(value)
 }
+
+/**
+ * Los `variables` de un plan: texto → texto. Windows los declara `Dictionary<string,string>` y un `null` le cabe; aquí
+ * un `null`, un objeto o una lista se leen como `""` y un número como su texto, en vez de tirar el plan entero (414).
+ */
+object VariablesDeGraph : KSerializer<Map<String, String>> {
+    private val mapa = MapSerializer(String.serializer(), String.serializer())
+    override val descriptor: SerialDescriptor = mapa.descriptor
+
+    override fun deserialize(decoder: Decoder): Map<String, String> {
+        val json = decoder as? JsonDecoder ?: return mapa.deserialize(decoder)
+        val o = json.decodeJsonElement() as? JsonObject ?: return emptyMap()
+        return o.mapValues { (_, v) -> (v as? JsonPrimitive)?.takeUnless { it is JsonNull }?.content.orEmpty() }
+    }
+
+    override fun serialize(encoder: Encoder, value: Map<String, String>) = mapa.serialize(encoder, value)
+}
+
+/**
+ * Una lista de Graph donde un `null` es un hueco: se descarta y no tira la respuesta entera (414; `process-video` ya
+ * cobró Gemini). Sin lista —`null` o algo que no es lista—, ausente.
+ */
+abstract class ListaSinNulos<T : Any>(private val elemento: KSerializer<T>) : KSerializer<List<T>?> {
+    private val lista = ListSerializer(elemento)
+
+    @OptIn(ExperimentalSerializationApi::class)
+    override val descriptor: SerialDescriptor = lista.descriptor.nullable
+
+    override fun deserialize(decoder: Decoder): List<T>? {
+        val json = decoder as JsonDecoder
+        val a = json.decodeJsonElement() as? JsonArray ?: return null
+        return a.filterNot { it is JsonNull }.map { json.json.decodeFromJsonElement(elemento, it) }
+    }
+
+    @OptIn(ExperimentalSerializationApi::class)
+    override fun serialize(encoder: Encoder, value: List<T>?) =
+        if (value == null) encoder.encodeNull() else encoder.encodeSerializableValue(lista, value)
+}
+
+object TextosSinNulos : ListaSinNulos<String>(String.serializer())
+
+object NotasSinNulos : ListaSinNulos<TeachNote>(TeachNote.serializer())
 
 /** Un JSON crudo de Graph (la interpretación, el workflow, las pistas): `null` y `""` llegan como `null`. */
 object JsonVacioEsAusente : KSerializer<JsonElement?> {
@@ -143,10 +194,16 @@ class StepRequest(
     val surfaceHints: JsonObject? = null,
 )
 
+/**
+ * Una opción de un campo. `value` y `label` como en Windows (`Contracts.cs:94-95`): `""` por defecto, así que una opción
+ * sin ellos o con `null` se lee y no tira el plan (414); `""` es ausente, como en el resto del protocolo. Al grabar
+ * viajan siempre, también vacíos (`@EncodeDefault`), que es como los manda Windows.
+ */
+@OptIn(ExperimentalSerializationApi::class)
 @Serializable
 class FieldOption(
-    val value: String,
-    val label: String,
+    @EncodeDefault val value: String = "",
+    @EncodeDefault val label: String = "",
     /** `Step.js` normaliza value · label · text. */
     val text: String? = null,
 )
@@ -213,10 +270,10 @@ class FinishResponse(
 
 /* ────────────────────────── Ejecución (workflows) ────────────────────────── */
 
-/** `GET /api/v1/workflows`. Cada workflow llega crudo; lo lee [WorkflowResumen.desdeJson]. */
+/** `GET /api/v1/workflows`. Cada workflow llega crudo; lo lee [WorkflowResumen.desdeJson]. Sin la clave (o `null`), `null`: es un fallo (416). */
 @Serializable
 class WorkflowListResponse(
-    val workflows: List<JsonElement> = emptyList(),
+    val workflows: List<JsonElement>? = null,
     @Serializable(with = VacioEsAusente::class) val error: String? = null,
 )
 
@@ -246,10 +303,16 @@ class ExecutionPlan(
     @Serializable(with = VacioEsAusente::class) val sourceTitle: String? = null,
     /** Guía en texto que Graph construye para el runtime. Informativa. */
     @Serializable(with = VacioEsAusente::class) val executionGuide: String? = null,
-    val variables: Map<String, String> = emptyMap(),
+    @Serializable(with = VariablesDeGraph::class) val variables: Map<String, String> = emptyMap(),
+    /** Los pasos tal como llegan: `null` si Graph no mandó la clave `steps` (ver [trajoPasos]). */
+    @SerialName("steps") private val pasos: List<PlanStep>? = null,
+) {
     /** Solo los pasos ejecutables: Graph ya filtró los que no lo son. */
-    val steps: List<PlanStep> = emptyList(),
-)
+    val steps: List<PlanStep> get() = pasos.orEmpty()
+
+    /** Si Graph mandó la clave `steps`, aunque vacía. Sin ella no es un plan de 0 pasos: es una respuesta rota (416). */
+    val trajoPasos: Boolean get() = pasos != null
+}
 
 /** Espejo de `src/domain/entities/Step.js` (vía `Contracts.cs`). */
 @Serializable
@@ -349,8 +412,9 @@ class ProcessResult(
      * una pieza pura aparte; parsearla aquí sería un segundo lector del mismo hecho.
      */
     @Serializable(with = JsonVacioEsAusente::class) val interpretation: JsonElement? = null,
-    val notes: List<TeachNote>? = null,
-    val questions: List<String>? = null,
+    /** Un `null` dentro de la lista se descarta ([ListaSinNulos]). */
+    @Serializable(with = NotasSinNulos::class) val notes: List<TeachNote>? = null,
+    @Serializable(with = TextosSinNulos::class) val questions: List<String>? = null,
 )
 
 /** `POST /api/v1/teach/interpret-steps`: la demo sin video, solo pasos y narración. */
@@ -389,11 +453,16 @@ class WorkflowResumen(
         fun desdeJson(e: JsonElement): WorkflowResumen {
             val o = e as? JsonObject ?: JsonObject(emptyMap())
             fun texto(vararg claves: String) = claves.firstNotNullOfOrNull { o[it].textoNoVacio() }
+            // Graph manda el id como texto; si llega como número, es su texto y no un id en blanco (415).
+            fun id(vararg claves: String) = claves.firstNotNullOfOrNull { clave ->
+                (o[clave] as? JsonPrimitive)?.takeUnless { it is JsonNull }?.takeIf { it.isString || it.content.toDoubleOrNull() != null }
+                    ?.content.vacioEsAusente()
+            }
             fun entero(vararg claves: String) = claves.firstNotNullOfOrNull {
                 (o[it] as? JsonPrimitive)?.takeUnless { p -> p.isString || p is JsonNull }?.content?.toIntOrNull()
             }
             return WorkflowResumen(
-                id = texto("id", "workflowId", "workflow_id").orEmpty(),
+                id = id("id", "workflowId", "workflow_id").orEmpty(),
                 description = texto("description", "title", "name"),
                 sourceOrigin = texto("sourceOrigin", "source_origin"),
                 sourceTitle = texto("sourceTitle", "source_title"),

@@ -2,7 +2,8 @@
 
 Estado: **fase 4A1 implementada** (2026-09-14; promesas 401-406 verdes; cada una se vio ROJA con un
 sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · **fase 4A2 implementada** (promesas
-407-412 verdes; cada una se vio ROJA con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
+407-412 verdes; cada una se vio ROJA con un sabotaje real, abajo) · **revisión de la 4A1 cerrada** (promesas 413-416
+verdes y casos nuevos en 404 y 406; cada arreglo se vio ROJO con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
 workflows en Graph · Rama: `yokh/aprendizaje-graph`
 
 Hoy el Android aprende solo: `ActiveLearning`, `GeminiLearning`, `GeminiWorkflow` y `WorkflowRepo`
@@ -46,7 +47,7 @@ entiende, un cierre que se reintenta después de haberse cobrado, un workflow qu
 
 Bloque 401+ (la 001 usa 1-99). Los números no se reciclan. El enunciado de cada promesa es
 **literal** el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato004EnsenadoEnGraph.kt`
-para 401-406 y `Contrato004LeccionEnGraph.kt` para 407-412, método `promesaNNN`); si cambia uno, cambia el
+para 401-406, `Contrato004LeccionEnGraph.kt` para 407-412 y `Contrato004RespuestasDeGraph.kt` para 413-416, método `promesaNNN`); si cambia uno, cambia el
 otro en el mismo commit.
 
 | # | Promesa | Fase |
@@ -83,15 +84,19 @@ esperas; un `TestTimeSource` que avanzan el guion y las esperas. Ninguna toca re
 | 401 | Las claves de cada request son exactamente las de `Contracts.cs`/`TeachSession.cs` (sesión en snake, paso en camel, `note{role,transcript,mode}`, cierre `{}`, plan `{variables, execution_intent}`, las cuatro de `/teach/*`); un `""` del request viaja; `alternativeTargets` viaja como lista y el resto de pistas como texto. Respuestas con `""` y `null` en `workflow_id`, `summary`, `error`, `url`, `label` → ausentes (y un `error:""` con HTTP 200 no termina nada); un campo que Graph agregue no rompe; el `PlanStep` expone superficie, `readiness` (número o texto), huella, `clickPos`, `alternativeTargets` y `nodePath`; la interpretación de `process-video` llega cruda e idéntica; `createdAt` `{low negativo, high}` da el mismo instante que el número llano |
 | 402 | Las nueve llamadas de aprendizaje y workflows con y sin email: `X-API-Key`, `X-Miracle-App: android_app`, `X-Miracle-Device-Id`, nunca `X-Miracle-Feature`; las cuatro de `/teach/*`, además, `X-Miracle-Feature: conscious_bridge`. Método y URL de cada una, con el id escapado en la ruta; la key no viaja ni en la URL ni en el cuerpo |
 | 403 | `mandarPaso` con `503, 0, 200` → 3 llamadas, esperas `[800, 1600]`; cada transitorio solo y primero se reintenta; `429` con `Retry-After` 4 → `[4000]`; `-1` → 1 llamada y el mensaje dice que no se reintentó. `terminar` con `504×3` → 3 llamadas, esperas `[3000, 8000]` y `FinishPendiente` con el id de sesión; `504, 200` → 2; `-1` → 1 llamada, 0 esperas; `400` → 1. Una llamada colgada se corta en su tope y cuenta como lectura agotada (1 llamada). El tope que recibe el transporte: 90 s general, 5 min en `/teach/*`. Cancelar sale como `CancellationException`, tipo exacto |
-| 404 | Graph lista viejo → nuevo (con `createdAt` Neo4j) → el cliente devuelve nuevo → viejo; sin fecha, por id descendente. `nombre()` de «Workflow sin descripción», «User workflow summary:», `""` y «No description» no contiene el relleno y sí la app, «2 sep 13:42» (con desfase de -5 h) y «6 pasos»; una descripción de verdad se respeta tal cual |
+| 404 | Graph lista viejo → nuevo (con `createdAt` Neo4j) → el cliente devuelve nuevo → viejo; sin fecha, por id descendente. `nombre()` de «Workflow sin descripción», «User workflow summary:», `""` y «No description» no contiene el relleno y sí la app, «2 sep 13:42» (con desfase de -5 h) y «6 pasos»; una descripción de verdad se respeta tal cual; «user workflow summary - registrar» (minúsculas, sin dos puntos) también es relleno |
 | 405 | `borrar` con `404` → no lanza, 1 llamada `DELETE`; con `500` → `GraphException` tipo exacto. `prependAlignment` con `500 {"error":…}` o con un transporte que lanza → no lanza, devuelve `false` y una línea del log trae el id y la causa; con `200` → `true` y ninguna línea de fallo; cancelar sale tal cual |
-| 406 | `interpretSteps` con `503×4`, `-1`, transporte que lanza, cuerpo ilegible, `{}`, `interpretation:null` e `interpretation:""`, sin key y sin pasos → `null` sin excepción, y el log dice «el modelo no opinó» con la causa; con `interpretation` de verdad → el JSON crudo idéntico; cancelar sale tal cual |
+| 406 | `interpretSteps` con `503×4`, `-1`, transporte que lanza, cuerpo ilegible, `{}`, `interpretation:null` e `interpretation:""`, sin key y sin pasos → `null` sin excepción, y el log dice «el modelo no opinó» con la causa; una `interpretation` de 2000 niveles y un transporte que lanza un `Error` (no una `Exception`) → `null` y «no opinó», sin volcarla en el log; con `interpretation` de verdad → el JSON crudo idéntico; cancelar sale tal cual |
 | 407 | Seis pasos y Graph rechaza el tercero (`400 actionType inválido`): los seis `POST …/steps` salen en el orden observado y nunca dos en vuelo a la vez (cada llamada cede el hilo tres veces: dos lectores se cruzarían); 5 mandados y 1 fallido con su motivo, en el resultado y en la lección, y la sesión se cierra. Con 31 pasos, un solo aviso de 504, al llegar a 30 |
 | 408 | `crearSesion` con `401`, `-1`, `400 {error}`, `200` sin id y `503×4`, y sin key (cero llamadas) → `NoSePuede` con la causa en una línea. Después: `pasoObservado` devuelve `false`, la nota se ignora, `terminar` lanza `IllegalStateException` (tipo exacto) y `descartar` no hace nada; ni una llamada más que la de abrir, ni una escritura, ni video, y ningún lector vivo (la prueba falla a los 20 s si queda uno). Tras un no, un segundo `empezar` con Graph sano enseña |
 | 409 | En la crónica, `disco escribe lecciones/ses-1.json` va después del último paso y antes del primero de video, `context-notes` y `finish`; una sola escritura bajo `lecciones/`, que se lee entera (pasos, identidad, dónde empezó y terminó, nota) y sin motivo. Con un paso colgado que el tope de vaciado corta y sin dónde terminó: el colgado y el de detrás cuentan como no enviados, ninguno viaja después de `finish`, y el motivo dice «2 de 3» y «dónde terminó». Con el almacén cayéndose a mitad de `lecciones/`: nada bajo `lecciones/`, `leccion` nula, un aviso con la causa y la sesión cerrada |
 | 410 | Dos trozos de nota → una `context-notes` a esa sesión con los dos, antes de `finish`; sin nota ni resumen del video → cero `context-notes` y un `finish`; la nota con `500` → `finish` igual y un aviso con la causa; sin voz y con resumen del video → la nota lleva el resumen, antes de `finish` |
 | 411 | `finish` con `504×3` → 3 cierres, esperas `[3000, 8000]`, `PENDIENTE`, «pendiente de cerrar en Graph» y un archivo en `cierres-pendientes/` con sesión, workflow y cuándo. Al arrancar con Graph aún en 504 se queda; con Graph sano sale con un solo `finish` a esa sesión y se borra, y el arranque siguiente no llama a nadie. `finish` con `-1` → un cierre, `INCIERTO`, «pudo haberlo cerrado» y ningún pendiente. Un pendiente que al arrancar recibe `400` o `-1` se borra: no se reintenta para siempre |
 | 412 | El video que lanza o devuelve `null` → `finish` igual, `CERRADA`, `videoParaReprocesar` y una marca en `videos-por-reprocesar/` con la sesión, la lección y el motivo; con resumen, sin marca. Descartar con un paso en vuelo, dos en cola y una nota → solo existen el `POST …/sessions` y ese paso: ni pasos, ni nota, ni `finish`, ni video, ni escrituras, y `terminar` lanza `IllegalStateException`. Descartar antes de que el lector arranque → solo el `POST …/sessions` |
+| 413 | En un hilo de pila chica (512 KB), para que un `toString` a 2000 niveles reviente siempre y el runner siga: `{"interpretation":…}` con 63 niveles se lee y con 64 (65 con el cuerpo) es `GraphException` 200 que dice «64 niveles»; unos `[{` dentro de un texto o tras una comilla escapada no cuentan, y tras `"c:\\"` el texto cierra y sí cuentan. Una respuesta de 2000 niveles en las nueve llamadas que leen (sesión, paso, cierre, lista, workflow, plan, `upload-token`, `file-state`, `process-video`) → `GraphException` tipo exacto con «64 niveles», sin el JSON en el mensaje ni en el log; un 500 con el `error` a 2000 niveles → `GraphException` 500; `interpretSteps` → `null` y «no opinó … 64 niveles». La lección con el `LearningClient` real: el paso cuya respuesta viene anidada cuenta como no enviado con el porqué y el siguiente sale; el video que la trae queda para reprocesar con «64 niveles»; la lección llega a disco, la sesión se cierra y ni el log ni el disco guardan `[[[` |
+| 414 | `plan` con `variables {"pais":null,"edad":7}` → `""` y `"7"`; `variables:null` → ninguna; opciones `{"value":"co","text":…}`, `"label":null`, `"value":null` y `{"label":"Chile"}` → `""` donde falta. `processVideo` con `notes:[null,{…},null]` y `questions:["…",null]` → sin los `null`, con el resto y la interpretación intactos. Al grabar, `FieldOption("", "")` viaja con `value` y `label` vacíos |
+| 415 | `borrar("")`, `borrar("  ")`, `workflow("")` y `plan(" ")` con un transporte que respondería 404 → `IllegalArgumentException` tipo exacto que dice «id», «en blanco» y «graph», y cero llamadas. `{"id":17}` en la lista → `"17"`, y `borrar` va a `DELETE …/workflows/17` |
+| 416 | `listarWorkflows` con `{}` y `{"workflows":null}`; `plan` con `execution_plan` sin `steps`, `{}`, `steps:null` y sin `execution_plan` → `GraphException` 200 que nombra la clave que falta. `{"workflows":[]}` → lista vacía; `{"execution_plan":{"workflowId":"wf-1","steps":[]}}` → plan de 0 pasos |
 
 Las 407-412 viven en `Contrato004LeccionEnGraph.kt` y juzgan la lección con el `LearningClient` **real**
 encima de un transporte que responde por ruta y cuenta cuántas llamadas hay en vuelo, un `Almacen` en
@@ -99,6 +104,11 @@ memoria que se cae a pedido, y una crónica donde la red, el disco y el video an
 en que lo hacen: quién fue primero se juzga por posición, no por reloj. El reloj de pared de la lección es
 un número fijo y las esperas del cliente se anotan; el único tiempo real es el tope de vaciado de la 409,
 recortado a 100 ms, como la llamada colgada de la 403.
+
+Las 413-416 viven en `Contrato004RespuestasDeGraph.kt` y reusan los dos mapas: el transporte guionado de la 401 y, para la
+lección de la 413, el transporte por rutas, la crónica y el almacén en memoria de la 407. La 413 corre entera en un hilo
+de 512 KB de pila (`correConPilaChica`, en `Corre.kt`): sin guarda, lo que desborda desborda siempre, y el
+`StackOverflowError` sale como un AssertionError que lo dice en vez de llevarse el runner.
 
 ### Verificación (2026-09-14)
 
@@ -136,6 +146,28 @@ Después, un sabotaje por promesa sobre `Leccion.kt` sin commitear, revertido co
 
 `./gradlew :app:compileReleaseKotlin -q --rerun` → exit 0. `app/` no se toca en esta fase.
 
+### Verificación de la revisión de la 4A1 (2026-09-14)
+
+Las pruebas se escribieron primero, contra el código de `c55a5df`: `CONTRATO ROTO: 5 promesa(s) incumplida(s)`. La 406
+reventó con `java.lang.StackOverflowError` (la interpretación de 2000 niveles, pasada a texto en el log); la 413 dijo
+«65 niveles se leyeron · no lanzó»; la 414, `no se pudo leer en $.execution_plan.variables['pais']`; la 415, «borrar · no
+lanzó»; la 416, «lista sin workflows: se aceptó como vacío · no lanzó». La 404 siguió verde: su caso nuevo caza un
+sabotaje, no un defecto. La implementación lo dejó en `CONTRATO INTACTO: 31 promesas.` Después, un sabotaje por
+arreglo sobre el código sin commitear, revertido con copia y sha256:
+
+| # | Sabotaje | Lo que dijo el juez |
+|---|---|---|
+| 413 | sin guarda de profundidad (ni al leer ni al buscar el `error`) y los logs de `processVideo` e `interpretSteps` pasando la interpretación a texto | `65 niveles se leyeron · no lanzó`; solo la 413: el `StackOverflowError` del log lo atrapa `interpretSteps` y la 406 sigue verde |
+| 413 | sin guarda al leer, con los logs en bytes | rompe la 413 y la 406: la interpretación de 2000 niveles vuelve como si fuera buena |
+| 413 | con la guarda, el log de `interpretSteps` con `toString` | intacto: la guarda es lo que protege al log |
+| 414 | `FieldOption.value` sin default | `no se pudo leer en $.execution_plan.steps[0].allowedOptions[2].value` |
+| 415 | `borrar` sin chequear el id | `borrar · no lanzó` |
+| 416 | la lista sin `workflows` se toma por vacía | `lista sin workflows: se aceptó como vacío · no lanzó` |
+| 404 | `ignoreCase = false` en `esRelleno` | `«user workflow summary - registrar» pasó por nombre` |
+| 406 | `catch (e: Exception)` en `interpretSteps` | `java.lang.StackOverflowError: la pila se agotó en el transporte` |
+
+`./gradlew :app:compileReleaseKotlin -q --rerun` → exit 0. `app/` no se toca.
+
 ---
 
 ## Las fases
@@ -153,13 +185,14 @@ Todo en `core/src/commonMain/kotlin/graph/core/graph/`, sin dependencias nuevas:
   `TeachSession.cs`; `vacioEsAusente`; `WorkflowResumen` (espejo de `WorkflowSummary.FromJson`).
 - `learning/LearningClient.kt` — las trece llamadas, con topes, reintentos y errores.
 - `learning/NombreDeWorkflow.kt` — espejo de `NombreDeWorkflow.cs`.
+- `learning/Profundidad.kt` — la guarda de 64 niveles antes de parsear (de la revisión, abajo).
 
 Y `app/…/platform/GraphTransport.kt` implementa `send` con `HttpURLConnection` (GET, POST, PUT sin
 cuerpo binario, DELETE; tope de lectura por llamada).
 
 Pone verdes: **401-406**.
 
-### Fase 4A2 — la lección, el orquestador puro (esta corrida)
+### Fase 4A2 — la lección, el orquestador puro (hecha)
 
 En `core/src/commonMain/kotlin/graph/core/graph/learning/`, sin dependencias nuevas, sin Android, sin
 MediaProjection y sin red real:
@@ -185,6 +218,36 @@ Pone verdes: **407-412**.
 llegar —`PendingFinish.cs` dice que sí—, una demostración descartada deja en `GET /workflows` un workflow
 sin resumen con los pasos que alcanzaron a viajar. Borrarlo (`DELETE /workflows/{id}`) es borrar datos y
 cambia lo que el usuario ve en la lista: no se decidió aquí. Se mide en el Nivel 4 de 4C.
+
+### Revisión de la 4A1 — lo que Graph manda raro (esta corrida)
+
+Un revisor independiente aprobó `d13ab95` con cambios. Lo que encontró, y cómo quedó:
+
+- **JSON anidado de más (413).** kotlinx-serialization 1.7.1 lee miles de niveles, pero pasarlos a texto desborda la
+  pila desde ~1000 (`toString`) y compararlos desde ~5000 (`equals`), medido con 1 MB de pila. Es un
+  `StackOverflowError`: ningún `catch (e: Exception)` lo atrapa y en Android tumba el proceso. Bastaba un
+  `{"interpretation":[[[…]]]}` de ~2,4 KB en `interpret-steps`, cuyo log hacía `toString().length`. Ahora
+  `learning/Profundidad.kt` cuenta los niveles en una pasada lineal que respeta textos y escapes **antes de parsear**
+  cualquier respuesta, con el tope de System.Text.Json en U: 64 se leen y 65 son `GraphException`. Ningún `JsonElement`
+  que salga de `LearningClient` pasa de 64 niveles, y ningún log vuelca JSON de Graph: dice bytes. `interpretSteps`
+  atrapa además `Throwable`, salvo la cancelación.
+- **Campos raros (414).** `FieldOption.value` y `label` con `""` por defecto y `@EncodeDefault`: al grabar viajan siempre,
+  como en Windows. Los valores de `variables` toleran `null`, y un `null` dentro de `notes` o `questions` se descarta.
+- **Id en blanco (415).** `borrar`, `workflow` y `plan` lo rechazan antes de la red; un `id` numérico se lee como texto.
+- **Clave que falta (416).** Una lista sin `workflows` o un plan sin `steps` es un fallo; vacías, son válidas.
+- **Hueco del contrato (404).** Con `ignoreCase = false` seguía verde; ahora juzga un relleno en minúsculas y sin dos puntos.
+
+**`Leccion.kt` y la profundidad.** No escribe ni compara JSON que venga de Graph: a disco van textos y los `StepRequest`
+que arma la superficie (sus `surfaceHints` salen de `SurfaceHint.build`, dos niveles), y la interpretación del video
+pasa por `ResumenDeVideo` y `ResultadoDeLeccion` sin serializarse. El riesgo estaba en la entrada, no en la lección: con
+la guarda en `LearningClient`, un paso cuya respuesta viene anidada de más cuenta como no enviado con su motivo, y un
+video que la trae queda para reprocesar. Lo que 4C guarde de `processVideo` ya llega acotado; un `JsonElement` que no
+pase por `LearningClient` no lo cubre esta guarda.
+
+**La guarda se unifica al integrar las ramas.** La rama de voz (`yokh/voz-gpt-live`) tiene la misma cuenta en
+`core/…/voz/JsonCrudo.kt` (`demasiadoAnidado`, `PROFUNDIDAD_MAXIMA`; spec 002, promesa 203). La de aquí lleva los mismos
+nombres, la misma firma y el mismo tope a propósito: al integrar queda una sola, en un paquete común a las dos, y ambas
+specs apuntan a ella. Hasta entonces, un arreglo en una se copia en la otra.
 
 ### Lo que viene (specs y fases propias, sobre este cliente)
 
@@ -213,6 +276,11 @@ cambia lo que el usuario ve en la lista: no se decidió aquí. Se mide en el Niv
 | Nota de contexto | viaja el resumen del video, no lo hablado | una sola nota con lo hablado y el resumen del video, si hay | lo que el usuario explica de viva voz es el contexto más fiel |
 | Cierres pendientes | un solo `pending-finish.json` que se reescribe entero; al arrancar, todo lo no transitorio se descarta | un archivo por sesión con escritura atómica; `-1` no deja pendiente y al arrancar se descarta; `401`/`403` y sin key se conservan | reescribir una lista entera es perder todas por un corte; una key mal puesta se arregla, la sesión no murió por eso |
 | Descartar | `DiscardAsync` para el video y borra el mp4, sin llamar a Graph, y no tiene llamadores; `WorkflowRecorder` no tiene descarte | `descartar` corta el lector, suelta la cola y la nota; no llama a Graph ni escribe nada | el único «cerrar» que tiene Graph es `finish`, que post-procesa y persiste: cerrar sería publicar |
+| Lista sin `workflows` o plan sin `steps` | `= new()`: lista vacía o plan de 0 pasos | `GraphException` que nombra la clave; vacías sí valen | una respuesta rota no se presenta como «no tienes workflows» ni como un plan que no hace nada (416) |
+| `null` dentro de `notes` o `questions` | entra a la lista | se descarta | un hueco no le sirve a nadie, y tirar el resultado perdería un video que Gemini ya cobró (414) |
+| Un valor de `variables` que no es texto | `null` entra; un número o un objeto tiran el plan | `null`, objeto o lista → `""`; número → su texto | un plan no se pierde por un campo raro (414) |
+| Id de workflow en blanco | `DeleteWorkflowAsync` manda `DELETE /workflows/` | no llama a Graph: `IllegalArgumentException` con el porqué | `/workflows/` es la ruta de la lista, y aquí su 404 contaría como borrado (415) |
+| Id numérico en la lista | `WorkflowSummary.Str` solo lee textos: queda `""` | se lee como su texto | un id que no se lee es un workflow que no se puede borrar ni ejecutar (415) |
 
 ---
 
@@ -236,6 +304,18 @@ riesgo abierto.
 - Las sesiones de aprendizaje viven en memoria serverless: por eso el id va siempre en la ruta; si Graph pierde una sesión entre instancias, el paso responde con un error que este cliente muestra tal cual.
 - Una sesión que nunca recibe `finish` no deja un workflow visible. `PendingFinish.cs` dice que «los pasos ya están guardados» antes del cierre: si es así, una demostración descartada deja en `GET /workflows` un workflow sin resumen con los pasos que alcanzaron a viajar (ver la decisión abierta en 4A2).
 - Un `finish` repetido sobre una sesión que Graph ya cerró (el reintento al arrancar de un cierre que sí había salido) responde un error no transitorio y no cierra ni cobra dos veces.
+- Si un 502, 503 o 504 en `process-video`, `interpret-steps`, `upload-token` o `finish` llega después de que Gemini o el
+  LLM ya cobraron. Esos transitorios se reintentan: `/teach/*` hasta 3 veces y el cierre en 3 intentos, así que hoy
+  `process-video` puede llegar a 4 cobros por un solo video.
+- Qué responde `finish` reintentado sobre una sesión cerrada o perdida (¿404? ¿400?). Hoy, un transitorio seguido de un
+  404 da `GraphException` y no `FinishPendiente`: la lección lo cuenta como `FALLIDO` aunque el primer intento pudo
+  haberla cerrado.
+- `execution_intent.surface = "native"` es un valor válido desde Android.
+- `allowedOptions` trae `value` y `label` no nulos, y los valores de `variables` son texto. Desde la 414 el cliente tolera
+  lo contrario, pero Graph no lo promete.
+- El `id` de un workflow es siempre texto. Desde la 415 un número se lee como su texto.
+- Graph acota la profundidad o el tamaño de `interpretation` y `workflow`. Desde la 413 el cliente corta a 64 niveles;
+  el tamaño no lo acota nadie.
 
 ---
 
@@ -258,5 +338,5 @@ riesgo abierto.
 ## Riesgo
 
 El mayor es el mismo de la 001: que Graph cambie el contrato y este cliente no se entere. Por eso
-`ignoreUnknownKeys`, `""` = ausente, `null` tolerado, y la interpretación cruda: quien la entiende es
+`ignoreUnknownKeys`, `""` = ausente, `null` tolerado, un tope de 64 niveles y la interpretación cruda: quien la entiende es
 una pieza pura que no vive aquí.

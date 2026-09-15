@@ -47,6 +47,9 @@ class FinishPendiente(val sessionId: String, val workflowId: String, message: St
  *    lectura agotada nunca se reintenta (promesa 403);
  *  - errores: [GraphException] con el `error` de Graph y el status. Un `error` en un 2xx también termina la
  *    llamada, y un `""` no cuenta. Sin key no se llama a nadie. La cancelación sale tal cual;
+ *  - lectura: una respuesta anidada a más de [PROFUNDIDAD_MAXIMA] niveles no se parsea y es [GraphException] (413);
+ *    una lista o un plan sin su clave, también (416). Ningún log vuelca JSON de Graph: dice bytes o cuántos;
+ *  - un id de workflow en blanco no llama a nadie: [IllegalArgumentException] con el porqué (415);
  *  - el id de sesión o de workflow va SIEMPRE en la ruta, escapado: Graph guarda las sesiones en memoria de
  *    un serverless, y otra instancia no conoce una «sesión activa».
  */
@@ -139,31 +142,35 @@ class LearningClient(
      */
     suspend fun listarWorkflows(): List<WorkflowResumen> {
         val ruta = "/api/v1/workflows"
-        val lista = leer(WorkflowListResponse.serializer(), llamar("GET", ruta, null), ruta).workflows
+        val reply = llamar("GET", ruta, null)
+        val lista = leer(WorkflowListResponse.serializer(), reply, ruta).workflows
+            ?: throw GraphException("graph respondió sin la lista «workflows» en $ruta (HTTP ${reply.status})", reply.status)
         return lista.map { WorkflowResumen.desdeJson(it) }
             .sortedWith(compareByDescending<WorkflowResumen> { it.creadoEnMs ?: Long.MIN_VALUE }.thenByDescending { it.id })
     }
 
     /** Un workflow COMPLETO, con los pasos tal como se guardaron (el plan filtra y transforma). */
     suspend fun workflow(id: String): JsonElement {
-        val ruta = workflowRuta(id)
+        val ruta = workflowRuta(conId(id, "traer"))
         val cuerpo = leer(JsonElement.serializer(), llamar("GET", ruta, null), ruta)
         return (cuerpo as? JsonObject)?.get("workflow") ?: cuerpo
     }
 
     /** Borra un workflow. Si Graph dice 404, ya no existe: es lo que se pedía, cuenta como borrado. */
     suspend fun borrar(id: String) {
-        val reply = llamar("DELETE", workflowRuta(id), null, aceptados = setOf(404))
+        val reply = llamar("DELETE", workflowRuta(conId(id, "borrar")), null, aceptados = setOf(404))
         if (reply.status == 404) log.log(TAG, "borrar $id: ya no existía (HTTP 404), cuenta como borrado")
     }
 
-    /** El plan ejecutable; Graph ya filtró los pasos que no lo son. Sin plan, falla. */
+    /** El plan ejecutable; Graph ya filtró los pasos que no lo son. Sin plan, o con un plan sin la clave `steps`, falla. */
     suspend fun plan(id: String, variables: Map<String, String> = emptyMap()): ExecutionPlan {
-        val ruta = "${workflowRuta(id)}/plan"
+        val ruta = "${workflowRuta(conId(id, "planificar"))}/plan"
         val cuerpo = PlanRequest(variables = variables, executionIntent = mapOf("source" to FUENTE, "surface" to "native"))
         val reply = llamar("POST", ruta, LearningJson.encodeToString(PlanRequest.serializer(), cuerpo))
-        return leer(PlanResponse.serializer(), reply, ruta).executionPlan
+        val plan = leer(PlanResponse.serializer(), reply, ruta).executionPlan
             ?: throw GraphException("graph no devolvió un plan de ejecución en $ruta (HTTP ${reply.status})", reply.status)
+        if (!plan.trajoPasos) throw GraphException("graph devolvió un plan sin «steps» en $ruta (HTTP ${reply.status})", reply.status)
+        return plan
     }
 
     /**
@@ -212,20 +219,22 @@ class LearningClient(
     /**
      * Interpreta la demo SIN video: los pasos y lo que se narró. Es el respaldo del respaldo, así que NUNCA
      * revienta: si Graph no responde, falla o contesta sin interpretación, devuelve `null` —el modelo no
-     * opinó— y lo dice en el log con la causa (promesa 406). Lo único que sale es la cancelación: cancelar
-     * no es que el modelo no haya opinado.
+     * opinó— y lo dice en el log con la causa (promesa 406). Atrapa también lo que no es una Exception (un
+     * StackOverflowError es un Error). Lo único que sale es la cancelación: cancelar no es que el modelo no
+     * haya opinado.
      */
     suspend fun interpretSteps(startsAt: String, pasos: List<StepToRead>): JsonElement? {
         if (pasos.isEmpty()) return noOpino("no hay pasos que interpretar")
         return try {
             val ruta = "/api/v1/teach/interpret-steps"
             val cuerpo = LearningJson.encodeToString(InterpretRequest.serializer(), InterpretRequest(startsAt, pasos))
-            val leido = leer(InterpretResult.serializer(), llamar("POST", ruta, cuerpo, teach = true), ruta)
-            leido.interpretation?.also { log.log(TAG, "la demo se interpretó sin video (${it.toString().length} car.)") }
+            val reply = llamar("POST", ruta, cuerpo, teach = true)
+            val leido = leer(InterpretResult.serializer(), reply, ruta)
+            leido.interpretation?.also { log.log(TAG, "la demo se interpretó sin video (respuesta de ${bytesUtf8(reply.body)} bytes)") }
                 ?: noOpino("graph contestó sin interpretación")
         } catch (e: CancellationException) {
             throw e
-        } catch (e: Exception) {
+        } catch (e: Throwable) {
             noOpino(e.message ?: e::class.simpleName ?: "sin causa")
         }
     }
@@ -281,15 +290,23 @@ class LearningClient(
         return reply
     }
 
-    /** El `error` de un cuerpo `{"error": "…"}`; `""` o un cuerpo que no es JSON, ninguno. */
+    /** El `error` de un cuerpo `{"error": "…"}`; `""`, un cuerpo que no es JSON o uno anidado de más, ninguno. */
     private fun errorDe(body: String): String? =
-        runCatching { (LearningJson.parseToJsonElement(body) as? JsonObject)?.get("error") }.getOrNull().textoNoVacio()
+        if (demasiadoAnidado(body)) null
+        else runCatching { (LearningJson.parseToJsonElement(body) as? JsonObject)?.get("error") }.getOrNull().textoNoVacio()
 
-    private fun <T> leer(lector: KSerializer<T>, reply: TransportReply, ruta: String): T =
-        runCatching { LearningJson.decodeFromString(lector, reply.body) }.getOrElse { e ->
+    /** Lee la respuesta; anidada de más, ni la parsea (promesa 413). Ilegible, [GraphException] con dónde se rompió. */
+    private fun <T> leer(lector: KSerializer<T>, reply: TransportReply, ruta: String): T {
+        if (demasiadoAnidado(reply.body))
+            throw GraphException(
+                "graph respondió un JSON anidado a más de $PROFUNDIDAD_MAXIMA niveles en $ruta (HTTP ${reply.status}, ${bytesUtf8(reply.body)} bytes): no se lee",
+                reply.status,
+            )
+        return runCatching { LearningJson.decodeFromString(lector, reply.body) }.getOrElse { e ->
             if (reply.body.isBlank()) throw GraphException("respuesta vacía de graph en $ruta (HTTP ${reply.status})", reply.status)
             throw GraphException("graph respondió algo que no se pudo leer en ${rutaJson(e)} de $ruta (HTTP ${reply.status}): ${reply.body.take(200)}", reply.status)
         }
+    }
 
     /** Dónde se rompió la lectura, según kotlinx («… at path: $.steps[0]»); sin ruta, el cuerpo entero (`$`). */
     private fun rutaJson(e: Throwable): String =
@@ -298,6 +315,15 @@ class LearningClient(
     private fun sesionRuta(sessionId: String) = "/api/v1/learning/sessions/${segmento(sessionId)}"
 
     private fun workflowRuta(id: String) = "/api/v1/workflows/${segmento(id)}"
+
+    /**
+     * Un id de workflow en blanco no es un workflow: `/api/v1/workflows/` es la ruta de la lista, y al borrar su 404
+     * contaría como borrado sin decir nada. No se llama a Graph (promesa 415).
+     */
+    private fun conId(id: String, para: String): String {
+        require(id.isNotBlank()) { "no se puede $para un workflow con el id en blanco: no se llamó a graph" }
+        return id
+    }
 
     /** Un id como segmento de ruta: todo lo que no es «unreserved» (RFC 3986) va en percent-encoding UTF-8. */
     private fun segmento(id: String): String = id.encodeToByteArray().joinToString("") { byte ->
