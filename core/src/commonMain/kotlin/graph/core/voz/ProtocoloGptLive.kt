@@ -128,14 +128,22 @@ class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEG
     /** Pedir turno. Del resultado a la primera voz, 9-72 ms (medido). */
     fun pedirRespuesta(): String = mensaje { put("type", "response.create") }
 
-    /** Hacer decir a Ü una frase exacta con SU voz. `session.instructions.append` no provoca respuesta; esto sí. */
-    fun dictar(texto: String): List<String> = listOf(
-        mensaje {
-            put("type", "session.commentary.append")
-            put("delegation_id", JsonNull)
-            put("content", AL_DICTAR + texto.trim())
-        },
-    )
+    /**
+     * Hacer decir a Ü una frase exacta con SU voz. `session.instructions.append` no provoca respuesta; esto sí. En blanco
+     * no se manda nada: el prefijo solo hace improvisar a la voz (U sale igual, `ConversacionEnVivo.cs:1260`).
+     */
+    fun dictar(texto: String): List<String> =
+        if (texto.isBlank()) {
+            emptyList()
+        } else {
+            listOf(
+                mensaje {
+                    put("type", "session.commentary.append")
+                    put("delegation_id", JsonNull)
+                    put("content", AL_DICTAR + texto.trim())
+                },
+            )
+        }
 
     /**
      * EL `session.update` DE LA DELEGACIÓN Y DETRÁS EL APPEND A LA VOZ. Sin el append cambiaba el que
@@ -148,24 +156,36 @@ class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEG
             put("type", "session.update")
             putJsonObject("session") { put("delegation", delegacion(instrucciones, utensilios)) }
         },
-        mensaje {
-            put("type", "session.instructions.append")
-            put("delegation_id", JsonNull)
-            put("content", if (vuelve) AL_VOLVER + instruccionesVoz else AL_CAMBIAR_DE_MODO + instrucciones)
-        },
+        alaVoz(if (vuelve) AL_VOLVER + instruccionesVoz else AL_CAMBIAR_DE_MODO + instrucciones),
     )
 
-    /** Qué dice el servidor, en hechos. Lo que no se entiende da lista vacía, NUNCA una excepción que se lleve el socket. */
+    /**
+     * Solo el append del cambio de modo, sin `session.update`. Para una sesión que ABRIÓ ya en un modo especial: el
+     * `session.start` lleva la delegación del modo, pero la voz abre con su persona y no sabe que está en otro.
+     */
+    fun recordarModo(instrucciones: String): String = alaVoz(AL_CAMBIAR_DE_MODO + instrucciones)
+
+    private fun alaVoz(contenido: String): String = mensaje {
+        put("type", "session.instructions.append")
+        put("delegation_id", JsonNull)
+        put("content", contenido)
+    }
+
+    /**
+     * Qué dice el servidor, en hechos. Lo que no se entiende, o viene anidado de más, da lista vacía: NUNCA una excepción
+     * ni un StackOverflowError que se lleve el socket ([leerSinReventar]).
+     */
     fun leer(json: String): List<Hecho> {
+        val m = leerSinReventar(json) as? JsonObject ?: return emptyList()
         return try {
-            val m = VozJson.parseToJsonElement(json) as? JsonObject ?: return emptyList()
-            traducir(m)
+            traducir(m, json)
         } catch (e: IllegalArgumentException) {
             emptyList()
         }
     }
 
-    private fun traducir(m: JsonObject): List<Hecho> = when (m.cadena("type")) {
+    /** [crudo] es el mensaje tal como llegó: de ahí sale lo que se cita sin re-serializar. */
+    private fun traducir(m: JsonObject, crudo: String): List<Hecho> = when (m.cadena("type")) {
         // CONTINUO, también en silencio: un delta de 100 ms cada ~100-130 ms, y ese silencio son CEROS
         // EXACTOS. Tomado por sonido, la compuerta de eco no se reabría nunca. Ni vacío ni silencio suenan.
         "session.output_audio.delta" -> {
@@ -193,20 +213,23 @@ class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEG
 
         "session.started" -> listOf(Hecho.Abierta)
 
-        // El code tal cual y nunca el type: invalid_request_error lo traen todos, también los que no son fatales.
+        // El code tal cual y nunca el type: invalid_request_error lo traen todos, también los que no son fatales. Sin
+        // message se cita el error CRUDO, como llegó y recortado: re-serializarlo fue lo que reventó con mil niveles.
         "error" -> {
             val error = m["error"] as? JsonObject
             val que = when {
                 error == null -> "error sin detalle"
                 error.cadena("message").isNotEmpty() -> error.cadena("message")
-                else -> VozJson.encodeToString(JsonObject.serializer(), error)
+                else -> recortadoA(valorCrudo(crudo, "error") ?: "error sin detalle")
             }
             listOf(Hecho.Falla(que, error?.cadena("code") ?: ""))
         }
 
-        // LO QUE DURA, acumulado (12.0 y luego 25.0). Solo un número: un «seconds» vacío o en texto no es cero.
+        // LO QUE DURA, acumulado (12.0 y luego 25.0). Solo un número finito y no negativo: un «seconds» vacío o en texto
+        // no es cero, y un NaN envenenaba el acumulado (el máximo con NaN es NaN).
         "session.usage.updated" -> {
             val segundos = ((m["usage"] as? JsonObject)?.get("seconds") as? JsonPrimitive)?.takeIf { !it.isString }?.doubleOrNull
+                ?.takeIf { it.isFinite() && it >= 0 }
             if (segundos == null) emptyList() else listOf(Hecho.Duracion(segundos))
         }
 
@@ -219,17 +242,13 @@ class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEG
     /**
      * Los argumentos vienen como TEXTO con un JSON dentro. Es el pinchazo obvio y no da error: da un mapa
      * vacío y una herramienta que hace otra cosa. Un valor que no es texto viaja como su JSON crudo; un
-     * JSON ilegible deja la llamada sin argumentos antes que reventar.
+     * JSON ilegible o anidado de más deja la llamada sin argumentos antes que reventar: con el tope medido antes,
+     * ni el parser ni el `toString` de un valor de mil niveles llegan a correr.
      */
     private fun laLlamada(item: JsonObject): Llamada {
-        val crudo = item.cadena("arguments")
-        val args = if (crudo.isEmpty()) emptyMap() else try {
-            (VozJson.parseToJsonElement(crudo) as? JsonObject)
-                ?.mapValues { (_, v) -> if (v is JsonPrimitive && v.isString) v.content else v.toString() }
-                ?: emptyMap()
-        } catch (e: IllegalArgumentException) {
-            emptyMap()
-        }
+        val args = (leerSinReventar(item.cadena("arguments")) as? JsonObject)
+            ?.mapValues { (_, v) -> if (v is JsonPrimitive && v.isString) v.content else v.toString() }
+            ?: emptyMap()
         return Llamada(item.cadena("call_id"), item.cadena("name"), args)
     }
 

@@ -1374,6 +1374,7 @@ class Contrato002VozGptLive {
                 assertEquals(listOf<String?>("map_where_am_i"), v.enviados()[1].herramientas(), promesa(230))
             },
             corte(),
+            hace { assertEquals("session.start", v.tipos().last(), promesa(230) + " · el append de la reapertura espera a que la sesión se confirme") },
             llega(sesionAbierta),
             hace { v.conv.cambiarModo(revision, paraRevisar, vuelve = false) },
             corte(),
@@ -1389,6 +1390,41 @@ class Contrato002VozGptLive {
         assertEquals(revision, tercera.delegado(), promesa(230) + " · el último modo es el que manda")
         assertEquals(listOf<String?>("map_look"), tercera.herramientas(), promesa(230))
         assertTrue(aperturas().all { it.texto("session", "instructions") == persona }, promesa(230) + " · la voz reabre con su persona")
+
+        // LA VOZ TAMBIÉN VUELVE AL MODO. El `session.start` abre con su persona: sin el append, el delegado reabría en un
+        // modo y la voz en el de siempre. Confirmada la sesión, oye otra vez el cambio de modo con las reglas vigentes.
+        val alCambiarDeModo = "CAMBIO DE MODO. Desde ahora mandan estas reglas sobre cuándo y cómo hablas, por encima de las anteriores:\n"
+        fun Voz.appends() = enviados().filter { it.texto("type") == "session.instructions.append" }.map { it.texto("content") }
+        assertEquals(
+            listOf<String?>(
+                "session.start", "session.update", "session.instructions.append",
+                "session.start", "session.instructions.append", "session.update", "session.instructions.append",
+                "session.start", "session.instructions.append",
+            ),
+            v.tipos(), promesa(230) + " · la reapertura en un modo especial le repite el modo a la voz",
+        )
+        assertEquals(
+            listOf<String?>(alCambiarDeModo + aprendiz, alCambiarDeModo + aprendiz, alCambiarDeModo + revision, alCambiarDeModo + revision),
+            v.appends(), promesa(230) + " · con el prefijo de cambio de modo y las reglas del modo vigente",
+        )
+
+        // De vuelta al modo de siempre, la reapertura ya es la de siempre: ningún append.
+        val deVuelta = Voz()
+        val deSiempre = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar"))))
+        deVuelta.guion(
+            llega(sesionAbierta),
+            hace { deVuelta.conv.cambiarModo(aprendiz, paraAprender, vuelve = false) },
+            hace { deVuelta.conv.cambiarModo(completas, deSiempre, vuelve = true) },
+            corte(),
+            llega(sesionAbierta),
+            llega(sinHechos),
+        )
+        deVuelta.conv.conversar()
+        assertEquals(
+            listOf<String?>("session.start", "session.update", "session.instructions.append", "session.update", "session.instructions.append", "session.start"),
+            deVuelta.tipos(), promesa(230) + " · en el modo de siempre la reapertura no manda append",
+        )
+        assertEquals(completas, deVuelta.enviados().last().delegado(), promesa(230))
     }
 
     @Test

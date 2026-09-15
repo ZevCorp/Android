@@ -1,6 +1,7 @@
 package graph.core.voz
 
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
@@ -111,6 +112,9 @@ class ConversacionViva(
     private var delegado = instruccionesDelegado
     private var herramientas = utensilios
 
+    /** El modo vigente no es el de siempre: una sesión que abre en él se lo tiene que repetir a la voz. */
+    private var modoEspecial = false
+
     var viva = false
         private set
 
@@ -140,6 +144,9 @@ class ConversacionViva(
     private val detector = DetectorDeInterrupcion()
     private var tragadoAnunciado = 0L
     private var ultimoFalloDeEnvio = ""
+
+    /** La espera entre intentos que está en curso: [detener] la corta en vez de esperar a que venza. */
+    private var espera: Job? = null
 
     /**
      * Abre y conversa hasta que se acaba: vuelve cuando la voz terminó, por la vía que sea. Toda escucha que termina
@@ -173,7 +180,7 @@ class ConversacionViva(
                     var via = "apertura"
                     var reconecta = false
                     try {
-                        if (reconectando) reloj.esperar(ESPERA_DE_RECONEXION_MS * reconexiones)
+                        if (reconectando) esperar(ESPERA_DE_RECONEXION_MS * reconexiones)
                         if (!detenida && conectar(c, clave, reconectando)) via = escuchar(c)
                     } catch (e: CancellationException) {
                         via = "cancelación"
@@ -192,10 +199,14 @@ class ConversacionViva(
         }
     }
 
-    /** Lo pide el usuario: nunca reconecta ni anuncia un fatal. La decisión la toma igual [alTerminarLaEscucha]. */
+    /**
+     * Lo pide el usuario: corta la espera en curso, y nunca reconecta ni anuncia un fatal. La decisión la toma igual
+     * [alTerminarLaEscucha].
+     */
     fun detener() {
         if (!viva || detenida) return
         detenida = true
+        espera?.cancel()
         log(TAG, "la voz se detiene a pedido")
         callar()
         canal.cerrar("fin")
@@ -285,11 +296,12 @@ class ConversacionViva(
 
     /**
      * Otro modo sin reabrir la sesión: otro `session.start` sería otra conversación. Se recuerda, y una reconexión
-     * abre ya en este modo.
+     * abre ya en este modo: la delegación en el `session.start` y, al confirmarse, el append a la voz.
      */
     suspend fun cambiarModo(instrucciones: String, utensilios: List<Utensilio>, vuelve: Boolean) {
         delegado = instrucciones
         herramientas = utensilios
+        modoEspecial = !vuelve
         val c = conexion
         if (!viva || detenida || c == null || !c.confirmada) {
             log(TAG, "modo guardado para la próxima apertura: no hay sesión confirmada a la que cambiárselo")
@@ -370,11 +382,25 @@ class ConversacionViva(
                         dice(SIN_RED)
                         return false
                     }
-                    reloj.esperar(ESPERA_DE_APERTURA_MS * intento)
+                    esperar(ESPERA_DE_APERTURA_MS * intento)
                     if (detenida) return false
                     log(TAG, "reintentando abrir la voz (${intento + 1}/$INTENTOS_DE_APERTURA)…")
                 }
             }
+        }
+    }
+
+    /**
+     * Esperar entre intentos, CORTABLE. Con la espera del reloj a secas, detener durante un reintento dejaba la voz viva
+     * hasta que vencía (hasta 2 s): el micrófono en rojo sin nadie al otro lado. Quien esperaba mira después [detenida].
+     */
+    private suspend fun esperar(ms: Long) {
+        if (detenida) return
+        coroutineScope {
+            val j = launch { reloj.esperar(ms) }
+            espera = j
+            j.join()
+            espera = null
         }
     }
 
@@ -443,11 +469,12 @@ class ConversacionViva(
      * se comían el log (U, 2026-09-12). De un `response.event` solo se escribe su tipo: su contenido es del delegado.
      */
     private fun volcarCrudo(json: String) {
-        val m = try {
-            VozJson.parseToJsonElement(json) as? JsonObject
-        } catch (e: IllegalArgumentException) {
-            null
+        // Anidado de más ni se lee ni se vuelca: parsearlo aquí reventaba igual que en el traductor, y no se sabe de quién es.
+        if (demasiadoAnidado(json)) {
+            log(TAG, "← un mensaje anidado a más de $PROFUNDIDAD_MAXIMA niveles (${json.length} car.): no se lee")
+            return
         }
+        val m = leerSinReventar(json) as? JsonObject
         val tipo = (m?.get("type") as? JsonPrimitive)?.content.orEmpty()
         if (tipo == "session.output_audio.delta") return
         if (tipo == "response.event") {
@@ -492,11 +519,19 @@ class ConversacionViva(
             }
 
             // LA SESIÓN ABRIÓ DE VERDAD: lo único que afirma «sesión abierta», y una vez por conexión.
+            // EN UN MODO ESPECIAL LA VOZ LO OYE OTRA VEZ: el `session.start` abre con su persona, y sin el append el
+            // delegado reabría en un modo y la voz en el de siempre. Antes de confirmar el servidor aún no escucha.
             Hecho.Abierta -> if (!c.confirmada) {
                 c.confirmada = true
                 log(TAG, "sesión abierta con «${protocolo.modelo}»: el servidor la confirmó")
                 dice(c.alConfirmar)
-                envio.withLock { pedirRespuestaSiToca(c) }
+                enviando("el modo vigente") {
+                    if (modoEspecial) {
+                        canal.enviar(protocolo.recordarModo(delegado))
+                        log(TAG, "la sesión abrió en un modo especial: se le repite a la voz (instrucciones de ${delegado.length} car.)")
+                    }
+                    pedirRespuestaSiToca(c)
+                }
             }
 
             Hecho.CierraElTurno -> cierraElTurno()

@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1 y A2 implementadas** (2026-09-14; promesas 201-229 verdes; B pendiente) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1 y A2 implementadas** (2026-09-14; promesas 201-231 verdes; B pendiente) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -135,7 +135,7 @@ micrófono, altavoz ni Android.
 | 227 | Audio con voz, ceros, delta vacío, `output_text.delta` y `function_call_arguments.delta` del delegado: ni el base64 ni el texto del delegado aparecen en el log; lo que dijo Ü, una sola vez al cerrar el turno; un evento desconocido sí se vuelca |
 | 228 | Un resultado, un aviso y 117 textos: 119 items y ningún aviso; el 120 deja una línea; 15 más no dejan otra y siguen saliendo. La conexión nueva empieza en cero |
 | 229 | Compuerta activa: eco 800 y voz 6000 sostenida con Ü sonando; dispara, calla una vez, el trozo que dispara viaja idéntico y el siguiente también (reabierta, sin gracia). Sin compuerta: nunca calla y todo viaja idéntico |
-| 230 | Canal con guion: cambiar al modo aprendiz en plena sesión da `session.update` y el append, sin otro `session.start` ni otra URL. Tras un corte, el `session.start` de la reapertura lleva las instrucciones y herramientas del aprendiz; tras otro cambio y otro corte, las del último. La voz reabre siempre con su persona |
+| 230 | Canal con guion: cambiar al modo aprendiz en plena sesión da `session.update` y el append, sin otro `session.start` ni otra URL. Tras un corte, el `session.start` de la reapertura lleva las instrucciones y herramientas del aprendiz; tras otro cambio y otro corte, las del último. La voz reabre siempre con su persona, y en un modo especial, confirmada la sesión y no antes, recibe el append con el prefijo de cambio de modo y las reglas vigentes. De vuelta al modo de siempre, la reapertura no manda append |
 | 231 | Un reloj cuya espera no vence sola: detener durante la espera de 1 s de un reintento de abrir, y durante la de 300 ms de una reconexión, termina la voz sin avanzar el reloj, sin reabrir y sin decir nada más. Si no termina, la prueba abre la espera y sale roja, no colgada |
 
 ---
@@ -154,6 +154,7 @@ Todo en `core/src/commonMain/kotlin/graph/core/voz/`, sin dependencias nuevas:
 - `CompuertaDeEco.kt` — la compuerta y `ModoDeCaptura`.
 - `DetectorDeInterrupcion.kt` — el barge-in con la compuerta activa.
 - `Fatales.kt` — qué fallo no se arregla reconectando.
+- `JsonCrudo.kt` — el tope de 64 niveles medido antes de parsear, y el texto crudo de un valor sin re-serializarlo.
 
 Pone verdes: **201-217**.
 
@@ -174,13 +175,16 @@ Todo en `core/src/commonMain/kotlin/graph/core/voz/`, sin dependencias nuevas:
   reacciona a cada hecho, ejecuta las herramientas por un puerto, cierra turnos y decide en un solo sitio
   si termina, dice por qué o reconecta.
 
-Pone verdes: **218-229**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
+Pone verdes: **218-231**. Se juzga con un canal con guion, un reloj a mano y un ejecutor retenible.
 
 ### Fase B — el cableado en `app` (otra corrida)
 
 El socket real (cabecera `Authorization`, cierre normal «fin»), el micrófono a 24 kHz en trozos de
 100 ms, la cola del altavoz de 30 s que descarta lo viejo, el AEC del sistema, y dónde vive la
 persona de la voz. Con la corrida a mano en el teléfono como nivel 4.
+
+Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer …`) en un `Map`, y `Llamada` y
+`Hecho.Falla` son data classes cuyo `toString` incluye los argumentos y el mensaje. **Nunca se loguean enteros.**
 
 ---
 
@@ -191,7 +195,7 @@ persona de la voz. Con la corrida a mano en el teléfono como nivel 4.
 | Argumento no texto | `JsonElement.ToString()`: `true` sale `True`, `null` sale vacío | el JSON crudo: `true`, `null`, `7`, `{"a":1}` | la herramienta recibe lo que mandó el delegado, sin un artefacto de .NET en medio |
 | Bytes que ocupa un resultado | System.Text.Json escapa lo no ASCII: «á» son 6 B y un emoji 12 | kotlinx escribe UTF-8 crudo: «á» son 2 B y un emoji 4; solo escapa comillas, barra invertida y control | se cuenta lo que realmente emite el serializador de aquí; el tope sigue sobre el mensaje que viaja, que cumple las dos lecturas del servidor |
 | El cambio de modo recuerda la apertura | `ProtocoloGptLive` guarda las instrucciones con que abrió para saber si «vuelve» | quien llama dice `vuelve` y pasa la persona de la voz | el traductor queda sin estado de verdad; lo que hay que recordar es de la conversación (A2) |
-| El prefijo de dictar | lo compone `ConversacionEnVivo.cs:1262` | lo pone `dictar()` | el prefijo es parte del protocolo medido, no de quien llama |
+| El prefijo de dictar | lo compone `ConversacionEnVivo.cs:1262`, y en blanco sale sin mandar nada | lo pone `dictar()`, y en blanco devuelve lista vacía | el prefijo es parte del protocolo medido, no de quien llama |
 | Default de la compuerta | `CompuertaActiva(..., sinCaminoDeEco = false)` y la variable `U_SIN_ECO` lo invierte | `sinCaminoDeEco = true` en la firma | en el teléfono no hay variables de entorno: el default de la decisión del dueño lo dice el código |
 | `PaseParaVolver`, `Consumo`, `Fotograma` | existen para otros protocolos | no existen | GPT-Live nunca los produce y `mira = false`; se añaden cuando haya un protocolo que los use |
 | Concurrencia de `TurnosSinMarca` | `lock` interno | sin candado | commonMain no tiene `synchronized`; A2 lo confina a un solo hilo o corrutina |
@@ -202,7 +206,14 @@ persona de la voz. Con la corrida a mano en el teléfono como nivel 4.
 | Lo dicho antes de un corte | la frase sigue acumulando en la conexión nueva | se descarta con el marcador | la sesión nueva no lo recuerda, y el log no debe pegarlo a lo siguiente |
 | Llamadas de una conexión ya cerrada | se ejecutan y sus salidas van al socket nuevo | ni se ejecutan ni se contestan | el call_id es de una sesión que ya no existe |
 | Transcripción | por `Dice`, que también lleva los avisos | por `transcribe`, aparte de `dice` | en el teléfono `dice` puede acabar anunciado en voz alta |
+| Reabrir tras un cambio de modo | `ReconectarAsync` manda la apertura y no le repite el modo a la voz | recuerda el modo vigente: la delegación va en el `session.start` y, confirmada la sesión, la voz recibe otra vez el append del cambio de modo | sin él el delegado reabría en un modo y la voz en el de siempre (promesa 230) |
 | Vuelco crudo de `response.event` | el mensaje entero salvo los `.delta` | solo el tipo del evento | el contenido es del delegado, y la promesa 227 dice que no se escribe |
+| Pedir respuesta a lo escrito | el `response.create` lo añade quien arma `MensajesDeTexto` | `texto()` devuelve el mensaje y su `response.create` | sin él el servidor acepta y calla (medido): es protocolo, no de quien llama |
+| JSON demasiado anidado | System.Text.Json corta a 64 niveles con una `JsonException` que se captura | un escáner lineal mide antes de parsear, con el mismo tope de 64 | kotlinx 1.7.1 no tiene tope: miles de niveles lanzan `StackOverflowError`, que no es `Exception` y se llevaba la voz (promesa 203) |
+| Un `error` sin message | `GetRawText()` del error, entero | su texto crudo tal como llegó, recortado a 400 caracteres | acaba en el log y en lo que se dice; nunca se re-serializa |
+| Base64, `call_id` o argumentos inválidos | lanza | lista vacía, id vacío o mapa vacío | mejora: un mensaje raro no se lleva el socket |
+| Orden de la compuerta | `CompuertaActiva(aecDelSistema, forzada, sinCaminoDeEco)` | `ModoDeCaptura.activa(forzada, aec, sinCaminoDeEco)` | invertido: dos `Boolean` seguidos se cruzan sin error, así que todos los llamadores usan parámetros nombrados y así debe seguir |
+| `seconds` de la duración | cualquier número | solo finito y no negativo | un `NaN` envenenaba el acumulado, y un negativo o un infinito no son una duración (promesa 206) |
 
 ---
 
@@ -215,6 +226,9 @@ persona de la voz. Con la corrida a mano en el teléfono como nivel 4.
   qué cuenta el servidor como item. A2 solo cuenta lo que la conversación crea y lo avisa en el log a los
   120 (promesa 228); decidir qué hacer es de cuando se mida en el teléfono.
 - **GPT Realtime y Gemini**: solo GPT-Live-1.
+- **Un `call_id` gigante**: si el mensaje sin salida ya no cabe en 32 768 B (un `call_id` de 40 000 caracteres), el
+  resultado sale más grande que el tope. Límite compartido con U; los `call_id` reales son de 29 caracteres
+  (`call_ydaLTWADFkH6AtEXUxsfdltF`), y recortar el id rompería la llamada igual.
 
 ## Riesgo
 
