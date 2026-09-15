@@ -52,6 +52,7 @@ class Contrato001CerebroEnGraph {
             9 to "La key de Graph se resuelve prefs sobre compilada; sin key, el proveedor GRAPH no llama a nadie y dice en una línea qué falta.",
             10 to "La superficie se deriva del paquete y la pantalla: origin `android://<paquete>`, pathname `/<pantalla>`, id = origin + pathname.",
             11 to "Un `session` devuelto por Graph se conserva byte a byte y vuelve en el siguiente request aunque contenga JSON, comillas o caracteres no ASCII.",
+            12 to "Cada objetivo nuevo abre un hilo nuevo en Graph: el primer turno de cada corrida viaja sin session aunque haya uno de una corrida anterior o uno reanudado.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -335,6 +336,40 @@ class Contrato001CerebroEnGraph {
         assertEquals(session, b.interactionId, promesa(11))
         b.next(pantalla, emptyList())
         assertEquals(session, t.requests[1].json.texto("session"), promesa(11))
+    }
+
+    @Test
+    fun promesa12() = corre {
+        // (a) Misma instancia: la corrida 1 termina con un session y llega un objetivo nuevo.
+        run {
+            val t = TransporteGuionado(
+                ok("""{"session":"s1","actions":[{"kind":"wait","ms":1}]}"""),
+                fin,
+                ok("""{"session":"s2","actions":[{"kind":"wait","ms":1}]}"""),
+            )
+            val b = cerebro(t)
+            b.begin("abre la calculadora")
+            b.next(pantalla, emptyList())
+            b.next(pantalla, listOf("ok"))
+            assertEquals("s-fin", b.interactionId, promesa(12))
+
+            b.begin("abre los ajustes")
+            b.next(pantalla, emptyList())
+            val r3 = t.requests[2].json
+            assertNull(r3["session"], promesa(12) + " · la corrida 2 viajó con session ${r3.texto("session")}")
+            assertEquals("abre los ajustes", r3.texto("goal"), promesa(12))
+        }
+        // (b) Hilo reanudado entre activaciones (`GraphApp.newSession(resume = true)`): tampoco se adopta.
+        run {
+            val t = TransporteGuionado(ok("""{"session":"s2","actions":[{"kind":"wait","ms":1}]}"""))
+            val b = cerebro(t)
+            b.resume("s-fin")
+            b.begin("abre los ajustes")
+            b.next(pantalla, emptyList())
+            val r1 = t.requests[0].json
+            assertNull(r1["session"], promesa(12) + " · el hilo reanudado viajó con session ${r1.texto("session")}")
+            assertEquals("abre los ajustes", r1.texto("goal"), promesa(12))
+        }
     }
 
     /* ---------- Superficie falsa para correr el motor real ---------- */

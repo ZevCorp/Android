@@ -1,6 +1,6 @@
 # Plan de implementación: el cerebro vive en Graph — Android pasa a ser cliente tonto
 
-Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
+Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · **promesa 12 escrita, ROJA** (el hallazgo del Nivel 4) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
 habla con Graph · Rama: `yokh/cliente-graph`
 
 Hoy el Android piensa solo: `OpenAiBrain` y `GeminiBrain` (en `app/…/platform/`) arman el system
@@ -66,10 +66,17 @@ método `promesaNN`); si cambia uno, cambia el otro en el mismo commit.
 | 9 | La key de Graph se resuelve prefs sobre compilada; sin key, el proveedor GRAPH no llama a nadie y dice en una línea qué falta. | A |
 | 10 | La superficie se deriva del paquete y la pantalla: origin `android://<paquete>`, pathname `/<pantalla>`, id = origin + pathname. | A |
 | 11 | Un `session` devuelto por Graph se conserva byte a byte y vuelve en el siguiente request aunque contenga JSON, comillas o caracteres no ASCII. | A |
+| 12 | Cada objetivo nuevo abre un hilo nuevo en Graph: el primer turno de cada corrida viaja sin session aunque haya uno de una corrida anterior o uno reanudado. | B |
 
 **La que cierra el asunto es la 7.** Mientras el cliente mande prompt o catálogo, no es tonto: es
 el cerebro viejo con otro transporte. Las otras diez protegen el camino; la 7 es la que define qué
 es este proveedor.
+
+**La 12 nació de medir, no de leer** (Nivel 4, corrida 2): con `session` reanudado + `goal` nuevo,
+Graph siguió el hilo viejo y reabrió la calculadora en vez de los ajustes. Se espeja Windows
+(`AgentLoop.cs:96`, `session = null` por objetivo). **La promesa 1 no cambia:** su test nunca fijó
+que un hilo reanudado se adopta; esa regla vivía solo en el comentario y en el `begin()` de
+`GraphBrain` («con un hilo reanudado viaja igual»), y es lo que la 12 contradice y retira.
 
 ### Con qué se juzga cada una
 
@@ -90,6 +97,7 @@ Ninguna toca red, Android ni disco.
 | 9 | `GraphCredentials.resolve` con prefs, con compilada, con ambas y con ninguna; un `GraphBrain` sin key no hace ningún request y falla con la línea que dice qué falta |
 | 10 | `AndroidSurface.from("com.miui.calculator · Calculadora")` y sin título |
 | 11 | Response con `session` = un JSON con comillas escapadas, `ñ` y CJK → el request siguiente lleva la misma cadena, comparada tras decodificar el JSON |
+| 12 | (a) Corrida 1 guionada hasta `done` con `session:"s-fin"`, luego `begin("abre los ajustes")` en la misma instancia → el request 3 no tiene `session` y sí `goal`. (b) `resume("s-fin")` y `begin(goal)` → el request 1 no tiene `session` y sí `goal` |
 
 ---
 
@@ -130,8 +138,8 @@ Lo que quedó, archivo por archivo:
 - `.githooks/pre-push` — el portero: compila release, corre `scripts/contrato.sh` y exige promesa
   propia a toda rama que cambie código. `docs/como-trabajamos.md` cuenta el método.
 
-Sin promesas nuevas: la prueba a mano no pidió ninguna del lado del cliente. Sí dejó **un hallazgo
-del backend** (abajo) que pide una decisión antes de convertirse en promesa 12.
+La prueba a mano dejó **un hallazgo del backend** (abajo). Decidido: se espeja Windows y entra como
+**promesa 12** (cada objetivo abre un hilo nuevo en Graph); OpenAI y Gemini conservan su reanudación.
 
 ### Nivel 4 — corrida a mano (2026-09-14, Xiaomi M2101K7BL · Android 12 · APK release 0.42)
 
@@ -173,8 +181,8 @@ por computer-use) en vez de los ajustes. Windows no tiene este problema porque *
 `AgentLoop.cs:96` arranca `session = null` en cada objetivo y el `goal` viaja solo cuando
 `session == null`. El Android sí reanuda (`GraphApp.newSession(resume = true)`) para dar continuidad
 entre activaciones, y esa continuidad es la que Graph no honra. Una sola corrida; suficiente para
-no cerrar los ojos, insuficiente para llamarlo ley. Pendiente de decisión (ver el reporte de la
-fase B); si se decide espejar Windows, entra como **promesa 12** con su test antes que el código.
+no cerrar los ojos, insuficiente para llamarlo ley. **Decidido:** espejar Windows; entra como
+**promesa 12** con su test antes que el código. OpenAI y Gemini no cambian: su reanudación queda igual.
 
 Efecto colateral visto, fuera de esta spec: el destilador de memoria y la anticipación siguen
 llamando a Gemini y hoy devuelven `HTTP 429` (créditos agotados). No afectan al turno de Graph;
