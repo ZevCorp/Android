@@ -103,13 +103,14 @@ construir() {
 
 # ── 3. la funcionalidad trae su propio test ──────────────────────────────────────────────────
 # Es la promesa que hace crecer la carpeta de contrato SOLA, en vez de por disciplina.
-# Se exime lo que por definición no añade comportamiento: chore/, docs/, refactor/ y hotfix/.
+# Se exime lo que por definición no añade comportamiento: chore/, docs/, refactor/ y hotfix/ —
+# pero el nombre del ref lo elige quien empuja, así que la exención solo vale si el propio diff
+# no toca código de producción; si lo toca, el prefijo no salva.
 trae_test() {
-  local rev="$1" rama="$2" base codigo_tocado test_tocado
+  local rev="$1" rama="$2" base codigo_tocado test_tocado exento=0
   case "$rama" in
     chore/*|docs/*|refactor/*|hotfix/*)
-      gris "  ·  test propio: no se exige en «${rama%%/*}/»"
-      return
+      exento=1
       ;;
   esac
   if git rev-parse -q --verify origin/main > /dev/null; then base="origin/main"
@@ -129,11 +130,17 @@ trae_test() {
   fi
   codigo_tocado="$(printf '%s' "$codigo_tocado" | grep -c .)"
   test_tocado="$(printf '%s' "$test_tocado" | grep -c .)"
-  if [ "$codigo_tocado" -gt 0 ] && [ "$test_tocado" -eq 0 ]; then
-    rojo "  ✘  esta rama cambia código y no añade ninguna promesa"
-    echo "     $codigo_tocado archivo(s) de código, 0 de contrato (contra $base)."
-    echo "     Añade lo que esta funcionalidad promete en core/src/commonTest/kotlin/graph/core/contrato/"
-    echo "     —o renómbrala a chore/ o refactor/ si de verdad no cambia comportamiento."
+  if [ "$exento" -eq 1 ] && [ "$codigo_tocado" -eq 0 ]; then
+    gris "  ·  test propio: no se exige en «${rama%%/*}/»"
+  elif [ "$codigo_tocado" -gt 0 ] && [ "$test_tocado" -eq 0 ]; then
+    if [ "$exento" -eq 1 ]; then
+      rojo "  ✘  el ref «$rama» se declara sin comportamiento pero toca $codigo_tocado archivo(s) de código: añade su promesa o empuja a una rama sin prefijo exento"
+    else
+      rojo "  ✘  esta rama cambia código y no añade ninguna promesa"
+      echo "     $codigo_tocado archivo(s) de código, 0 de contrato (contra $base)."
+      echo "     Añade lo que esta funcionalidad promete en core/src/commonTest/kotlin/graph/core/contrato/"
+      echo "     —o renómbrala a chore/ o refactor/ si de verdad no cambia comportamiento."
+    fi
     fallos=$((fallos+1))
   else
     verde "  ✔  trae su propio test"
