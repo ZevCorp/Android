@@ -1,6 +1,8 @@
 package com.zevcorp.graph.platform
 
 import android.content.SharedPreferences
+import graph.core.telemetria.LineaDeLog
+import graph.core.telemetria.PuertaDeTelemetria
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.UUID
@@ -9,20 +11,19 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
-import kotlinx.serialization.json.JsonNull
-import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.put
 
 /**
  * TELEMETRÍA PARA EL PANEL ANDROID DEL PROVIDER STUDIO (backend Graph).
  *
- * Sube tres cosas a Supabase para poder ver, usuario por usuario, qué pide la gente y qué le
- * pasa a cada ejecución:
+ * Sube tres cosas a Supabase para ver, instalación por instalación, cuánto se usa y qué le pasa a cada ejecución:
  *
- *  · graph_app_users — cada instalación con el NOMBRE del usuario (popup obligatorio al empezar).
- *  · graph_prompts   — cada cosa que el usuario le pide al asistente, con su desenlace.
- *  · graph_exec_logs — TODAS las líneas del LogBus (el mismo panel de desarrollador local),
- *                      correlacionadas con el prompt en curso. Logs completos, no un resumen.
+ *  · graph_app_users — cada instalación (id opaco, versión; del nombre y del modelo, su largo).
+ *  · graph_prompts   — cada pedido con su desenlace (ok · error · cancelled); del pedido y del resumen, su largo.
+ *  · graph_exec_logs — las líneas del LogBus pasadas por la puerta, correlacionadas con el pedido en curso.
+ *
+ * DEL TELÉFONO SOLO SALEN MEDIDAS (docs/specs/005, decisión D): este archivo no arma ningún cuerpo. Cada `http` sube lo que
+ * arma `PuertaDeTelemetria` en core, que niega por defecto; la promesa 507 lo lee en esta fuente. El log local (panel de
+ * desarrollador y logcat) sigue entero.
  *
  * Envío por lotes (buffer + flush cada pocos segundos) para no meter latencia a la ejecución.
  * Nunca lanza: la telemetría jamás puede tumbar al asistente.
@@ -41,13 +42,14 @@ object Telemetry {
     @Volatile private var currentPromptId: String? = null
 
     /**
-     * Prompts abiertos (id → prompt y vía de entrada). Los upserts van por RPC SECURITY DEFINER
-     * (graph_upsert_prompt): los clientes no tienen SELECT sobre la telemetría y sin él el
-     * ON CONFLICT de PostgREST viola RLS; además HttpURLConnection ni siquiera soporta PATCH.
+     * Prompts abiertos (id → prompt y vía de entrada), locales: al cerrar, la puerta sube su largo. Los upserts van por RPC
+     * SECURITY DEFINER (graph_upsert_prompt): los clientes no tienen SELECT sobre la telemetría y sin él el ON CONFLICT de
+     * PostgREST viola RLS; además HttpURLConnection ni siquiera soporta PATCH.
      */
     private val openPrompts = HashMap<String, Pair<String, String>>()
 
-    private val pendingLogs = ArrayDeque<Pair<String?, Pair<String, String>>>() // promptId → (tag, message)
+    /** Las líneas tal como llegaron del LogBus: se quedan en el teléfono hasta que la puerta arma su fila. */
+    private val pendingLogs = ArrayDeque<LineaDeLog>()
 
     /** Identidad de la instalación: un UUID generado una vez (no requiere cuenta). */
     val deviceId: String
@@ -59,7 +61,7 @@ object Telemetry {
             return id
         }
 
-    /** Nombre con el que el usuario se presentó (popup obligatorio). Blanco = aún no se presenta. */
+    /** Nombre con el que el usuario se presentó (popup obligatorio). Blanco = aún no se presenta. Vive en el teléfono. */
     val userName: String get() = prefs?.getString("userName", "")?.trim().orEmpty()
 
     /** Cablea la telemetría al arrancar la app y enciende el flusher de logs en background. */
@@ -84,13 +86,7 @@ object Telemetry {
         if (name.isBlank()) return
         scope.launch {
             runCatching {
-                val body = buildJsonObject {
-                    put("p_device_id", id)
-                    put("p_display_name", name)
-                    put("p_device_model", deviceModel)
-                    put("p_app_version", appVersion)
-                }.toString()
-                http("POST", "$PROJECT/rpc/graph_upsert_app_user", body)
+                http("POST", "$PROJECT/rpc/graph_upsert_app_user", PuertaDeTelemetria.cuerpoDeUsuario(id, name, deviceModel, appVersion))
             }.onFailure { LogBus.log("telemetry", "no pude registrar el usuario: ${it.message}") }
         }
     }
@@ -107,21 +103,13 @@ object Telemetry {
         val name = userName
         scope.launch {
             runCatching {
-                val body = buildJsonObject {
-                    put("p_id", id)
-                    put("p_device_id", device)
-                    put("p_user_name", name)
-                    put("p_prompt", prompt)
-                    put("p_source", source)
-                    put("p_status", "running")
-                }.toString()
-                http("POST", "$PROJECT/rpc/graph_upsert_prompt", body)
+                http("POST", "$PROJECT/rpc/graph_upsert_prompt", PuertaDeTelemetria.cuerpoDePedido(id, device, name, prompt, source, "running"))
             }.onFailure { LogBus.log("telemetry", "no pude subir el prompt: ${it.message}") }
         }
         return id
     }
 
-    /** Cierra la sesión del prompt con su desenlace (ok · error · cancelled) y el resumen final. */
+    /** Cierra la sesión del prompt con su desenlace (ok · error · cancelled); del resumen sube su largo. */
     fun promptFinished(id: String, status: String, summary: String) {
         if (currentPromptId == id) currentPromptId = null
         val (prompt, source) = synchronized(openPrompts) { openPrompts.remove(id) } ?: return
@@ -130,17 +118,7 @@ object Telemetry {
         scope.launch {
             flushLogs() // que los últimos logs de la ejecución no queden esperando al próximo tick
             runCatching {
-                val body = buildJsonObject {
-                    put("p_id", id)
-                    put("p_device_id", device)
-                    put("p_user_name", name)
-                    put("p_prompt", prompt)
-                    put("p_source", source)
-                    put("p_status", status)
-                    put("p_summary", summary.take(2000))
-                    put("p_finished", true)
-                }.toString()
-                http("POST", "$PROJECT/rpc/graph_upsert_prompt", body)
+                http("POST", "$PROJECT/rpc/graph_upsert_prompt", PuertaDeTelemetria.cuerpoDePedido(id, device, name, prompt, source, status, summary))
             }.onFailure { LogBus.log("telemetry", "no pude cerrar el prompt: ${it.message}") }
         }
     }
@@ -153,7 +131,7 @@ object Telemetry {
         if (tag == "telemetry") return
         if (prefs == null) return
         synchronized(pendingLogs) {
-            pendingLogs.addLast(currentPromptId to (tag to message))
+            pendingLogs.addLast(LineaDeLog(currentPromptId, tag, message))
             if (pendingLogs.size > 500) pendingLogs.removeFirst() // sin red, no crecer sin límite
         }
     }
@@ -167,15 +145,7 @@ object Telemetry {
         }
         val device = deviceId.ifBlank { return }
         runCatching {
-            val rows = batch.joinToString(",", "[", "]") { (promptId, log) ->
-                buildJsonObject {
-                    put("device_id", device)
-                    if (promptId != null) put("prompt_id", promptId) else put("prompt_id", JsonNull)
-                    put("tag", log.first.take(60))
-                    put("message", log.second.take(4000))
-                }.toString()
-            }
-            http("POST", "$PROJECT/graph_exec_logs", rows, "Prefer" to "return=minimal")
+            http("POST", "$PROJECT/graph_exec_logs", PuertaDeTelemetria.filasDeLog(device, batch), "Prefer" to "return=minimal")
         }.onFailure {
             // Si no salió, vuelve al buffer (al frente) y se reintenta en el próximo tick.
             synchronized(pendingLogs) { batch.asReversed().forEach { pendingLogs.addFirst(it) } }

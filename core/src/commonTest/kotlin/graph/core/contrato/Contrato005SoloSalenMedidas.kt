@@ -60,7 +60,7 @@ class Contrato005SoloSalenMedidas {
         }
     }
 
-    private val SECRETOS = arrayOf("Zorbax", "Qwyk", "7731", "3001234567", "1037246")
+    private val SECRETOS = arrayOf("Zorbax", "Qwyk", "7731", "3009876542", "1037246")
 
     @Test
     fun promesa501() {
@@ -87,7 +87,7 @@ class Contrato005SoloSalenMedidas {
             "bug-ui" to "❌ \"Zorbax\": tocaste 540,1200 pero el nodo es Qwyk",
             "workflow" to "  3/7 🧩 subconsciente \"Qwyk Zorbax\"",
             "api" to "portapapeles ← \"Qwyk 7731\"",
-            "assist" to "▶ acción: \"llama a Zorbax al 3001234567\"",
+            "assist" to "▶ acción: \"llama a Zorbax al 3009876542\"",
         )
         for ((tag, linea) in fugas) {
             val sale = puerta.mensaje(linea)
@@ -127,14 +127,14 @@ class Contrato005SoloSalenMedidas {
     fun promesa502() {
         val p = 502
         assertEquals(tramo("mi clave es 7731"), puerta.mensaje("mi clave es 7731"), promesa(p) + " · una clave")
-        assertEquals(tramo("llama al 3001234567"), puerta.mensaje("llama al 3001234567"), promesa(p) + " · un teléfono")
+        assertEquals(tramo("llama al 3009876542"), puerta.mensaje("llama al 3009876542"), promesa(p) + " · un teléfono")
         assertEquals(tramo("CC 1037246 de Zorbax"), puerta.mensaje("CC 1037246 de Zorbax"), promesa(p) + " · una cédula")
         assertEquals(tramo("compra 3 panes"), puerta.mensaje("compra 3 panes"), promesa(p) + " · un número sin medida")
         assertEquals("‹4›", puerta.mensaje("7731"), promesa(p) + " · un número suelto")
-        // Un prefijo de medida no sostiene un número largo: «intento 3001234567» no es un intento.
-        sinFuga(p, puerta.mensaje("intento 3001234567"), "3001234567")
+        // Un prefijo de medida no sostiene un número largo: «intento 3009876542» no es un intento.
+        sinFuga(p, puerta.mensaje("intento 3009876542"), "3009876542")
         sinFuga(p, puerta.mensaje("HTTP: 1037246"), "1037246")
-        sinFuga(p, puerta.mensaje("turno 7731 de 3001234567 caracteres"), "3001234567")
+        sinFuga(p, puerta.mensaje("turno 7731 de 3009876542 caracteres"), "3009876542")
 
         for (medida in listOf(
             "HTTP 503", "HTTP -1", "HTTP 0 · sin reintento", "reintento 2/3", "intento 1/3", "1600ms", "12s", "3.5s", "40%", "120 KB",
@@ -156,7 +156,7 @@ class Contrato005SoloSalenMedidas {
         )) {
             assertEquals(id, puerta.mensaje(id), promesa(p) + " · «$id» es opaco")
         }
-        for (noId in listOf("wf-zorbax", "#Zorbax12", "#a1b2c3", "com.whatsapp", "3001234567", "ses-Qwyk", "files/Zorbax", "/api/v1/workflows/registrar-a-zorbax")) {
+        for (noId in listOf("wf-zorbax", "#Zorbax12", "#a1b2c3", "com.whatsapp", "3009876542", "ses-Qwyk", "files/Zorbax", "/api/v1/workflows/registrar-a-zorbax")) {
             assertEquals(tramo(noId), puerta.mensaje(noId), promesa(p) + " · «$noId» no es un id")
         }
         assertEquals("${tramo("la sesión")} ses-1 ${tramo("para")} wf-2", puerta.mensaje("la sesión ses-1 para wf-2"), promesa(p) + " · los ids entre texto quedan")
@@ -167,7 +167,7 @@ class Contrato005SoloSalenMedidas {
         val p = 504
         val id = "3f2c9a1e-7b4d-4e8a-9c21-0d5e6f7a8b9c"
         val dispositivo = "0a1b2c3d-4e5f-4a6b-8c7d-9e8f7a6b5c4d"
-        val pedido = "escríbele a Zorbax al 3001234567 👋"
+        val pedido = "escríbele a Zorbax al 3009876542 👋"
 
         val abre = Json.parseToJsonElement(puerta.cuerpoDePedido(id, dispositivo, "Zorbax Pérez", pedido, "burbuja", "running")).jsonObject
         assertEquals(setOf("p_id", "p_device_id", "p_user_name", "p_prompt", "p_source", "p_status"), abre.keys, promesa(p) + " · claves al abrir")
