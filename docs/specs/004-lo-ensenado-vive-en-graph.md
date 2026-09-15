@@ -1,16 +1,17 @@
 # Plan de implementación: lo enseñado vive en Graph — el protocolo y el cliente de aprendizaje
 
 Estado: **fase 4A1 implementada** (2026-09-14; promesas 401-406 verdes; cada una se vio ROJA con un
-sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
+sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · **fase 4A2 en rojo** (promesas
+407-412 escritas antes que su código) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
 workflows en Graph · Rama: `yokh/aprendizaje-graph`
 
 Hoy el Android aprende solo: `ActiveLearning`, `GeminiLearning`, `GeminiWorkflow` y `WorkflowRepo`
 (en `app/…/platform/`) mandan el video y los pasos a Gemini con la key horneada y guardan los
 workflows en el teléfono. Windows ya no hace eso: abre una sesión de aprendizaje en Graph, le manda
 los pasos uno a uno, cierra la sesión y Graph persiste el workflow; para ejecutarlo le pide el plan.
-Esta spec pone en `core` **el protocolo y el cliente** de esas rutas. No cablea nada en la app: el
-orquestador de la lección (4A2), el grabador por accesibilidad (4B), la enseñanza activa (4C) y el
-reproductor (4D) van en specs y fases propias, sobre este cliente.
+Esta spec pone en `core` **el protocolo y el cliente** de esas rutas (4A1) y, sobre ese cliente, **el
+orquestador puro de una lección** (4A2). No cablea nada en la app: el grabador por accesibilidad (4B), la
+enseñanza activa (4C) y el reproductor (4D) van en fases propias, sobre estas piezas.
 
 ---
 
@@ -44,8 +45,9 @@ entiende, un cierre que se reintenta después de haberse cobrado, un workflow qu
 ## La especificación
 
 Bloque 401+ (la 001 usa 1-99). Los números no se reciclan. El enunciado de cada promesa es
-**literal** el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato004EnsenadoEnGraph.kt`,
-método `promesaNNN`); si cambia uno, cambia el otro en el mismo commit.
+**literal** el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato004EnsenadoEnGraph.kt`
+para 401-406 y `Contrato004LeccionEnGraph.kt` para 407-412, método `promesaNNN`); si cambia uno, cambia el
+otro en el mismo commit.
 
 | # | Promesa | Fase |
 |---|---|---|
@@ -55,6 +57,12 @@ método `promesaNNN`); si cambia uno, cambia el otro en el mismo commit.
 | 404 | La lista de workflows va del más nuevo al más viejo y ningún workflow se presenta con un nombre de relleno de Graph. | 4A1 |
 | 405 | Borrar un workflow que ya no existe cuenta como borrado; alinear antes de un workflow es best-effort pero su error queda en el log. | 4A1 |
 | 406 | Interpretar pasos nunca revienta: sin respuesta de Graph devuelve que el modelo no opinó y lo dice. | 4A1 |
+| 407 | Los pasos de una demostración viajan a Graph de a uno y en el orden en que ocurrieron; un paso que falla no detiene la grabación y queda contado con su motivo. | 4A2 |
+| 408 | Sin sesión abierta en Graph no se empieza a enseñar, se dice por qué y no queda nada abierto. | 4A2 |
+| 409 | Al terminar, la lección se escribe en disco antes de tocar la red, entera o nada. | 4A2 |
+| 410 | La nota de contexto viaja antes de cerrar la sesión; sin nota, la sesión se cierra igual. | 4A2 |
+| 411 | Si cerrar la sesión no sale por un fallo transitorio, queda pendiente en disco y se reintenta al arrancar hasta que sale; una lectura agotada no deja pendiente automático. | 4A2 |
+| 412 | Si procesar el video falla, la sesión se cierra igual y el video queda para reprocesar; una demostración descartada no publica nada. | 4A2 |
 
 **La que cierra el asunto es la 401.** Si el protocolo no es el de Windows, Graph recibe algo que
 acepta con HTTP 200 y descarta en silencio (un `actionType` que no conoce, unos `alternativeTargets`
@@ -74,6 +82,19 @@ esperas; un `TestTimeSource` que avanzan el guion y las esperas. Ninguna toca re
 | 404 | Graph lista viejo → nuevo (con `createdAt` Neo4j) → el cliente devuelve nuevo → viejo; sin fecha, por id descendente. `nombre()` de «Workflow sin descripción», «User workflow summary:», `""` y «No description» no contiene el relleno y sí la app, «2 sep 13:42» (con desfase de -5 h) y «6 pasos»; una descripción de verdad se respeta tal cual |
 | 405 | `borrar` con `404` → no lanza, 1 llamada `DELETE`; con `500` → `GraphException` tipo exacto. `prependAlignment` con `500 {"error":…}` o con un transporte que lanza → no lanza, devuelve `false` y una línea del log trae el id y la causa; con `200` → `true` y ninguna línea de fallo; cancelar sale tal cual |
 | 406 | `interpretSteps` con `503×4`, `-1`, transporte que lanza, cuerpo ilegible, `{}`, `interpretation:null` e `interpretation:""`, sin key y sin pasos → `null` sin excepción, y el log dice «el modelo no opinó» con la causa; con `interpretation` de verdad → el JSON crudo idéntico; cancelar sale tal cual |
+| 407 | Seis pasos y Graph rechaza el tercero (`400 actionType inválido`): los seis `POST …/steps` salen en el orden observado y nunca dos en vuelo a la vez (cada llamada cede el hilo tres veces: dos lectores se cruzarían); 5 mandados y 1 fallido con su motivo, en el resultado y en la lección, y la sesión se cierra. Con 31 pasos, un solo aviso de 504, al llegar a 30 |
+| 408 | `crearSesion` con `401`, `-1`, `400 {error}`, `200` sin id y `503×4`, y sin key (cero llamadas) → `NoSePuede` con la causa en una línea. Después: `pasoObservado` devuelve `false`, la nota se ignora, `terminar` lanza `IllegalStateException` (tipo exacto) y `descartar` no hace nada; ni una llamada más que la de abrir, ni una escritura, ni video, y ningún lector vivo (la prueba falla a los 20 s si queda uno). Tras un no, un segundo `empezar` con Graph sano enseña |
+| 409 | En la crónica, `disco escribe lecciones/ses-1.json` va después del último paso y antes del primero de video, `context-notes` y `finish`; una sola escritura bajo `lecciones/`, que se lee entera (pasos, identidad, dónde empezó y terminó, nota) y sin motivo. Con un paso colgado que el tope de vaciado corta y sin dónde terminó: el colgado y el de detrás cuentan como no enviados, ninguno viaja después de `finish`, y el motivo dice «2 de 3» y «dónde terminó». Con el almacén cayéndose a mitad de `lecciones/`: nada bajo `lecciones/`, `leccion` nula, un aviso con la causa y la sesión cerrada |
+| 410 | Dos trozos de nota → una `context-notes` a esa sesión con los dos, antes de `finish`; sin nota ni resumen del video → cero `context-notes` y un `finish`; la nota con `500` → `finish` igual y un aviso con la causa; sin voz y con resumen del video → la nota lleva el resumen, antes de `finish` |
+| 411 | `finish` con `504×3` → 3 cierres, esperas `[3000, 8000]`, `PENDIENTE`, «pendiente de cerrar en Graph» y un archivo en `cierres-pendientes/` con sesión, workflow y cuándo. Al arrancar con Graph aún en 504 se queda; con Graph sano sale con un solo `finish` a esa sesión y se borra, y el arranque siguiente no llama a nadie. `finish` con `-1` → un cierre, `INCIERTO`, «pudo haberlo cerrado» y ningún pendiente. Un pendiente que al arrancar recibe `400` o `-1` se borra: no se reintenta para siempre |
+| 412 | El video que lanza o devuelve `null` → `finish` igual, `CERRADA`, `videoParaReprocesar` y una marca en `videos-por-reprocesar/` con la sesión, la lección y el motivo; con resumen, sin marca. Descartar con un paso en vuelo, dos en cola y una nota → solo existen el `POST …/sessions` y ese paso: ni pasos, ni nota, ni `finish`, ni video, ni escrituras, y `terminar` lanza `IllegalStateException`. Descartar antes de que el lector arranque → solo el `POST …/sessions` |
+
+Las 407-412 viven en `Contrato004LeccionEnGraph.kt` y juzgan la lección con el `LearningClient` **real**
+encima de un transporte que responde por ruta y cuenta cuántas llamadas hay en vuelo, un `Almacen` en
+memoria que se cae a pedido, y una crónica donde la red, el disco y el video anotan lo que hacen en el orden
+en que lo hacen: quién fue primero se juzga por posición, no por reloj. El reloj de pared de la lección es
+un número fijo y las esperas del cliente se anotan; el único tiempo real es el tope de vaciado de la 409,
+recortado a 100 ms, como la llamada colgada de la 403.
 
 ### Verificación (2026-09-14)
 
@@ -96,7 +117,7 @@ código real, revertido con copia y sha256; cada uno rompió **solo** su promesa
 
 ## Las fases
 
-### Fase 4A1 — protocolo y cliente en `core` (esta corrida)
+### Fase 4A1 — protocolo y cliente en `core` (hecha)
 
 Todo en `core/src/commonMain/kotlin/graph/core/graph/`, sin dependencias nuevas:
 
@@ -115,10 +136,32 @@ cuerpo binario, DELETE; tope de lectura por llamada).
 
 Pone verdes: **401-406**.
 
+### Fase 4A2 — la lección, el orquestador puro (esta corrida)
+
+En `core/src/commonMain/kotlin/graph/core/graph/learning/`, sin dependencias nuevas, sin Android, sin
+MediaProjection y sin red real:
+
+- `Almacen.kt` — el puerto de disco: `escribirEntero` (todo o nada), `leer`, `listar`, `borrar`. La app lo
+  implementa en 4C (temporal + renombrar).
+- `Leccion.kt` — una enseñanza. `empezar` abre la sesión (sin sesión no se enseña); `pasoObservado` y `nota`
+  solo encolan, y **un solo lector** manda en serie; `terminar` va en este orden: vaciar la cola (tope 30 s)
+  → la lección a disco → el video (una función que devuelve su resumen o `null`) → la nota → el cierre → el
+  resultado «SIN comprobar»; `descartar` no publica nada; `reintentarPendientes` es para el arranque.
+
+Lo que deja en el almacén, un archivo por sesión (el id de sesión, escapado, es el nombre):
+
+| Ruta | Qué | Cuándo |
+|---|---|---|
+| `lecciones/<sesión>.json` | sesión, workflow, descripción, identidad, dónde empezó y terminó, cuándo, cada paso con su resultado, la nota y el motivo si falta algo | al terminar, antes de la red |
+| `cierres-pendientes/<sesión>.json` | `sessionId`, `workflowId`, `cuandoMs` | `finish` no salió tras sus tres intentos |
+| `videos-por-reprocesar/<sesión>.json` | `sessionId`, `leccion`, `motivo`, `cuandoMs` | el video lanzó o no dejó nada |
+
+Pone verdes: **407-412**.
+
 ### Lo que viene (specs y fases propias, sobre este cliente)
 
-4A2 orquestador de la lección · 4B grabador por accesibilidad · 4C enseñanza activa por Graph y
-`pending-finish` · 4D reproductor del plan · 4E `workflow_*` por Graph · 4F comprobar.
+4B grabador por accesibilidad · 4C enseñanza activa por Graph (cablea la lección, el almacén y el video) ·
+4D reproductor del plan · 4E `workflow_*` por Graph · 4F comprobar.
 
 ---
 
@@ -136,6 +179,12 @@ Pone verdes: **401-406**.
 | Cuerpo de `notaDeContexto`, `borrar`, `prependAlignment` | se parsea (`PostAsync<JsonElement>`): un 2xx vacío lanza | no se parsea; solo cuentan el status y un `error` legible | nadie usa ese cuerpo; un 2xx vacío no es un fallo |
 | `X-Miracle-App` y `execution_intent.source` | `windows_app` · `windows-u` | `android_app` · `android_app` | atribución por plataforma |
 | `createdAt` como fecha ISO | se lee | no se lee (queda sin fecha) | Graph manda el entero Neo4j (medido 2026-09-02); leer ISO sin `kotlinx-datetime` es otra dependencia |
+| La lección en disco | se escribe dentro del bloque del video (`GuardarLaLeccion` tras parar el mp4): si parar el video falla, no hay lección | se escribe siempre, después de vaciar los pasos y antes del video, la nota y el cierre | la lección no depende de ninguna llamada |
+| El video que no se procesa | se dice en el log y se cierra con los pasos; el mp4 queda en 🎞 Videos sin marca | se cierra igual y queda una marca en `videos-por-reprocesar/` | sin marca, nadie vuelve a procesarlo (Gemini de Graph sin créditos desde 2026-09-03) |
+| Vaciar la cola al parar | espera 30 s y cierra con el lector todavía vivo: un paso colgado puede llegar después de `finish` | pasados los 30 s se corta el lector antes de escribir la lección; lo que no salió cuenta como no enviado, con su motivo | ningún paso viaja después del cierre, y la lección dice la verdad |
+| Nota de contexto | viaja el resumen del video, no lo hablado | una sola nota con lo hablado y el resumen del video, si hay | lo que el usuario explica de viva voz es el contexto más fiel |
+| Cierres pendientes | un solo `pending-finish.json` que se reescribe entero; al arrancar, todo lo no transitorio se descarta | un archivo por sesión con escritura atómica; `-1` no deja pendiente y al arrancar se descarta; `401`/`403` y sin key se conservan | reescribir una lista entera es perder todas por un corte; una key mal puesta se arregla, la sesión no murió por eso |
+| Descartar | `DiscardAsync` para el video y borra el mp4, sin llamar a Graph, y no tiene llamadores; `WorkflowRecorder` no tiene descarte | `descartar` corta el lector, suelta la cola y la nota; no llama a Graph ni escribe nada | el único «cerrar» que tiene Graph es `finish`, que post-procesa y persiste: cerrar sería publicar |
 
 ---
 
@@ -157,16 +206,23 @@ riesgo abierto.
 - `finish`, `plan` e `interpret-steps` no dependen de Gemini; `upload-token` y `process-video` sí (sin créditos desde 2026-09-03, pueden fallar).
 - Un 2xx con `{"error":"…"}` es un fallo y no un éxito parcial.
 - Las sesiones de aprendizaje viven en memoria serverless: por eso el id va siempre en la ruta; si Graph pierde una sesión entre instancias, el paso responde con un error que este cliente muestra tal cual.
+- Una sesión que nunca recibe `finish` no deja un workflow visible. `PendingFinish.cs` dice que «los pasos ya están guardados» antes del cierre: si es así, una demostración descartada deja en `GET /workflows` un workflow sin resumen con los pasos que alcanzaron a viajar (ver la decisión abierta en 4A2).
+- Un `finish` repetido sobre una sesión que Graph ya cerró (el reintento al arrancar de un cierre que sí había salido) responde un error no transitorio y no cierra ni cobra dos veces.
 
 ---
 
 ## Lo que NO entra, y por qué
 
-- **El PUT del video a Gemini y al archivo**: es binario y va con el orquestador (4A2/4C). `send` ya
-  acepta `PUT`, pero sin cuerpo binario.
-- **`pending-finish.json` y el reintento al arrancar**: disco y ciclo de vida de la app (4C). Este
-  cliente solo distingue `FinishPendiente` para que eso sea posible.
-- **El sondeo de `file-state` (2 s × 90)**: es orquestación (4A2). Aquí, una consulta.
+- **El PUT del video a Gemini y al archivo**: es binario y va con la enseñanza activa (4C). La lección
+  recibe el video como una función que devuelve su resumen o `null`. `send` ya acepta `PUT`, pero sin
+  cuerpo binario.
+- **El `Almacen` de verdad y llamar a `reintentarPendientes` al arrancar**: archivos y ciclo de vida de la
+  app (4C). La lección ya guarda, lee y reintenta los pendientes sobre el puerto.
+- **El sondeo de `file-state` (2 s × 90)**: va dentro de la función del video (4C). Aquí, una consulta.
+- **`interpret-steps` como respaldo del video** (promesa 136 de Windows) y **la skill local**: 4C. La
+  lección devuelve el resumen del video y los pasos con su resultado para que quien empaqueta decida.
+- **Leer la identidad de la pantalla y dónde terminó la demo**: el grabador por accesibilidad (4B); la
+  lección los recibe.
 - **`POST /api/v1/autofill/match` y `GET /api/v1`**: no los usa ninguna fase del sprint 4.
 - **Cablear en la app** (`GraphApp`, `MainActivity`, `ActiveLearning`): 4C.
 - **Nombre puesto por el usuario** (promesa 109 de Windows): disco, 4C.
