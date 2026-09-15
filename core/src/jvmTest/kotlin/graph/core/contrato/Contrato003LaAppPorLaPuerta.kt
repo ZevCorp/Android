@@ -83,6 +83,16 @@ class Contrato003LaAppPorLaPuerta {
 
     private fun List<Fuente>.uno(nombre: String) = single { it.nombre == nombre }
 
+    /** El cuerpo de la función que abre [firma], hasta su llave de cierre: la primera `}` con su misma sangría. */
+    private fun cuerpo(codigo: String, firma: Regex): String {
+        val lineas = codigo.lines()
+        val i = lineas.indexOfFirst { firma.containsMatchIn(it) }
+        if (i < 0) fail("no encuentro «${firma.pattern}»")
+        val sangria = lineas[i].takeWhile { it == ' ' }
+        val fin = (i + 1 until lineas.size).firstOrNull { lineas[it] == "$sangria}" } ?: fail("«${firma.pattern}» no cierra")
+        return lineas.subList(i, fin + 1).joinToString("\n")
+    }
+
     private fun manos(mano: Mano) = ArmadoDeEjecucion.Manos(mano.telefono, mano.gestos, mano.sistema, mano.reproductor)
 
     /* ---------- Las promesas ---------- */
@@ -170,6 +180,33 @@ class Contrato003LaAppPorLaPuerta {
         // Nadie cancela el trabajo de la corrida por su cuenta: el único corte vive en el armado, tras el alto.
         val cortaSinAlto = Regex("""\brunJob\b[^\n]*\.cancel\s*\(|\.cancel\s*\(\s*Paraste\s*\(""")
         assertEquals(emptyList(), fuentes.flatMap { it.donde(cortaSinAlto) }, promesa(308) + " · se cancela la corrida sin pedir el alto")
+
+        // La corrida de la app es la de ESE freno. Sin tarea abierta el alto no arma nada (302): una corrida que no
+        // entrara en Ejecucion.correr no se podría parar. Y con el alto pedido, tras el motor no se reencamina ni se
+        // anticipa: sería seguir, y pagar otra llamada al modelo, después de que la persona dijo basta.
+        val run = cuerpo(app.codigo, Regex("""suspend fun run\s*\(prompt"""))
+        val abre = run.indexOf("Ejecucion.correr(")
+        val motor = run.indexOf("engine.run(")
+        assertTrue(abre >= 0 && motor > abre, promesa(308) + " · GraphApp.run no corre el motor dentro de Ejecucion.correr")
+        val sigueDespues = listOf("round++", "anticipate(").associateWith { run.indexOf(it, motor) }
+        assertTrue(sigueDespues.values.all { it > motor }, promesa(308) + " · GraphApp.run ya no reencamina o anticipa tras el motor: rehaz este juez, $sigueDespues")
+        val mira = run.indexOf("Ejecucion.sigue()", motor)
+        assertTrue(mira > motor && sigueDespues.values.all { mira < it },
+            promesa(308) + " · tras el motor GraphApp.run reencamina o anticipa sin mirar el alto con Ejecucion.sigue()")
+
+        // Ejecucion.parar es el alto de verdad: lo pide al armado y, si la corrida no suelta, corta DESPUÉS del alto.
+        // El freno es uno: la píldora, la notificación y el botón llaman a parar, y no sirve de nada si parar no frena.
+        val ejecucion = fuentes.uno(EJECUCION)
+        val parar = cuerpo(ejecucion.codigo, Regex("""fun parar\s*\(porque"""))
+        val pide = parar.indexOf("armado.parar(porque)")
+        assertTrue(pide >= 0, promesa(308) + " · Ejecucion.parar no pide el alto al armado: $parar")
+        assertTrue(parar.indexOf("cortaSiNoSuelta(") > pide, promesa(308) + " · Ejecucion.parar no corta tras el alto una corrida que no suelta: $parar")
+        assertFalse(".cancel(" in parar, promesa(308) + " · Ejecucion.parar cancela en vez de pedir el alto: $parar")
+        assertTrue(ejecucion.donde(Regex("""fun <T> correr\s*\([^\n]*=\s*armado\.correr\(""")).isNotEmpty(),
+            promesa(308) + " · Ejecucion.correr no abre la tarea del armado")
+        val frenos = fuentes.flatMap { it.donde(Regex("""(?<![\w.])Freno\s*\(""")) }
+        assertEquals(1, frenos.size, promesa(308) + " · la app no tiene un único freno: $frenos")
+        assertTrue(frenos.single().substringBefore(":").endsWith(EJECUCION), promesa(308) + " · el freno no vive en $EJECUCION: $frenos")
 
         // Sin corrida, parar no arma nada ni hay trabajo que cortar.
         val bitacora = Bitacora()
