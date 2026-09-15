@@ -67,6 +67,8 @@ método `promesaNN`); si cambia uno, cambia el otro en el mismo commit.
 | 10 | La superficie se deriva del paquete y la pantalla: origin `android://<paquete>`, pathname `/<pantalla>`, id = origin + pathname. | A |
 | 11 | Un `session` devuelto por Graph se conserva byte a byte y vuelve en el siguiente request aunque contenga JSON, comillas o caracteres no ASCII. | A |
 | 12 | Cada objetivo nuevo abre un hilo nuevo en Graph: el primer turno de cada corrida viaja sin session aunque haya uno de una corrida anterior o uno reanudado. | B |
+| 13 | Un turno de Graph nunca espera más de 6 minutos en total: un fallo de conexión se reintenta, pero una lectura agotada no, porque el turno pudo haberse cobrado. | B · revisión |
+| 14 | Cancelar la corrida durante un POST no se registra como fallo de red ni reintenta. | B · revisión |
 
 **La que cierra el asunto es la 7.** Mientras el cliente mande prompt o catálogo, no es tonto: es
 el cerebro viejo con otro transporte. Las otras diez protegen el camino; la 7 es la que define qué
@@ -77,6 +79,11 @@ Graph siguió el hilo viejo y reabrió la calculadora en vez de los ajustes. Se 
 (`AgentLoop.cs:96`, `session = null` por objetivo). **La promesa 1 no cambia:** su test nunca fijó
 que un hilo reanudado se adopta; esa regla vivía solo en el comentario y en el `begin()` de
 `GraphBrain` («con un hilo reanudado viaja igual»), y es lo que la 12 contradice y retira.
+
+**La 13 y la 14 nacieron de la revisión** (ronda R1): con 30 s para conectar y 5 min para leer por
+intento, cuatro intentos podían tener el turno colgado más de 20 minutos, y una lectura agotada
+se reintentaba aunque Graph ya hubiera recibido (y quizá cobrado) el turno. Y cancelar la corrida
+en medio de un POST se tragaba como HTTP 0: se registraba como red caída y se reintentaba.
 
 ### Con qué se juzga cada una
 
@@ -91,13 +98,15 @@ Ninguna toca red, Android ni disco.
 | 3 | El turno 1 lleva una pantalla con PNG y nadie la pidió → no tiene la clave `screenshot`. Response con `needsScreenshot:false` → el request siguiente tampoco. Response con `needsScreenshot:true` → viaja como base64 del PNG, sin `data:` |
 | 4 | Un response con las siete `kind` conocidas (y `scroll` en los dos sentidos: `down:false` sube) produce sus `AgentAction` con sus campos; un `kind:"teleport"` corrido por el `ExecutionEngine` real (con teléfono y MCP falsos) devuelve en el request siguiente `results:["acción desconocida: teleport"]` |
 | 5 | Un response con los seis campos cargados → el `BrainTurn` los tiene idénticos |
-| 6 | Guion `503, 0, 200` → 3 requests y esperas `[800, 1600]`; cada transitorio solo y primero, seguido de `200` → 2 requests; guion `504, 502, 408, 429` → falla tras 4 requests (el 504 abre: al final pasaba aunque no fuera transitorio); `401` → 1 request y mensaje "la key de graph no vale"; `200` con `error:"sin cupo"` → excepción "sin cupo" |
+| 6 | Guion `503, 0, 200` → 3 requests y esperas `[800, 1600]`; cada transitorio solo y primero, seguido de `200` → 2 requests; guion `504, 502, 408, 429` → falla tras 4 requests (el 504 abre: al final pasaba aunque no fuera transitorio); `503×4` con `error` en el cuerpo → el mensaje final lo trae; `429` con `Retry-After` 4 y 120 → esperas `[4000, 10000]`; un transporte que lanza «no protocol» → el mensaje trae la causa y no la key; `"actions":null` y `"args":{"hour":7}` con HTTP 200 → el mensaje dice `$.actions` / `$.actions[0].args` y trae el cuerpo; `401` → 1 request y mensaje "la key de graph no vale"; `200` con `error:"sin cupo"` → excepción "sin cupo" |
 | 7 | El conjunto de claves del request es subconjunto de `{session, goal, userId, state, results, inform}`, y las de `state` lo son de las nueve de `ScreenState` en `Protocol.cs`: `{screen, uiContext, width, height, screenshot, apps, surfaceId, surfaceOrigin, surfacePathname}` |
 | 8 | `GraphHeaders.build` con y sin email/deviceId; y el request grabado lleva esas cabeceras |
 | 9 | `GraphCredentials.resolve` con prefs, con compilada, con ambas y con ninguna; un `GraphBrain` sin key no hace ningún request y falla con la línea que dice qué falta |
-| 10 | `AndroidSurface.from("com.miui.calculator · Calculadora")` y sin título |
+| 10 | `AndroidSurface.from("com.miui.calculator · Calculadora")` y sin título; `"com.android.settings · 设置"` no queda en `/` y su pathname, decodificado, vuelve a `设置`; `"Configurações"` decodificado conserva todas sus letras; los dos son segmentos de URL válidos |
 | 11 | Response con `session` = un JSON con comillas escapadas, `ñ` y CJK → el request siguiente lleva la misma cadena, comparada tras decodificar el JSON |
 | 12 | (a) Corrida 1 guionada hasta `done` con `session:"s-fin"`, luego `begin("abre los ajustes")` en la misma instancia → el request 3 no tiene `session` y sí `goal`. (b) `resume("s-fin")` y `begin(goal)` → el request 1 no tiene `session` y sí `goal` |
+| 13 | Reloj `TestTimeSource` que avanzan el guion y las esperas. (a) `-1` → 1 request, 0 esperas, mensaje «no respondió a tiempo … no se reintentó para no cobrar dos veces». (b) `0` → se reintenta. (c) `504` que tarda 179,5 s → 2 requests, esperas `[800]`, el turno no pasa de 6 min y el mensaje lo dice. (d) Con 200 ms de turno por delante, un transporte que se cuelga se corta en el tope (real, `withTimeout` de 3 s alrededor para que un fallo no cuelgue el juez) |
+| 14 | El transporte lanza `CancellationException` → sale tal cual de `next`, 1 request, 0 esperas y ninguna línea de log con «transitorio» |
 
 ---
 
@@ -238,6 +247,13 @@ sus keys horneadas. No se planifica aquí: se planifica cuando se haya medido.
 - **Telemetría** (`TelemetryBus`): en Android no existe y no se inventa aquí.
 - **Retirar OPENAI/GEMINI**: fase C, cuando haya paridad medida.
 - **Cambiar el motor** más allá de la rama para `Unknown`: el motor no sabe de Graph, y así sigue.
+
+## Límites conocidos
+
+- **El `goal` puede llevar texto armado por el cliente**, no solo lo que dijo el usuario: el bloque
+  «CONTEXTO INMEDIATO» y el reencaminado de `GraphApp.kt`. No es system prompt ni catálogo de
+  herramientas (la promesa 7 sigue en pie), pero es el cliente decidiendo qué lee el modelo. Se
+  revisa en el sprint 5.
 
 ## Riesgo
 

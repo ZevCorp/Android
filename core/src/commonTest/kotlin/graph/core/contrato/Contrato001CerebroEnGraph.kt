@@ -3,6 +3,7 @@ package graph.core.contrato
 import graph.core.application.ExecutionEngine
 import graph.core.domain.AgentAction
 import graph.core.domain.Gestures
+import graph.core.domain.GraphLog
 import graph.core.domain.Mcp
 import graph.core.domain.Phone
 import graph.core.domain.ScreenState
@@ -17,6 +18,9 @@ import graph.core.graph.TurnJson
 import graph.core.graph.TurnResponse
 import graph.core.graph.TurnTransport
 import graph.core.graph.toBrainTurn
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.jsonArray
@@ -29,13 +33,18 @@ import kotlin.test.assertFalse
 import kotlin.test.assertIs
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
+import kotlin.time.Duration.Companion.milliseconds
+import kotlin.time.Duration.Companion.minutes
+import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 
 /**
  * CONTRATO 001 — EL CEREBRO VIVE EN GRAPH (docs/specs/001-el-cerebro-vive-en-graph.md).
  *
  * Cada `promesaNN` es una fila de la tabla de la spec, con el enunciado literal en [PROMESAS]. Se
  * escribieron ANTES que el código que juzgan: nacieron rojas. Ninguna toca red, Android ni disco:
- * el transporte es un guion y la espera entre reintentos se anota en vez de dormir.
+ * el transporte es un guion, la espera entre reintentos se anota en vez de dormir y el reloj del
+ * turno es un [TestTimeSource] que avanzan el guion y las esperas.
  */
 class Contrato001CerebroEnGraph {
 
@@ -53,6 +62,8 @@ class Contrato001CerebroEnGraph {
             10 to "La superficie se deriva del paquete y la pantalla: origin `android://<paquete>`, pathname `/<pantalla>`, id = origin + pathname.",
             11 to "Un `session` devuelto por Graph se conserva byte a byte y vuelve en el siguiente request aunque contenga JSON, comillas o caracteres no ASCII.",
             12 to "Cada objetivo nuevo abre un hilo nuevo en Graph: el primer turno de cada corrida viaja sin session aunque haya uno de una corrida anterior o uno reanudado.",
+            13 to "Un turno de Graph nunca espera más de 6 minutos en total: un fallo de conexión se reintenta, pero una lectura agotada no, porque el turno pudo haberse cobrado.",
+            14 to "Cancelar la corrida durante un POST no se registra como fallo de red ni reintenta.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -63,12 +74,16 @@ class Contrato001CerebroEnGraph {
         val json: JsonObject get() = TurnJson.parseToJsonElement(body).jsonObject
     }
 
-    /** Devuelve las respuestas en el orden del guion y graba cada request. */
-    class TransporteGuionado(vararg guion: TransportReply) : TurnTransport {
+    /**
+     * Devuelve las respuestas en el orden del guion y graba cada request. [antes] corre con el número de
+     * request antes de responder: ahí el guion avanza el reloj, se cuelga o lanza lo que lanzaría la red.
+     */
+    class TransporteGuionado(vararg guion: TransportReply, val antes: suspend (Int) -> Unit = {}) : TurnTransport {
         val requests = mutableListOf<Grabado>()
         private val cola = ArrayDeque(guion.toList())
         override suspend fun post(url: String, body: String, headers: Map<String, String>): TransportReply {
             requests += Grabado(url, body, headers)
+            antes(requests.size)
             return cola.removeFirstOrNull() ?: error("guion agotado: request nº${requests.size} sin respuesta prevista")
         }
     }
@@ -87,6 +102,8 @@ class Contrato001CerebroEnGraph {
         key: String = "miracle_k",
         email: String? = null,
         deviceId: String? = null,
+        reloj: TestTimeSource = TestTimeSource(),
+        lineas: MutableList<String> = mutableListOf(),
     ) = GraphBrain(
         transport = transporte,
         credentials = { key },
@@ -95,11 +112,24 @@ class Contrato001CerebroEnGraph {
         email = { email },
         deviceId = { deviceId },
         listApps = { listOf("Calculadora", "Ajustes") },
-        sleep = { esperas += it },
+        log = GraphLog { tag, m -> lineas += "[$tag] $m" },
+        sleep = { esperas += it; reloj += it.milliseconds },
+        timeSource = reloj,
     )
 
     private fun JsonObject.texto(k: String) = this[k]?.jsonPrimitive?.content
     private fun JsonObject.lista(k: String) = this[k]?.jsonArray?.map { it.jsonPrimitive.content }
+
+    /** Deshace el percent-encoding de un segmento: `%C3%A7` → `ç`. Si no es reversible, falla la prueba. */
+    private fun decodificar(segmento: String): String {
+        val bytes = mutableListOf<Byte>()
+        var i = 0
+        while (i < segmento.length) {
+            if (segmento[i] == '%') { bytes += segmento.substring(i + 1, i + 3).toInt(16).toByte(); i += 3 }
+            else { bytes += segmento[i].code.toByte(); i++ }
+        }
+        return bytes.toByteArray().decodeToString(throwOnInvalidSequence = true)
+    }
 
     /* ---------- Las promesas ---------- */
 
@@ -269,6 +299,45 @@ class Contrato001CerebroEnGraph {
             val e = assertFailsWith<IllegalStateException>(promesa(6)) { b.next(pantalla, emptyList()) }
             assertEquals("sin cupo", e.message, promesa(6))
         }
+        // Transitorio que no se recupera y trae `error` en el cuerpo: el mensaje final lo dice.
+        run {
+            val saturado = TransportReply(503, """{"error":"graph está saturado"}""")
+            val t = TransporteGuionado(saturado, saturado, saturado, saturado)
+            val b = cerebro(t); b.begin("x")
+            val e = assertFailsWith<IllegalStateException>(promesa(6)) { b.next(pantalla, emptyList()) }
+            assertTrue("graph está saturado" in e.message.orEmpty(), promesa(6) + " · mensaje: ${e.message}")
+        }
+        // 429 con `Retry-After` en segundos: se espera eso, con tope de 10 s, en vez del backoff.
+        run {
+            val esperas = mutableListOf<Long>()
+            val t = TransporteGuionado(
+                TransportReply(429, "", retryAfterSeconds = 4),
+                TransportReply(429, "", retryAfterSeconds = 120),
+                ok("""{"session":"s1"}"""),
+            )
+            val b = cerebro(t, esperas); b.begin("x")
+            b.next(pantalla, emptyList())
+            assertEquals(listOf(4_000L, 10_000L), esperas, promesa(6) + " · Retry-After")
+        }
+        // Una excepción del transporte (una URL mal escrita, por ejemplo) llega con su causa, y sin la key.
+        run {
+            val t = TransporteGuionado(antes = { throw IllegalArgumentException("no protocol: htps//graph.test") })
+            val b = cerebro(t); b.begin("x")
+            val e = assertFailsWith<IllegalStateException>(promesa(6)) { b.next(pantalla, emptyList()) }
+            assertTrue("no protocol: htps//graph.test" in e.message.orEmpty(), promesa(6) + " · mensaje: ${e.message}")
+            assertFalse("miracle_k" in e.message.orEmpty(), promesa(6) + " · el mensaje trae la key")
+        }
+        // JSON válido con otra forma: dice qué no pudo leer y muestra el comienzo del cuerpo.
+        for ((cuerpo, donde) in listOf(
+            """{"session":"s1","actions":null}""" to "\$.actions",
+            """{"session":"s1","actions":[{"kind":"mcp","tool":"set_alarm","args":{"hour":7}}]}""" to "\$.actions[0].args",
+        )) {
+            val t = TransporteGuionado(ok(cuerpo))
+            val b = cerebro(t); b.begin("x")
+            val e = assertFailsWith<IllegalStateException>(promesa(6)) { b.next(pantalla, emptyList()) }
+            assertTrue(donde in e.message.orEmpty(), promesa(6) + " · no dice qué no pudo leer: ${e.message}")
+            assertTrue(cuerpo.take(200) in e.message.orEmpty(), promesa(6) + " · no trae el cuerpo: ${e.message}")
+        }
     }
 
     @Test
@@ -345,6 +414,17 @@ class Contrato001CerebroEnGraph {
         assertEquals("android://com.android.settings/", sinTitulo.id, promesa(10))
 
         assertEquals("/ajustes-de-red", AndroidSurface.from("com.android.settings · Ajustes de red").pathname, promesa(10))
+
+        // Lo que no es ascii no se tira: se codifica (UTF-8, percent-encoding) y se puede deshacer.
+        val segmento = Regex("^/[A-Za-z0-9._~%-]*$")
+        val cjk = AndroidSurface.from("com.android.settings · 设置")
+        assertTrue(cjk.pathname != "/", promesa(10) + " · «设置» quedó en /")
+        assertTrue(segmento.matches(cjk.pathname), promesa(10) + " · no es un segmento de URL: ${cjk.pathname}")
+        assertEquals("设置", decodificar(cjk.pathname.removePrefix("/")), promesa(10))
+        val pt = AndroidSurface.from("com.android.settings · Configurações")
+        assertTrue(segmento.matches(pt.pathname), promesa(10) + " · no es un segmento de URL: ${pt.pathname}")
+        assertEquals("configurações", decodificar(pt.pathname.removePrefix("/")), promesa(10) + " · perdió letras: ${pt.pathname}")
+        assertEquals("android://com.android.settings" + pt.pathname, pt.id, promesa(10))
     }
 
     @Test
@@ -390,6 +470,69 @@ class Contrato001CerebroEnGraph {
             assertNull(r1["session"], promesa(12) + " · el hilo reanudado viajó con session ${r1.texto("session")}")
             assertEquals("abre los ajustes", r1.texto("goal"), promesa(12))
         }
+    }
+
+    @Test
+    fun promesa13() = corre {
+        // Lectura agotada (conectó, mandó el turno y Graph no respondió a tiempo): no se reintenta.
+        run {
+            val esperas = mutableListOf<Long>()
+            val t = TransporteGuionado(TransportReply(-1, "Read timed out"), ok("""{"session":"s1"}"""))
+            val b = cerebro(t, esperas); b.begin("x")
+            val e = assertFailsWith<IllegalStateException>(promesa(13)) { b.next(pantalla, emptyList()) }
+            assertEquals(1, t.requests.size, promesa(13) + " · la lectura agotada se reintentó")
+            assertTrue(esperas.isEmpty(), promesa(13))
+            assertTrue("no respondió a tiempo" in e.message.orEmpty(), promesa(13) + " · mensaje: ${e.message}")
+            assertTrue("no se reintentó para no cobrar dos veces" in e.message.orEmpty(), promesa(13) + " · mensaje: ${e.message}")
+        }
+        // Fallo de conexión: el turno no llegó a Graph, se reintenta.
+        run {
+            val t = TransporteGuionado(TransportReply(0, "Connect timed out"), ok("""{"session":"s1"}"""))
+            val b = cerebro(t); b.begin("x")
+            b.next(pantalla, emptyList())
+            assertEquals(2, t.requests.size, promesa(13) + " · el fallo de conexión no se reintentó")
+        }
+        // El tope cuenta intentos y esperas: cada 504 tarda 179,5 s; la segunda espera ya no cabe en 6 min.
+        run {
+            val reloj = TestTimeSource()
+            val esperas = mutableListOf<Long>()
+            val lento = TransportReply(504, "")
+            val t = TransporteGuionado(lento, lento, lento, lento, antes = { reloj += 179_500.milliseconds })
+            val b = cerebro(t, esperas, reloj = reloj); b.begin("x")
+            val inicio = reloj.markNow()
+            val e = assertFailsWith<IllegalStateException>(promesa(13)) { b.next(pantalla, emptyList()) }
+            assertTrue(inicio.elapsedNow() <= 6.minutes, promesa(13) + " · el turno duró ${inicio.elapsedNow()}")
+            assertEquals(2, t.requests.size, promesa(13) + " · reintentó pasado el tope")
+            assertEquals(listOf(800L), esperas, promesa(13))
+            assertTrue("6 min" in e.message.orEmpty(), promesa(13) + " · mensaje: ${e.message}")
+        }
+        // Un intento no pasa del tope aunque la red se cuelgue: con 200 ms de turno por delante, corta a los 200 ms.
+        run {
+            val reloj = TestTimeSource()
+            val esperas = mutableListOf<Long>()
+            val t = TransporteGuionado(TransportReply(503, ""), ok("""{"session":"s1"}"""), antes = { n ->
+                if (n == 1) reloj += 359.seconds else awaitCancellation()
+            })
+            val b = cerebro(t, esperas, reloj = reloj); b.begin("x")
+            val e = assertFailsWith<IllegalStateException>(promesa(13)) {
+                withTimeout(3.seconds) { b.next(pantalla, emptyList()) }
+            }
+            assertEquals(2, t.requests.size, promesa(13))
+            assertEquals(listOf(800L), esperas, promesa(13))
+            assertTrue("no respondió a tiempo" in e.message.orEmpty(), promesa(13) + " · el intento colgado no se cortó en el tope: ${e.message}")
+        }
+    }
+
+    @Test
+    fun promesa14() = corre {
+        val esperas = mutableListOf<Long>()
+        val lineas = mutableListOf<String>()
+        val t = TransporteGuionado(ok("""{"session":"s1"}"""), antes = { throw CancellationException("el usuario canceló la corrida") })
+        val b = cerebro(t, esperas, lineas = lineas); b.begin("x")
+        assertFailsWith<CancellationException>(promesa(14)) { b.next(pantalla, emptyList()) }
+        assertEquals(1, t.requests.size, promesa(14) + " · la cancelación se reintentó")
+        assertTrue(esperas.isEmpty(), promesa(14))
+        assertTrue(lineas.none { "transitorio" in it }, promesa(14) + " · se registró como fallo de red: $lineas")
     }
 
     /* ---------- Superficie falsa para correr el motor real ---------- */

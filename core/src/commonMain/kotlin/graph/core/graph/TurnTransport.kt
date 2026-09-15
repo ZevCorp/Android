@@ -1,7 +1,10 @@
 package graph.core.graph
 
-/** Lo que volvió del servidor. `status` 0 = no hubo respuesta (sin red, timeout, DNS). */
-class TransportReply(val status: Int, val body: String)
+/**
+ * Lo que volvió del servidor. `status` 0 = no hubo respuesta (sin red, timeout, DNS).
+ * [retryAfterSeconds] = la cabecera `Retry-After` en segundos, si vino.
+ */
+class TransportReply(val status: Int, val body: String, val retryAfterSeconds: Int? = null)
 
 /**
  * La única puerta a la red del cerebro Graph. `core` no sabe de HTTP: la app la implementa con

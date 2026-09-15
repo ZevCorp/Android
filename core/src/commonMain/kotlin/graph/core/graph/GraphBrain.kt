@@ -39,6 +39,8 @@ class GraphBrain(
     private val log: GraphLog = NO_LOG,
     /** Espera entre reintentos; inyectable para que el contrato no duerma. */
     private val sleep: suspend (Long) -> Unit = { delay(it) },
+    /** El reloj del turno; inyectable para que el contrato mida sin esperar. */
+    private val timeSource: TimeSource = TimeSource.Monotonic,
 ) : ThreadedBrain {
 
     private var session: String? = null
@@ -100,7 +102,7 @@ class GraphBrain(
 
         turns++
         val hilo = if (request.session == null) "nuevo" else "continúa" // nunca el contenido del session
-        val started = TimeSource.Monotonic.markNow()
+        val started = timeSource.markNow()
         val reply = post(url, body, headers)
         val response = parse(reply)
         firstTurn = false
