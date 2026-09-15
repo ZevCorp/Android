@@ -15,6 +15,7 @@ import com.zevcorp.graph.platform.GeminiBrain
 import com.zevcorp.graph.platform.GeminiVideo
 import com.zevcorp.graph.platform.LearningInquiry
 import com.zevcorp.graph.platform.GeminiClickDoctor
+import com.zevcorp.graph.platform.GraphTransport
 import com.zevcorp.graph.platform.MemoryDistiller
 import com.zevcorp.graph.platform.OpenAiBrain
 import com.zevcorp.graph.platform.UiBugBus
@@ -46,6 +47,9 @@ import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import graph.core.domain.Workflow
 import graph.core.domain.WorkflowStep
+import graph.core.graph.Credential
+import graph.core.graph.GraphBrain
+import graph.core.graph.GraphCredentials
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -61,8 +65,11 @@ import kotlinx.coroutines.launch
  */
 data class PendingVoice(val kind: String, val app: String, val question: String, val task: String, val at: Long)
 
-/** Proveedor del cerebro de computer-use, conmutable desde el panel de Desarrollador. */
-enum class Provider { GEMINI, OPENAI }
+/**
+ * Proveedor del cerebro de computer-use, conmutable desde el panel de Desarrollador. GRAPH es el
+ * cerebro remoto (docs/specs/001): el teléfono manda la pantalla y ejecuta lo que Graph decide.
+ */
+enum class Provider { GEMINI, OPENAI, GRAPH }
 
 /** Composition root: une el núcleo (motor mixto + MCP) con los adaptadores Android. */
 class GraphApp : Application() {
@@ -101,6 +108,17 @@ class GraphApp : Application() {
     // Esfuerzo de razonamiento del cerebro OpenAI: "low" acelera cada turno (recomendado para
     // computer-use). Tunable desde prefs: minimal (más rápido) … xhigh (más lento y minucioso).
     private val openAiEffort = { prefs.getString("openaiEffort", "low") ?: "low" }
+    // Graph (el cerebro remoto). La key NO pasa por RemoteConfig: Graph ES el backend nuevo, no tiene
+    // sentido que el backend viejo la distribuya. Prefs sobre compilada (promesa 9 de la spec 001).
+    private val graphCredential = { GraphCredentials.resolve(prefs.getString("graphApiKey", ""), DEFAULT_GRAPH_API_KEY) }
+    private val graphBaseUrl = {
+        (prefs.getString("graphBaseUrl", "")?.ifBlank { null } ?: DEFAULT_GRAPH_BASE_URL).trimEnd('/')
+    }
+    private val graphTransport by lazy { GraphTransport() }
+    /** Lo que separa dos usuarios con el mismo email en teléfonos distintos (`X-Miracle-Device-Id`). */
+    private val deviceId by lazy {
+        android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
+    }
 
     private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
 
@@ -296,16 +314,30 @@ class GraphApp : Application() {
      */
     private val subconsciousExecution = false
 
+    /** Apps con launcher, por etiqueta. Una sola consulta al PackageManager por cerebro creado. */
+    private fun installedApps(): List<String> =
+        packageManager.getInstalledApplications(0)
+            .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
+            .map { packageManager.getApplicationLabel(it).toString() }
+
     private fun newBrain(mcp: Mcp): ThreadedBrain {
-        val listApps = {
-            packageManager.getInstalledApplications(0)
-                .filter { packageManager.getLaunchIntentForPackage(it.packageName) != null }
-                .joinToString(", ") { packageManager.getApplicationLabel(it).toString() }
-        }
+        val apps = { installedApps() }
+        val listApps = { apps().joinToString(", ") }
         val mem = { memories.promptBlock() }
         return when (provider()) {
             Provider.OPENAI -> OpenAiBrain(openAiKey, openAiModel, mcp.tools, listApps, mem, openAiEffort)
             Provider.GEMINI -> GeminiBrain(apiKey, model, mcp.tools, listApps, memory = mem)
+            // El cerebro remoto: sin prompt, sin catálogo, sin memoria local. Graph pone todo eso.
+            Provider.GRAPH -> GraphBrain(
+                transport = graphTransport,
+                credentials = { (graphCredential() as? Credential.Ok)?.key ?: "" },
+                baseUrl = graphBaseUrl,
+                userId = { auth.userId.ifBlank { null } },
+                email = { auth.email.ifBlank { null } },
+                deviceId = { deviceId },
+                listApps = apps,
+                log = LogBus,
+            )
         }
     }
 
@@ -397,6 +429,15 @@ class GraphApp : Application() {
     suspend fun run(prompt: String, user: UserChannel?): String {
         val surface = ui ?: return "Activa el servicio de accesibilidad de Ü"
         val service = surface as? GraphAccessibilityService ?: return "Servicio de accesibilidad inactivo"
+        // Sin key de Graph no se instancia el cerebro ni se llama a nadie: se dice qué falta y punto.
+        if (provider() == Provider.GRAPH) {
+            val falta = graphCredential() as? Credential.Falta
+            if (falta != null) {
+                LogBus.log("graph", falta.message)
+                voice.speak(falta.message)
+                return falta.message
+            }
+        }
         // PRESENTACIÓN OBLIGATORIA: antes de la primera ejecución, el usuario dice su nombre (una
         // sola vez). Con él aparece su tarjeta en el panel Android del Provider Studio.
         if (Telemetry.userName.isBlank()) {
@@ -706,5 +747,8 @@ class GraphApp : Application() {
         const val DEFAULT_API_KEY = BuildConfig.DEFAULT_API_KEY
         const val DEFAULT_DEEPGRAM_KEY = BuildConfig.DEFAULT_DEEPGRAM_KEY
         const val DEFAULT_OPENAI_KEY = BuildConfig.DEFAULT_OPENAI_KEY
+        const val DEFAULT_GRAPH_API_KEY = BuildConfig.DEFAULT_GRAPH_API_KEY
+        /** Graph en Vercel; sin barra final. Se sobrescribe con la pref `graphBaseUrl`. */
+        const val DEFAULT_GRAPH_BASE_URL = "https://graph-eight-pied.vercel.app"
     }
 }

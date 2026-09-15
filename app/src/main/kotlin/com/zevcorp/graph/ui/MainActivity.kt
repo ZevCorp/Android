@@ -288,6 +288,18 @@ class MainActivity : Activity(), UserChannel {
         }
         setup.addView(openaiInput)
         setup.gap(dp(8))
+        // Graph (el cerebro remoto): la key y, si hace falta apuntar a otro despliegue, la URL base.
+        val graphKeyInput = EditText(this).apply {
+            hint = "Graph API key (miracle_…)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(app.prefs.getString("graphApiKey", GraphApp.DEFAULT_GRAPH_API_KEY))
+            setTextColor(Palette.text)
+            setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        setup.addView(graphKeyInput)
+        setup.gap(dp(8))
         // SELECTOR DE MODELO (un clic): elige el cerebro de computer-use — Sol/Terra/Luna (OpenAI
         // GPT-5.6) o Gemini 3.5 Flash (Google). Aplica en la próxima ejecución.
         lateinit var modelBtn: TextView
@@ -310,6 +322,8 @@ class MainActivity : Activity(), UserChannel {
         val neoUriInput = neoField("Neo4j URI (opcional: grafo de conocimiento, p.ej. neo4j+s://xxxx.databases.neo4j.io)", "neo4jUri")
         val neoUserInput = neoField("Neo4j usuario (normalmente neo4j)", "neo4jUser")
         val neoPassInput = neoField("Neo4j contraseña", "neo4jPass", password = true)
+        val graphUrlInput = neoField("Graph URL (opcional; por defecto ${GraphApp.DEFAULT_GRAPH_BASE_URL})", "graphBaseUrl")
+        setup.addView(graphUrlInput); setup.gap(dp(8))
         setup.addView(neoUriInput); setup.gap(dp(8))
         setup.addView(neoUserInput); setup.gap(dp(8))
         setup.addView(neoPassInput); setup.gap(dp(8))
@@ -319,6 +333,8 @@ class MainActivity : Activity(), UserChannel {
                 .putString("apiKey", keyInput.text.toString().trim())
                 .putString("deepgramKey", deepgramInput.text.toString().trim())
                 .putString("openaiKey", openaiInput.text.toString().trim())
+                .putString("graphApiKey", graphKeyInput.text.toString().trim())
+                .putString("graphBaseUrl", graphUrlInput.text.toString().trim())
                 .putString("neo4jUri", neoUriInput.text.toString().trim())
                 .putString("neo4jUser", neoUserInput.text.toString().trim())
                 .putString("neo4jPass", neoPassInput.text.toString().trim())
@@ -1202,21 +1218,24 @@ class MainActivity : Activity(), UserChannel {
     }
 
     /** Etiqueta del botón de modelo según lo elegido (proveedor + nivel GPT-5.6). */
-    private fun modelLabel(): String =
-        if (app.prefs.getString("provider", "GEMINI") == "OPENAI")
-            "Modelo: " + when (app.prefs.getString("openaiModel", "gpt-5.6-terra")) {
+    private fun modelLabel(): String = when (app.prefs.getString("provider", "GEMINI")) {
+        "OPENAI" -> "Modelo: " + when (app.prefs.getString("openaiModel", "gpt-5.6-terra")) {
                 "gpt-5.6-sol" -> "Sol ☀️"
                 "gpt-5.6-luna" -> "Luna 🌙"
                 else -> "Terra 🌍"
             } + " (GPT-5.6)  ⚙"
-        else "Modelo: Gemini 3.5 Flash  ⚙"
+        "GRAPH" -> "Modelo: Graph (cerebro remoto)  ⚙"
+        else -> "Modelo: Gemini 3.5 Flash  ⚙"
+    }
 
     /**
      * Selector de MODELO del cerebro de computer-use. Sol/Terra/Luna conmutan el proveedor a OpenAI
      * (GPT-5.6) y fijan el nivel; Gemini 3.5 Flash vuelve a Google. Aplica en la próxima ejecución.
      */
     private fun openModelChooser(onChange: () -> Unit) {
-        val openai = app.prefs.getString("provider", "GEMINI") == "OPENAI"
+        val chosen = app.prefs.getString("provider", "GEMINI")
+        val openai = chosen == "OPENAI"
+        val graph = chosen == "GRAPH"
         val oaModel = app.prefs.getString("openaiModel", "gpt-5.6-terra")
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
@@ -1236,6 +1255,10 @@ class MainActivity : Activity(), UserChannel {
             app.prefs.edit().putString("provider", "GEMINI").putString("model", "gemini-3.5-flash").apply()
             onChange(); log("Modelo → Gemini 3.5 Flash (aplica en la próxima ejecución)"); dialog.dismiss()
         }
+        fun chooseGraph() {
+            app.prefs.edit().putString("provider", "GRAPH").apply()
+            onChange(); log("Modelo → Graph, el cerebro remoto (aplica en la próxima ejecución)"); dialog.dismiss()
+        }
         fun mark(active: Boolean, label: String) = if (active) "$label  ✓" else label
         listOf(
             Triple("gpt-5.6-sol", "Sol ☀️", "el más potente, mejor computer-use"),
@@ -1246,7 +1269,9 @@ class MainActivity : Activity(), UserChannel {
             body.addView(button(mark(on, "$name — $desc"), primary = on) { chooseOpenAi(id) })
             body.gap(dp(10))
         }
-        body.addView(button(mark(!openai, "Gemini 3.5 Flash — Google"), primary = !openai) { chooseGemini() })
+        body.addView(button(mark(!openai && !graph, "Gemini 3.5 Flash — Google"), primary = !openai && !graph) { chooseGemini() })
+        body.gap(dp(10))
+        body.addView(button(mark(graph, "Graph — cerebro remoto (el teléfono solo ejecuta)"), primary = graph) { chooseGraph() })
         body.gap(dp(12))
         body.addView(caption("Sol/Terra/Luna requieren tu OpenAI API key en la configuración."))
         // Velocidad de razonamiento (solo OpenAI): menor esfuerzo = menos latencia por turno.

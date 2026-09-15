@@ -1,6 +1,6 @@
 # Plan de implementación: el cerebro vive en Graph — Android pasa a ser cliente tonto
 
-Estado: **fase A implementada** (2026-09-14; promesas 1-11 verdes) · fase B pendiente · Nace de leer el cliente Windows (`U-Windows-App`) que ya
+Estado: **fases A y B implementadas** (2026-09-14; promesas 1-11 verdes; corrida a mano en el teléfono contra Graph real) · Nace de leer el cliente Windows (`U-Windows-App`) que ya
 habla con Graph · Rama: `yokh/cliente-graph`
 
 Hoy el Android piensa solo: `OpenAiBrain` y `GeminiBrain` (en `app/…/platform/`) arman el system
@@ -111,13 +111,74 @@ acción desconocida devuelva texto sin ejecutar nada (promesa 4). No existía un
 
 Pone verdes: **1-11**.
 
-### Fase B — el cableado en `app` (otra corrida)
+### Fase B — el cableado en `app` (hecha, 2026-09-14)
 
-`Provider.GRAPH` en el enum y en el panel de desarrollador; `graphApiKey` y `graphBaseUrl` en
-`apikey.properties`/prefs; un `TurnTransport` con `HttpURLConnection` (timeout 5 min, como
-Windows); `X-Miracle-Device-Id` desde `Settings.Secure.ANDROID_ID`; `listApps` desde el
-`PackageManager`; el portero (`pre-push`) corre `scripts/contrato.sh`. Sin promesas nuevas salvo que
-la prueba a mano las pida.
+Lo que quedó, archivo por archivo:
+
+- `app/…/GraphApp.kt` — `Provider.GRAPH`; la key se resuelve **prefs `graphApiKey` sobre
+  `DEFAULT_GRAPH_API_KEY`** con `GraphCredentials` (no pasa por `RemoteConfig`: Graph ES el backend
+  nuevo); `graphBaseUrl` = pref o `https://graph-eight-pied.vercel.app`; `userId`/`email` de la sesión
+  Supabase si existe; `deviceId` = `Settings.Secure.ANDROID_ID`; `listApps` del `PackageManager`
+  (una consulta por cerebro, compartida con los otros dos proveedores). Con `Falta`, `run()` no
+  instancia el cerebro: loguea `[graph]`, lo dice por voz y devuelve la línea (promesa 9).
+- `app/…/platform/GraphTransport.kt` — el `TurnTransport` real: `HttpURLConnection`, 30 s conectar
+  / 5 min leer, cancelable (`disconnect()` al cancelar), cuerpo también en errores, status 0 sin red.
+- `app/…/ui/MainActivity.kt` — «Graph — cerebro remoto» en el selector de modelo; campos
+  `graphApiKey` (password) y `graphBaseUrl` en el panel; «Guardar keys» los persiste.
+- `app/build.gradle.kts` — `graphApiKey` de `apikey.properties` o env `GRAPH_API_KEY` (la misma
+  variable que Windows) → `BuildConfig.DEFAULT_GRAPH_API_KEY`.
+- `.githooks/pre-push` — el portero: compila release, corre `scripts/contrato.sh` y exige promesa
+  propia a toda rama que cambie código. `docs/como-trabajamos.md` cuenta el método.
+
+Sin promesas nuevas: la prueba a mano no pidió ninguna del lado del cliente. Sí dejó **un hallazgo
+del backend** (abajo) que pide una decisión antes de convertirse en promesa 12.
+
+### Nivel 4 — corrida a mano (2026-09-14, Xiaomi M2101K7BL · Android 12 · APK release 0.42)
+
+Proveedor elegido desde el panel de desarrollador (triple toque arriba-derecha → «Modelo» → «Graph»).
+Tarea escrita en el campo «Pídeme algo». Evidencia de `adb logcat -s Graph:D`:
+
+**Corrida 1 — «abre la calculadora»** (hilo fresco: la app recién instalada)
+
+```
+21:23:25.797 [graph] turno 1 · HTTP 200 · 5338ms · 1 acciones
+21:23:25.798 [run] turno 1 · 7063ms · 📝 texto · "com.miui.home · Launcher del sistema" · decide: MCP launch_app {app=Calculadora}
+21:23:27.108 [api] launch_app → com.miui.calculator
+21:23:31.232 [graph] turno 2 · HTTP 200 · 3240ms · 0 acciones
+21:23:31.233 [run] ■ 2 turnos · 1 acciones · 12s · Listo, calculadora abierta.
+mCurrentFocus=Window{4c3fbde u0 com.miui.calculator/com.miui.calculator.cal.CalculatorActivity}
+```
+
+Graph aceptó la key y `X-Miracle-App: android_app` (HTTP 200 en todos los turnos); resolvió
+`launch_app` con la etiqueta exacta del `apps` que mandó el cliente; la calculadora quedó en foco.
+
+**Corrida 2 — «abre los ajustes»** (hilo REANUDADO: `resume = true` con el `session` de la corrida 1)
+
+```
+21:25:00.937 [graph] turno 1 · HTTP 200 · 4330ms · 1 acciones
+21:25:00.938 [run] turno 1 · … · decide: MCP launch_app {app=Calculator}
+21:25:02.288 [api] no encontré la app "Calculator"
+21:25:07.695 [graph] turno 2 · HTTP 200 · 4300ms · 0 acciones
+21:25:16.911 [graph] turno 3 · HTTP 200 · 6599ms · 1 acciones   (computer-use tap)
+21:25:27.362 [graph] turno 4 · HTTP 200 · 6894ms · 2 acciones   (tap + wait)
+21:25:35.154 [graph] turno 5 · HTTP 200 · 4395ms · 0 acciones
+21:25:35.154 [run] ■ 5 turnos · 4 acciones · 39s · Ahora sí: la calculadora está abierta.
+mCurrentFocus=Window{19cbf3c u0 com.miui.calculator/com.miui.calculator.cal.CalculatorActivity}
+```
+
+**Hallazgo (el riesgo que esta spec dejó para medir):** con `session` del hilo anterior **y**
+`goal` nuevo en el mismo request, Graph siguió el hilo viejo e ignoró el objetivo nuevo: abrió la
+calculadora (esta vez con la etiqueta en inglés, «Calculator», que no existe en el teléfono, y luego
+por computer-use) en vez de los ajustes. Windows no tiene este problema porque **nunca reanuda**:
+`AgentLoop.cs:96` arranca `session = null` en cada objetivo y el `goal` viaja solo cuando
+`session == null`. El Android sí reanuda (`GraphApp.newSession(resume = true)`) para dar continuidad
+entre activaciones, y esa continuidad es la que Graph no honra. Una sola corrida; suficiente para
+no cerrar los ojos, insuficiente para llamarlo ley. Pendiente de decisión (ver el reporte de la
+fase B); si se decide espejar Windows, entra como **promesa 12** con su test antes que el código.
+
+Efecto colateral visto, fuera de esta spec: el destilador de memoria y la anticipación siguen
+llamando a Gemini y hoy devuelven `HTTP 429` (créditos agotados). No afectan al turno de Graph;
+son la fase C.
 
 ### Fase C — paridad y retiro (spec aparte)
 
@@ -150,4 +211,4 @@ sus keys horneadas. No se planifica aquí: se planifica cuando se haya medido.
 El mayor es que Graph cambie el contrato y este cliente no se entere: por eso `ignoreUnknownKeys`
 (un campo nuevo no rompe) y por eso el `error` del cuerpo se lee siempre, también con HTTP 200.
 Lo que no cubre este contrato es la semántica del backend (qué hace Graph con `session` + `goal`
-a la vez, por ejemplo): eso se mide en la fase B contra el backend real.
+a la vez, por ejemplo): eso se midió en la fase B contra el backend real — ver «Nivel 4».
