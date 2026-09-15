@@ -17,6 +17,9 @@ val defaultDeepgramKey = cfg("deepgramKey", "GRAPH_DEEPGRAM_KEY")
 // Key de OpenAI (GPT-5.6 computer-use + voz): incrustada para que el switch de proveedor funcione
 // recién instalado; se sobrescribe desde el panel de Desarrollador (prefs).
 val defaultOpenAiKey = cfg("openaiKey", "GRAPH_OPENAI_KEY")
+// Key de Graph (el cerebro remoto, proveedor GRAPH): la misma variable de entorno que usa el cliente
+// Windows. Se hornea para que el proveedor funcione recién instalado; prefs `graphApiKey` la gana.
+val defaultGraphApiKey = cfg("graphApiKey", "GRAPH_API_KEY")
 // Grafo de conocimiento Neo4j Aura: credenciales de CONEXIÓN A LA BD (no las de la API de gestión)
 // incrustadas para todos los usuarios. Su alcance es solo leer/escribir esa base — nunca gestionar
 // instancias. Se sobrescriben desde la UI si el usuario pone las suyas.
@@ -36,6 +39,7 @@ android {
         buildConfigField("String", "DEFAULT_API_KEY", "\"$defaultApiKey\"")
         buildConfigField("String", "DEFAULT_DEEPGRAM_KEY", "\"$defaultDeepgramKey\"")
         buildConfigField("String", "DEFAULT_OPENAI_KEY", "\"$defaultOpenAiKey\"")
+        buildConfigField("String", "DEFAULT_GRAPH_API_KEY", "\"$defaultGraphApiKey\"")
         buildConfigField("String", "DEFAULT_NEO4J_URI", "\"$defaultNeo4jUri\"")
         buildConfigField("String", "DEFAULT_NEO4J_USER", "\"$defaultNeo4jUser\"")
         buildConfigField("String", "DEFAULT_NEO4J_PASS", "\"$defaultNeo4jPass\"")

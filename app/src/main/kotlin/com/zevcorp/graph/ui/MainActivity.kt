@@ -32,6 +32,7 @@ import com.zevcorp.graph.platform.UiBugBus
 import com.zevcorp.graph.platform.Release
 import com.zevcorp.graph.platform.Updater
 import com.zevcorp.graph.platform.UsageU
+import com.zevcorp.graph.voice.live.VozEnVivoDev
 import graph.core.domain.LearnedTool
 import graph.core.domain.UserChannel
 import graph.core.domain.Workflow
@@ -66,6 +67,11 @@ class MainActivity : Activity(), UserChannel {
     private val secretTapTimes = mutableListOf<Long>()
     /** Acceso a estadísticas de uso con el que se dibujó la gráfica (para recrear al concederlo). */
     private var builtWithAccess = false
+    /**
+     * Lo que se para cuando la pantalla deja de verse o se destruye: la voz en vivo de prueba, que corre en su propio
+     * alcance. Fuera de la pantalla Android silencia el micrófono, y la sesión seguiría abierta gastando segundos.
+     */
+    private val alOcultar = mutableListOf<() -> Unit>()
 
     /* Actualizaciones */
     private var updStatus: TextView? = null
@@ -288,6 +294,21 @@ class MainActivity : Activity(), UserChannel {
         }
         setup.addView(openaiInput)
         setup.gap(dp(8))
+        // Graph (el cerebro remoto): la key y, si hace falta apuntar a otro despliegue, la URL base.
+        // El campo muestra solo la key que el usuario guardó, nunca la horneada: precargarla la
+        // guardaría como pref al tocar «Guardar keys», y la pref manda sobre la compilada, así que una
+        // key rotada en un APK futuro no ganaría nunca.
+        val graphKeyInput = EditText(this).apply {
+            hint = "Graph API key (vacío = usa la del build)"
+            inputType = InputType.TYPE_CLASS_TEXT or InputType.TYPE_TEXT_VARIATION_PASSWORD
+            setText(app.prefs.getString("graphApiKey", ""))
+            setTextColor(Palette.text)
+            setHintTextColor(Palette.textDim)
+            background = rounded(Palette.bg, dp(12).toFloat(), Palette.cardBorder)
+            setPadding(dp(12), dp(10), dp(12), dp(10))
+        }
+        setup.addView(graphKeyInput)
+        setup.gap(dp(8))
         // SELECTOR DE MODELO (un clic): elige el cerebro de computer-use — Sol/Terra/Luna (OpenAI
         // GPT-5.6) o Gemini 3.5 Flash (Google). Aplica en la próxima ejecución.
         lateinit var modelBtn: TextView
@@ -310,15 +331,21 @@ class MainActivity : Activity(), UserChannel {
         val neoUriInput = neoField("Neo4j URI (opcional: grafo de conocimiento, p.ej. neo4j+s://xxxx.databases.neo4j.io)", "neo4jUri")
         val neoUserInput = neoField("Neo4j usuario (normalmente neo4j)", "neo4jUser")
         val neoPassInput = neoField("Neo4j contraseña", "neo4jPass", password = true)
+        val graphUrlInput = neoField("Graph URL (opcional; por defecto ${GraphApp.DEFAULT_GRAPH_BASE_URL})", "graphBaseUrl")
+        setup.addView(graphUrlInput); setup.gap(dp(8))
         setup.addView(neoUriInput); setup.gap(dp(8))
         setup.addView(neoUserInput); setup.gap(dp(8))
         setup.addView(neoPassInput); setup.gap(dp(8))
         val setupRow = row()
         setupRow.addView(button("Guardar keys") {
+            val graphKey = graphKeyInput.text.toString().trim()
             app.prefs.edit()
                 .putString("apiKey", keyInput.text.toString().trim())
                 .putString("deepgramKey", deepgramInput.text.toString().trim())
                 .putString("openaiKey", openaiInput.text.toString().trim())
+                // Vacío borra la pref: vuelve a mandar la key del build.
+                .also { if (graphKey.isEmpty()) it.remove("graphApiKey") else it.putString("graphApiKey", graphKey) }
+                .putString("graphBaseUrl", graphUrlInput.text.toString().trim())
                 .putString("neo4jUri", neoUriInput.text.toString().trim())
                 .putString("neo4jUser", neoUserInput.text.toString().trim())
                 .putString("neo4jPass", neoPassInput.text.toString().trim())
@@ -456,6 +483,37 @@ class MainActivity : Activity(), UserChannel {
             setOnTouchListener { v, _ -> v.parent.requestDisallowInterceptTouchEvent(true); false }
         }
         dev.addView(logScroll, LinearLayout.LayoutParams(-1, dp(260)))
+        // VOZ EN VIVO DE PRUEBA (docs/specs/002, fase B1b): SOLO en el panel de desarrollador hasta pasar el nivel 4. La
+        // rama es explícita a propósito: la promesa 246 la lee. Al ocultar la pantalla la voz se detiene en su alcance.
+        if (mode == MODE_DEV) {
+            val voz = VozEnVivoDev(applicationContext)
+            val vozLinea = caption(voz.estado.value.linea).apply {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+            }
+            val vozBoton = button("Voz en vivo (prueba)") {
+                when {
+                    voz.estado.value.fase != VozEnVivoDev.Fase.PARADA -> voz.stop()
+                    checkSelfPermission(android.Manifest.permission.RECORD_AUDIO) !=
+                        android.content.pm.PackageManager.PERMISSION_GRANTED -> {
+                        requestPermissions(arrayOf(android.Manifest.permission.RECORD_AUDIO), REQ_VOZ_EN_VIVO)
+                        vozLinea.text = "Voz en vivo: falta el permiso del micrófono; concédelo y vuelve a tocar"
+                    }
+                    else -> voz.start()
+                }
+            }
+            dev.gap(dp(10))
+            dev.addView(vozBoton)
+            dev.gap(dp(4))
+            dev.addView(vozLinea)
+            alOcultar += { voz.stop() }
+            scope.launch {
+                voz.estado.collect { e ->
+                    vozLinea.text = e.linea
+                    vozBoton.text = if (e.fase == VozEnVivoDev.Fase.PARADA) "Voz en vivo (prueba)" else "Parar la voz en vivo"
+                }
+            }
+        }
         root.addView(dev)
         root.gap(dp(14))
 
@@ -705,6 +763,12 @@ class MainActivity : Activity(), UserChannel {
         }
         if (::mcpPanel.isInitialized) refreshMcpPanel() // recién llegado de enseñar en la burbuja
         if (::workflowPanel.isInitialized) refreshWorkflowPanel()
+    }
+
+    override fun onStop() {
+        super.onStop()
+        // Se para al dejar de verse, no al perder el foco: el diálogo del permiso del micrófono pausa pero no detiene.
+        alOcultar.forEach { it() }
     }
 
     override fun onPause() {
@@ -1202,22 +1266,25 @@ class MainActivity : Activity(), UserChannel {
     }
 
     /** Etiqueta del botón de modelo según lo elegido (proveedor + nivel GPT-5.6). */
-    private fun modelLabel(): String =
-        if (app.prefs.getString("provider", "GEMINI") == "OPENAI")
-            "Modelo: " + when (app.prefs.getString("openaiModel", "gpt-5.6-terra")) {
+    private fun modelLabel(): String = when (app.prefs.getString("provider", "GEMINI")) {
+        "OPENAI" -> "Modelo: " + when (app.prefs.getString("openaiModel", "gpt-5.6-luna")) {
                 "gpt-5.6-sol" -> "Sol ☀️"
                 "gpt-5.6-luna" -> "Luna 🌙"
                 else -> "Terra 🌍"
             } + " (GPT-5.6)  ⚙"
-        else "Modelo: Gemini 3.5 Flash  ⚙"
+        "GRAPH" -> "Modelo: Graph (cerebro remoto)  ⚙"
+        else -> "Modelo: Gemini 3.5 Flash  ⚙"
+    }
 
     /**
      * Selector de MODELO del cerebro de computer-use. Sol/Terra/Luna conmutan el proveedor a OpenAI
      * (GPT-5.6) y fijan el nivel; Gemini 3.5 Flash vuelve a Google. Aplica en la próxima ejecución.
      */
     private fun openModelChooser(onChange: () -> Unit) {
-        val openai = app.prefs.getString("provider", "GEMINI") == "OPENAI"
-        val oaModel = app.prefs.getString("openaiModel", "gpt-5.6-terra")
+        val chosen = app.prefs.getString("provider", "GEMINI")
+        val openai = chosen == "OPENAI"
+        val graph = chosen == "GRAPH"
+        val oaModel = app.prefs.getString("openaiModel", "gpt-5.6-luna")
         val body = LinearLayout(this).apply {
             orientation = LinearLayout.VERTICAL
             background = rounded(Palette.bg, dp(24).toFloat(), Palette.cardBorder)
@@ -1236,6 +1303,10 @@ class MainActivity : Activity(), UserChannel {
             app.prefs.edit().putString("provider", "GEMINI").putString("model", "gemini-3.5-flash").apply()
             onChange(); log("Modelo → Gemini 3.5 Flash (aplica en la próxima ejecución)"); dialog.dismiss()
         }
+        fun chooseGraph() {
+            app.prefs.edit().putString("provider", "GRAPH").apply()
+            onChange(); log("Modelo → Graph, el cerebro remoto (aplica en la próxima ejecución)"); dialog.dismiss()
+        }
         fun mark(active: Boolean, label: String) = if (active) "$label  ✓" else label
         listOf(
             Triple("gpt-5.6-sol", "Sol ☀️", "el más potente, mejor computer-use"),
@@ -1246,7 +1317,9 @@ class MainActivity : Activity(), UserChannel {
             body.addView(button(mark(on, "$name — $desc"), primary = on) { chooseOpenAi(id) })
             body.gap(dp(10))
         }
-        body.addView(button(mark(!openai, "Gemini 3.5 Flash — Google"), primary = !openai) { chooseGemini() })
+        body.addView(button(mark(!openai && !graph, "Gemini 3.5 Flash — Google"), primary = !openai && !graph) { chooseGemini() })
+        body.gap(dp(10))
+        body.addView(button(mark(graph, "Graph — cerebro remoto (el teléfono solo ejecuta)"), primary = graph) { chooseGraph() })
         body.gap(dp(12))
         body.addView(caption("Sol/Terra/Luna requieren tu OpenAI API key en la configuración."))
         // Velocidad de razonamiento (solo OpenAI): menor esfuerzo = menos latencia por turno.
@@ -1473,6 +1546,7 @@ class MainActivity : Activity(), UserChannel {
     override fun onDestroy() {
         super.onDestroy()
         recognizer?.destroy(); recognizer = null
+        alOcultar.forEach { it() }; alOcultar.clear()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -1514,5 +1588,7 @@ class MainActivity : Activity(), UserChannel {
         const val MODE_CLOUD = "cloud"
         const val MODE_USER = "user"
         const val MODE_DEV = "dev"
+        /** Pedido del permiso del micrófono desde el botón de la voz en vivo de prueba. */
+        const val REQ_VOZ_EN_VIVO = 7
     }
 }

@@ -120,7 +120,7 @@ class Mcp(
             "JAMÁS pagues, envíes ni radiques ningún formulario/recurso/derecho de petición en nombre del " +
             "usuario — es una gestión legal ante un tercero y debe hacerla él mismo. Solo informa lo que " +
             "encontraste y, si lo pide, redacta el TEXTO del derecho de petición (por chat o con " +
-            "send_email/share_text) para que él lo revise y presente.")) { system.openUrl("https://www.simit.org.co/") },
+            "send_email/share_text) para que él lo revise y presente.") { system.openUrl("https://www.simit.org.co/") },
         McpTool("open_maps", "Abre Maps en un lugar o búsqueda.",
             listOf(McpParam("query", "Lugar o búsqueda"))) { system.maps(it.str("query")) },
         McpTool("directions", "Abre la navegación hacia un destino.",
@@ -161,10 +161,11 @@ class Mcp(
         ) { args ->
             val labels = (args["taps"] ?: "").split(',').map { it.trim() }.filter { it.isNotBlank() }
             val failed = mutableListOf<String>()
-            for (label in labels) {
+            for ((i, label) in labels.withIndex()) {
                 if (player?.tapLabel(label) != true) {
                     failed += label
-                    log.log("mcp", "🧩 ${sanitize(lt.name)}: falló el paso \"$label\"")
+                    // La etiqueta es lo que la pantalla muestra: va al modelo en el detalle, al log solo su número (spec 003, promesa 317).
+                    log.log("mcp", "🧩 ${sanitize(lt.name)}: falló el paso ${i + 1} de ${labels.size}")
                 }
                 delay(stepDelay())
             }

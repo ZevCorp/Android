@@ -7,6 +7,7 @@ import graph.core.domain.Workflow
 import graph.core.domain.WorkflowExecutor
 import graph.core.domain.WorkflowOutcome
 import graph.core.domain.WorkflowStep
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 
 private val NO_LOG = GraphLog { _, _ -> }
@@ -60,10 +61,10 @@ class WorkflowRunner(
                 mode?.executing(true)
                 if (player.tapLabel(step.target)) {
                     subCount++
-                    log.log("workflow", "  $n/${steps.size} 🧩 subconsciente \"${step.target}\"")
+                    log.log("workflow", "  $n/${steps.size} 🧩 subconsciente")
                 } else {
                     failed += "step $n (${step.action})"
-                    log.log("workflow", "  $n/${steps.size} \"${step.target}\" estaba pero no se pudo tocar")
+                    log.log("workflow", "  $n/${steps.size} su etiqueta estaba pero no se pudo tocar")
                 }
                 i++
                 delay(stepDelay())
@@ -78,7 +79,7 @@ class WorkflowRunner(
                 }
                 if (jump != null) {
                     skipped += jump - i
-                    log.log("workflow", "  ⏭ salto ${jump - i} paso(s) ya cumplido(s) (el estado avanzó a \"${steps[jump].target}\")")
+                    log.log("workflow", "  ⏭ salto ${jump - i} paso(s) ya cumplido(s): el estado avanzó al paso ${jump + 1}")
                     i = jump
                     continue
                 }
@@ -86,11 +87,17 @@ class WorkflowRunner(
 
             // 3) Ni este ni un paso posterior aparecen (o es un paso consciente): mini-motor Gemini.
             mode?.executing(false)
-            val ok = runCatching { conscious(workflow, step, context) }
-                .getOrElse { log.log("workflow", "  $n consciente falló: ${it.message}"); false }
+            val ok = try {
+                conscious(workflow, step, context)
+            } catch (ce: CancellationException) {
+                throw ce // parar (o cancelar) dentro del paso corta el workflow entero: no es un paso fallido (spec 003, promesa 316)
+            } catch (t: Throwable) {
+                log.log("workflow", "  $n consciente falló (${t::class.simpleName})")
+                false
+            }
             if (ok) {
                 consCount++
-                log.log("workflow", "  $n/${steps.size} 👁 consciente: ${step.action}")
+                log.log("workflow", "  $n/${steps.size} 👁 consciente")
             } else {
                 failed += "step $n (${step.action})"
             }
@@ -103,7 +110,9 @@ class WorkflowRunner(
             if (skipped > 0) append(" · $skipped ya cumplidos")
             if (failed.isNotEmpty()) append(" · fallaron: ${failed.joinToString(", ")}")
         }
-        log.log("workflow", "■ $detail")
+        // El detalle nombra las acciones de los pasos: va al modelo. El log sale del teléfono (spec 003, promesa 317).
+        log.log("workflow", "■ \"${workflow.name}\": $subCount subconscientes + $consCount conscientes" +
+            (if (skipped > 0) " · $skipped ya cumplidos" else "") + (if (failed.isNotEmpty()) " · fallaron ${failed.size}" else ""))
         return WorkflowOutcome(failed.isEmpty(), detail)
     }
 }

@@ -27,6 +27,7 @@ import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.zevcorp.graph.Ejecucion
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
@@ -634,7 +635,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                     setPadding(service.dp(8), 0, 0, 0)
                 }
                 addView(execStatusText)
-                setOnClickListener { app.stopExecution(); toast("Detenido") }
+                setOnClickListener { Ejecucion.parar("píldora"); toast("Detenido") } // el mismo alto que la notificación
             }
             val micD = service.dp(40)
             val mic = IconView(service, Icon.MIC, tint = Color.WHITE).apply {
