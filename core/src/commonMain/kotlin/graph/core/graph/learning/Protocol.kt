@@ -171,9 +171,9 @@ class SessionInfo(
 @Serializable
 class StepRequest(
     /**
-     * `input` · `select` · `click` · `navigation`: el vocabulario de Graph (`WorkflowExecutor` descarta del
-     * plan cualquier otro). `key` y `scroll` viajan como texto libre: qué hace Graph con ellos está en
-     * los supuestos sin verificar de la spec 004.
+     * `input` · `select` · `click` · `navigation` · `key` · `scroll`: el vocabulario de Graph. Al grabar acepta cualquier texto que
+     * no esté vacío (`WorkflowLearner.js:54`); en el plan deja `navigation` con `url`, `click`, `input` y `select` con `selector`, y
+     * `key` y `scroll` con `value` o `selector`, y descarta cualquier otro tipo (`WorkflowExecutor.js:14-25`).
      */
     val actionType: String,
     /** Selector re-ejecutable en esta superficie; para Graph, opaco. */
@@ -270,6 +270,33 @@ class FinishResponse(
 
 /* ────────────────────────── Ejecución (workflows) ────────────────────────── */
 
+/**
+ * `GET /api/v1/workflows/:id`, leído solo para saber si `finish` ya cerró la sesión (421). El workflow entero —con `variables`
+ * como LISTA de objetos (`src/domain/entities/Workflow.js:35-92`) y las fechas como entero Neo4j— no se modela aquí.
+ */
+@Serializable
+class WorkflowConEstado(val workflow: EstadoDeWorkflow? = null)
+
+/**
+ * Lo que `finish` le deja a un workflow: `status: "done"` y `completedAt` (`Neo4jWorkflowRepository.js:605`). Una sesión sin cerrar
+ * está en `recording` (`:284`) y trae `completedAt` nulo.
+ */
+@Serializable
+class EstadoDeWorkflow(
+    @Serializable(with = VacioEsAusente::class) val status: String? = null,
+    @Serializable(with = JsonVacioEsAusente::class) val completedAt: JsonElement? = null,
+)
+
+/**
+ * `POST /api/v1/workflows/:id/prepend-alignment`, que ignora el cuerpo: `already_present` si el primer paso ya era `app:…`,
+ * `learned` si Graph lo antepuso (`registerPublicApiRoutes.js:593-612`). Los dos traen el workflow, que aquí no se lee.
+ */
+@Serializable
+class AlineacionResponse(
+    @SerialName("already_present") val yaEstaba: Boolean = false,
+    val learned: Boolean = false,
+)
+
 /** `GET /api/v1/workflows`. Cada workflow llega crudo; lo lee [WorkflowResumen.desdeJson]. Sin la clave (o `null`), `null`: es un fallo (416). */
 @Serializable
 class WorkflowListResponse(
@@ -290,7 +317,11 @@ class PlanResponse(
     @Serializable(with = VacioEsAusente::class) val error: String? = null,
 )
 
-/** El plan de `WorkflowExecutor.buildExecutionPlan`. Se modela lo que se usa y se deja pasar el resto. */
+/**
+ * El plan de `WorkflowExecutor.buildExecutionPlan` (`WorkflowExecutor.js:38-55`). Se modela lo que se usa y se deja pasar el resto:
+ * `variables` y `executionIntent` son el eco de lo que mandó el cliente, y `runtimeIntelligence` y `branchContext` (objeto o `null`)
+ * no se leen (423). Sin pasos, Graph responde 404; sin pasos ejecutables o con dinámicos sin resolver, 500 (`:28-36`, `:131-135`).
+ */
 @Serializable
 class ExecutionPlan(
     @Serializable(with = VacioEsAusente::class) val workflowId: String? = null,

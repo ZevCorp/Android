@@ -184,8 +184,20 @@ class LearningClient(
         return (cuerpo as? JsonObject)?.get("workflow") ?: cuerpo
     }
 
-    /** ¿Graph ya cerró la sesión de [workflowId]? (421) */
-    suspend fun cerradaEnGraph(workflowId: String): Boolean = TODO("421")
+    /**
+     * ¿Graph ya cerró la sesión de [workflowId]? Lo pregunta el arranque antes de reintentar un cierre pendiente (421): un `finish`
+     * repetido sobre una sesión cerrada responde 200 y vuelve a post-procesar con el LLM (`WorkflowLearner.js:69-121`), así que
+     * reintentarlo a ciegas cobra dos veces. Cerrada es lo que deja `finish`, `status` `done` o `completedAt`
+     * (`Neo4jWorkflowRepository.js:605`): basta uno. UN intento, sin reintentos ni esperas: el arranque tiene tope, y lo que no se
+     * sabe no se paga con minutos. Si Graph no lo dice, [GraphException], y quien llama decide.
+     */
+    suspend fun cerradaEnGraph(workflowId: String): Boolean {
+        val ruta = workflowRuta(conId(workflowId, "consultar"))
+        val reply = llamar("GET", ruta, null, reintentos = 0)
+        val estado = leer(WorkflowConEstado.serializer(), reply, ruta).workflow
+            ?: throw sinContenido("graph respondió sin «workflow» en $ruta (HTTP ${reply.status})", reply.status)
+        return estado.status.equals(ESTADO_CERRADA, ignoreCase = true) || estado.completedAt != null
+    }
 
     /** Borra un workflow. Si Graph dice 404, ya no existe: es lo que se pedía, cuenta como borrado. */
     suspend fun borrar(id: String) {
@@ -208,6 +220,10 @@ class LearningClient(
      * Enseña al workflow a alcanzar su propia superficie: un paso de alineación en orden 0. Best-effort: si
      * falla, el workflow sigue igual y devuelve `false`, pero la causa queda en el log (Windows se la tragaba
      * en un `catch { }`), medida (419). Un id en blanco tampoco llama a Graph: `false`, y el porqué en el log (415). Cancelar sale tal cual.
+     *
+     * Graph ignora el cuerpo y deriva la app del `sourceOrigin` ya guardado: 404 si no existe, 400 sin origen, `already_present` si el
+     * primer paso ya es `app:…` y `learned` si antepone `{navigation, url: <origin>, selector: app:<origin sin esquema hasta la primera
+     * «/»>, stepOrder: 0}` (`registerPublicApiRoutes.js:579-619`). Cuál de las dos fue queda en el log, con el id y sin datos (423).
      */
     suspend fun prependAlignment(id: String): Boolean {
         if (id.isBlank()) {
@@ -215,7 +231,8 @@ class LearningClient(
             return false
         }
         return try {
-            llamar("POST", "${workflowRuta(conId(id, "alinear"))}/prepend-alignment", "{}")
+            val reply = llamar("POST", "${workflowRuta(conId(id, "alinear"))}/prepend-alignment", "{}")
+            log.log(TAG, "alinear $id: ${alineacionDe(reply)}")
             true
         } catch (e: CancellationException) {
             throw e
@@ -226,6 +243,12 @@ class LearningClient(
     }
 
     /* ────────────── Enseñanza por video ────────────── */
+
+    /*
+     * [userId] en `upload-token` y `process-video` tiene que ser EL MISMO que el del turno (`TurnRequest.userId`; en la app,
+     * `auth.userId`): Graph guarda las notas del video en la memoria de ese usuario (`TeachVideoService.js:123,139`) y el turno la
+     * lee con el suyo (`AgentTurnService.js:85,109`). Vacío, los dos caen en `anon`. Lo iguala quien cablea el video (4C).
+     */
 
     /** Las URLs firmadas para subir el video. Sin la de Gemini no hay a dónde subir: falla. */
     suspend fun uploadToken(contentLength: Long, userId: String): UploadTokenResponse {
@@ -279,6 +302,17 @@ class LearningClient(
     private fun noOpino(causa: String): JsonElement? {
         log.log(TAG, "interpret-steps: el modelo no opinó — $causa")
         return null
+    }
+
+    /** Cómo quedó una alineación que salió, para el log (423): ya estaba, se aprendió, o Graph no lo dijo, que no es un fallo. */
+    private fun alineacionDe(reply: TransportReply): String {
+        val leida = if (demasiadoAnidado(reply.body)) null
+            else runCatching { LearningJson.decodeFromString(AlineacionResponse.serializer(), reply.body) }.getOrNull()
+        return when {
+            leida?.yaEstaba == true -> "graph ya tenía el paso de alineación (already_present)"
+            leida?.learned == true -> "graph aprendió el paso de alineación (learned)"
+            else -> "graph respondió HTTP ${reply.status} sin decir si ya estaba o la aprendió"
+        }
     }
 
     /* ────────────── HTTP ────────────── */
@@ -392,9 +426,11 @@ class LearningClient(
         val TOPE_GENERAL: Duration = 90.seconds
         /** `BackendClient.cs:45`: 5 min en `/teach/…`. */
         val TOPE_TEACH: Duration = 5.minutes
-        /** `execution_intent.source`; Windows manda `windows-u` (supuesto sin verificar, spec 004). */
+        /** `execution_intent.source`; Windows manda `windows-u`. Graph no lo valida: lo devuelve de eco en el plan (`WorkflowExecutor.js:48`). */
         const val FUENTE = "android_app"
         const val SIN_DESCRIPCION = "Workflow sin descripción"
+        /** El `status` que deja `finish` (`Neo4jWorkflowRepository.js:605`); una sesión abierta está en `recording`. */
+        private const val ESTADO_CERRADA = "done"
         private const val TAG = "aprendizaje"
         private const val CIERRE_INTENTOS = 3
         private val CIERRE_ESPERAS_MS = listOf(3_000L, 8_000L)

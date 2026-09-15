@@ -166,6 +166,9 @@ class PendientesReintentados(val cerrados: Int, val siguen: Int, val descartados
  *    pendiente automático (411);
  *  - el cierre provisional va a disco con la lección, antes de la red: ni un proceso que muere ni un cierre cancelado que agota
  *    su [TOPE_DE_CIERRE_CANCELADO] dejan la sesión sin pendiente (420);
+ *  - antes de reintentar un pendiente, el arranque pregunta si Graph ya lo cerró: un `finish` repetido responde 200 y cobra el
+ *    post-procesado otra vez (421). Y no toca una sesión que una lección de este proceso está cerrando: nada le llega a Graph
+ *    después de su `finish` (422);
  *  - el log sale del teléfono (en la app, `LogBus` manda cada línea a telemetría): lleva ids, cuentas, estados y códigos. Lo que
  *    el usuario dijo, escribió o nombró, y el texto de un fallo, van al resultado y a disco, nunca al log (419).
  */
@@ -355,9 +358,10 @@ class Leccion(
      *  e) cierra la sesión y el provisional se borra. Si no sale por un transitorio, o por la key, se queda como pendiente;
      *     si Graph no respondió a tiempo, pudo haberla cerrado y se borra, igual que si Graph dijo que no.
      *
-     * Si el proceso muere después de que `finish` salió y antes de borrar el provisional, el arranque reintenta una sesión que
-     * Graph ya cerró. Si Graph responde 404 o 400, [trasFallo] lo juzga FALLIDO y el pendiente se borra tras ese único intento;
-     * si respondiera 2xx y post-procesara otra vez, cobraría dos veces (supuesto sin verificar de la spec 004).
+     * Si el proceso muere después de que `finish` salió y antes de borrar el provisional, al arrancar queda el pendiente de una
+     * sesión que Graph ya cerró. Graph no la desconoce: un `finish` repetido responde 200 y post-procesa con el LLM otra vez
+     * (`WorkflowLearner.js:69-121`). Por eso el arranque pregunta antes ([LearningClient.cerradaEnGraph], 421) y, si ya está
+     * cerrada, la da por cerrada sin `finish`. Mientras este cierre corre, ningún arranque de este proceso la toca (422).
      *
      * CANCELAR NO LA DEJA A MEDIAS (418). Lo que espera —vaciar la cola, procesar el video— se puede cancelar: lo que
      * no salió cuenta como no enviado y el video queda para reprocesar, sin empezarlo si aún no empezó. Lo que escribe o
@@ -378,6 +382,8 @@ class Leccion(
             // Pase lo que pase —una cancelación, un Error—, la lección no se queda trabada en CERRANDO.
             estado = Estado.TERMINADA
             abierta = null
+            // Y ya no se está cerrando: lo que haya quedado pendiente es del arranque (422). Sin lanzar: aquí puede ir saliendo otra cosa.
+            sinCancelar { candadoDelProceso.withLock { cerrandoEnEsteProceso -= a.sesion.sessionId } }
         }
     }
 
@@ -456,6 +462,8 @@ class Leccion(
             faltante?.let { avisos.anotar("a la lección le falta algo: $it", "a la lección le falta algo: ${faltante(pasos, dondeTermina, lectorMuerto(PARA_EL_LOG))}") }
 
             // Y con ella, el cierre provisional (420): desde aquí, pase lo que pase con el proceso, el arranque sabe cerrar la sesión.
+            // Antes, la sesión queda como «cerrándose en este proceso»: mientras tanto ningún arranque la toca (422).
+            candadoDelProceso.withLock { cerrandoEnEsteProceso += sid }
             provisional = escribirPendiente(CierrePendiente(sid, a.sesion.workflowId, ahoraMs()))
                 ?.also { log.log(TAG, "el cierre provisional de la sesión $sid no se pudo escribir (${medidaDe(it)}): si finish no sale, se intenta otra vez") } == null
         }?.let { if (cancelada == null) cancelada = it }
@@ -568,6 +576,10 @@ class Leccion(
      * cerrar sería publicar. Windows hace lo mismo (`TeachSession.DiscardAsync` borra el mp4 sin llamar a
      * Graph). Solo tiene efecto mientras se abre o se graba: descartar después de terminar no des-publica.
      *
+     * Lo que queda sin cerrar no es invisible: sigue en `GET /workflows` en `recording` (`Neo4jWorkflowRepository.js:132-175` no filtra
+     * por estado) y, con un paso, le llega al cerebro (`AgentWorkflowStore.js:45-50`). Borrarlo con [LearningClient.borrar] es borrar
+     * datos y lo decide el Capitán (spec 004): hoy no se llama.
+     *
      * Devuelve `true` si la demostración queda descartada, por esta llamada o por una anterior, y `false` si no había
      * nada que descartar: no empezó, ya se está cerrando o ya se cerró. Durante [terminar] no corta nada: lo que se
      * cierra se publica, y un cierre a medias es peor que ninguno.
@@ -608,6 +620,10 @@ class Leccion(
      * caído, N pendientes × 90 s se comerían el arranque. El resto queda para el siguiente, que empieza por los que menos veces se
      * intentaron: sin ese turno, cinco pendientes que nunca salen taparían al sexto para siempre. El intento que ya salió termina en
      * su propio tope de 90 s: cortarlo a mitad dejaría a Graph cerrando sin que nadie lo sepa.
+     *
+     * Cada intento empieza preguntando si Graph ya cerró la sesión, con un GET sin reintentos (421): si ya está cerrada, se borra sin
+     * `finish`, porque un `finish` repetido responde 200 y cobra otra vez. Y un pendiente cuya sesión está cerrando una lección de este
+     * proceso ni se intenta: es su provisional, no un cierre que quedó (422).
      */
     suspend fun reintentarPendientes(): PendientesReintentados {
         val empezo = reloj.markNow()
@@ -636,12 +652,29 @@ class Leccion(
         // El turno: primero los que menos veces intentó un arranque; a igual número, los más viejos, y después por ruta.
         val turno = leidos.sortedWith(compareBy({ it.second.intentos }, { it.second.cuandoMs }))
         var intentados = 0
+        var enCierre = 0
         for ((ruta, pendiente) in turno) {
+            // Una lección de este proceso la está cerrando: su provisional no es un cierre que quedó pendiente, y cerrarla aquí le haría
+            // llegar a Graph la nota y el finish de la lección después de este (422). No cuenta como intento.
+            if (candadoDelProceso.withLock { pendiente.sessionId in cerrandoEnEsteProceso }) {
+                enCierre++
+                siguen++
+                log.log(TAG, "el cierre de ${pendiente.sessionId} lo está haciendo una lección de este proceso: el arranque no lo toca")
+                continue
+            }
             if (intentados == MAX_PENDIENTES_POR_ARRANQUE || empezo.elapsedNow() >= TOPE_DE_ARRANQUE) {
                 siguen++
                 continue
             }
             intentados++
+            // ¿Graph ya la cerró? Un finish repetido responde 200 y cobra el post-procesado otra vez: si ya está cerrada, se da por
+            // cerrada sin llamar a finish (421). Si no se sabe, el cierre de siempre.
+            if (yaCerradaEnGraph(pendiente)) {
+                cerrados++
+                log.log(TAG, "✓ la sesión ${pendiente.sessionId} ya estaba cerrada en graph: no se vuelve a cerrar ni a cobrar")
+                borrarPendiente(ruta)
+                continue
+            }
             try {
                 cliente.terminar(pendiente.sessionId, pendiente.workflowId, intentos = 1)
                 cerrados++
@@ -669,10 +702,24 @@ class Leccion(
                 }
             }
         }
-        (turno.size - intentados).takeIf { it > 0 }?.let {
+        (turno.size - intentados - enCierre).takeIf { it > 0 }?.let {
             log.log(TAG, "$it cierre(s) pendiente(s) quedan para el próximo arranque (tope: $MAX_PENDIENTES_POR_ARRANQUE por arranque y ${Reintentos.corto(TOPE_DE_ARRANQUE)} en total)")
         }
         return PendientesReintentados(cerrados, siguen, descartados)
+    }
+
+    /**
+     * ¿Graph ya cerró la sesión de [p]? (421) Si no se supo —no respondió, no la encuentra, sin key—, `false`: se intenta el cierre y
+     * lo juzga [trasFallo], como siempre. El costo que queda: si Graph ya la había cerrado y el GET no respondió pero `finish` sí,
+     * Graph cobra el post-procesado otra vez.
+     */
+    private suspend fun yaCerradaEnGraph(p: CierrePendiente): Boolean = try {
+        cliente.cerradaEnGraph(p.workflowId)
+    } catch (e: CancellationException) {
+        throw e
+    } catch (e: Exception) {
+        log.log(TAG, "no se supo si graph ya cerró la sesión ${p.sessionId} (${medidaDe(e)}): se intenta el cierre")
+        false
     }
 
     /* ────────────── Por dentro ────────────── */
@@ -905,6 +952,16 @@ class Leccion(
         val TOPE_DE_ARRANQUE: Duration = 2.minutes
         private const val TAG = "leccion"
         private const val HEX = "0123456789ABCDEF"
+
+        /**
+         * Las sesiones que una lección de ESTE proceso está cerrando (422). Su provisional está en disco desde antes del video, y un
+         * arranque que corriera mientras tanto —la app que vuelve al frente y lo llama otra vez— lo tomaría por un cierre que quedó
+         * pendiente: cerraría la sesión, y la nota y el `finish` de la lección le llegarían a Graph después. Graph los acepta —una nota
+         * sobre una sesión cerrada es 201 (`LearningSessionService.js:40-49`, `WorkflowLearner.js:62-67`)— y cobra el post-procesado
+         * dos veces. Es del proceso y no de la instancia porque el arranque es otra [Leccion]; otro proceso sobre el mismo disco no lo ve.
+         */
+        private val cerrandoEnEsteProceso = mutableSetOf<String>()
+        private val candadoDelProceso = Mutex()
 
         /** `carpeta/<id>.json`, con el id escapado: todo lo que no es letra, dígito, `-`, `_` o `.` va como `%XX`. */
         fun ruta(carpeta: String, id: String): String = "$carpeta/${archivo(id)}.json"

@@ -5,7 +5,9 @@ sabotaje real, abajo; Nivel 4 contra el Graph vivo pendiente: va con 4C/4D) · *
 407-412 verdes; cada una se vio ROJA con un sabotaje real, abajo) · **revisión de la 4A1 cerrada** (promesas 413-416
 verdes y casos nuevos en 404 y 406; cada arreglo se vio ROJO con un sabotaje real, abajo) · **revisión de la 4A2 cerrada** (promesas
 417-418 verdes y casos nuevos en 408 y 410-415; cada arreglo se vio ROJO con un sabotaje real, abajo) · **segunda revisión de la
-4A2 cerrada** (promesas 419-420 verdes y caso nuevo en 411; cada arreglo se vio ROJO con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
+4A2 cerrada** (promesas 419-420 verdes y caso nuevo en 411; cada arreglo se vio ROJO con un sabotaje real, abajo) · **verificado contra
+el código de Graph** (`e9d0d44`, 2026-09-15; promesas 421-423 verdes y la 420 corregida: un `finish` repetido cobra otra vez; cada
+arreglo se vio ROJO con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
 workflows en Graph · Rama: `yokh/aprendizaje-graph`
 
 Hoy el Android aprende solo: `ActiveLearning`, `GeminiLearning`, `GeminiWorkflow` y `WorkflowRepo`
@@ -49,7 +51,7 @@ entiende, un cierre que se reintenta después de haberse cobrado, un workflow qu
 
 Bloque 401+ (la 001 usa 1-99). Los números no se reciclan. El enunciado de cada promesa es
 **literal** el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato004EnsenadoEnGraph.kt`
-para 401-406, `Contrato004LeccionEnGraph.kt` para 407-412 y 417-420, y `Contrato004RespuestasDeGraph.kt` para 413-416, método `promesaNNN`); si cambia uno, cambia el
+para 401-406, `Contrato004LeccionEnGraph.kt` para 407-412 y 417-422, y `Contrato004RespuestasDeGraph.kt` para 413-416 y 423, método `promesaNNN`); si cambia uno, cambia el
 otro en el mismo commit.
 
 | # | Promesa | Fase |
@@ -126,7 +128,10 @@ lección de la 413, el transporte por rutas, la crónica y el almacén en memori
 de 512 KB de pila (`correConPilaChica`, en `Corre.kt`): sin guarda, lo que desborda desborda siempre, y el
 `StackOverflowError` sale como un AssertionError que lo dice en vez de llevarse el runner.
 
-Las 417-420 viven con las 407-412 y usan el mismo mapa. Ninguna duerme ni depende de hilos: la cancelación llega en un punto
+Las 421-422 viven con ellas y suman `GraphDeVerdad`: un Graph con la memoria y las reglas de `e9d0d44` —la sesión en `recording`,
+pasos y notas aceptados también sobre una sesión cerrada, un `finish` que responde 200 y cobra cada vez, 404 para lo que no existe—
+que cuenta los cobros y lo que le llegó, por cualquier transporte. La 423 vive con las 413-416 y lee cuerpos que copian la forma de
+Graph (`workflowDeGraph`). Las 417-422 no duermen ni dependen de hilos: la cancelación llega en un punto
 exacto con un `CompletableDeferred` que suelta el transporte o el video, con `CoroutineStart.UNDISPATCHED` para que `terminar`
 ya esté esperando la cola, con un `yield` en el hilo único de `runBlocking` o con el reloj de pared de la lección, que cancela
 al leerse.
@@ -268,7 +273,7 @@ Lo que deja en el almacén, un archivo por sesión (el id de sesión, escapado, 
 | Ruta | Qué | Cuándo |
 |---|---|---|
 | `lecciones/<sesión>.json` | sesión, workflow, descripción, identidad, dónde empezó y terminó, cuándo, cada paso con su resultado, la nota y el motivo si falta algo | al terminar, antes de la red |
-| `cierres-pendientes/<sesión>.json` | `sessionId`, `workflowId`, `cuandoMs`, `intentos` (cuántas veces lo intentó un arranque) | provisional, junto con la lección y antes de la red (420). Se borra si `finish` sale, si Graph no respondió a tiempo o si dijo que no; se queda si no salió tras sus tres intentos, por la key (401/403, sin key) o porque un cierre cancelado agotó su tope |
+| `cierres-pendientes/<sesión>.json` | `sessionId`, `workflowId`, `cuandoMs`, `intentos` (cuántas veces lo intentó un arranque) | provisional, junto con la lección y antes de la red (420). Se borra si `finish` sale, si Graph no respondió a tiempo o si dijo que no, o si al arrancar Graph dice que ya la cerró (421); se queda si no salió tras sus tres intentos, por la key (401/403, sin key) o porque un cierre cancelado agotó su tope |
 | `videos-por-reprocesar/<sesión>.json` | `sessionId`, `leccion`, `motivo`, `cuandoMs` | el video lanzó, no dejó nada o se canceló el cierre |
 
 Pone verdes: **407-412**.
