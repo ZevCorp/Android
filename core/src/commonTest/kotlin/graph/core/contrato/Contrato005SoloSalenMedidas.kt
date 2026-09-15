@@ -33,10 +33,14 @@ class Contrato005SoloSalenMedidas {
         val PROMESAS = mapOf(
             501 to "De una línea del log a la telemetría remota solo sale lo que tiene forma de medida permitida: un nombre de la lista cerrada, una medida o un id opaco; todo texto libre sale como su largo ‹N› y un tag fuera de la lista sale como «otro».",
             502 to "Un número sale del teléfono solo como medida: pegado a su unidad, detrás de HTTP, intento, turno o una clave=, o delante de caracteres, bytes, turnos o acciones. Una clave, un teléfono o una cédula dentro de un texto no salen.",
-            503 to "Un id sale solo si es opaco: un UUID, un sello # de 8 hex, una celda:x,y, una ruta de la API hecha de segmentos conocidos e ids, o un prefijo cerrado (call_, ses-, wf-…) con dígitos. Una palabra tras el prefijo, un paquete de app o un número largo no son ids.",
+            503 to "Un id sale solo si es opaco: un UUID, un sello # de 8 hex con alguna letra, una celda:x,y, una ruta de la API hecha de segmentos conocidos e ids, o un prefijo cerrado (call_, item_, wf_…) con la forma de quien lo produce. Una palabra tras el prefijo, un paquete de app o un número largo no son ids.",
             504 to "Lo que se sube de un pedido y de un usuario lo arma la puerta: el pedido, el resumen, el nombre y el modelo del teléfono viajan como su largo; el estado y la vía, de una lista cerrada; los ids, solo si son UUID; y ninguna clave fuera de las de la RPC.",
             505 to "Cada fila de log que sale la arma la puerta, con solo device_id, prompt_id, tag y message. Detrás de TelemetriaDeVoz la medida de la voz sobrevive y ni una palabra de lo dicho sale; pasar dos veces por la puerta da lo mismo que una, y un mensaje enorme sale acotado.",
             506 to "Las líneas de precisión que ya son medidas pasan sin tocar precisión: la de peticion entera con su destino sellado, en celda o por su largo; las del motor con sus largos, turnos, acciones y tiempos; y del freno, el tope y el workflow, su medida, su sello y el tipo de la excepción.",
+            508 to "Un sello sale solo si tiene al menos una letra: # con ocho cifras decimales es un pedido, una factura o una cédula y sale como su largo; y el sello de verdad de precisión lleva siempre una letra, así que ninguna línea real de peticion pierde su destino sellado.",
+            509 to "Un id con prefijo sale solo con la forma y el largo de quien lo produce: wf_ con 13 cifras de Graph, call_ de 24 e item_ de 21 en base62, resp_ y msg_ de 50 hex, files/ de 12; una palabra con una cifra, un número u otro largo no es id, y una ruta de la API con un segmento de texto o de más de 6 cifras sale como su largo.",
+            510 to "Una unidad sostiene un número solo como la escriben los logs: ms, s, KB, MB y % pegados, ms, min, KB y MB con espacio, y s con espacio hasta 3 cifras; B y h no son unidad, números seguidos cuyas cifras juntas llegan a 7 se tapan, y paso y turno sostienen a lo más 3 cifras.",
+            511 to "Una coordenada, una celda y una marca ‹N› sostienen a lo más 5 cifras por componente: con más, también una marca escrita a mano, salen como su largo; un tramo de más de 99999 caracteres sale como ‹99999›, así que pasar dos veces por la puerta sigue dando lo mismo.",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
@@ -159,15 +163,17 @@ class Contrato005SoloSalenMedidas {
         val p = 503
         for (id in listOf(
             "3f2c9a1e-7b4d-4e8a-9c21-0d5e6f7a8b9c", "#a1b2c3d4", "celda:3,4", "celda:-1,12", "tap(120,300)", "swipe(1,2→3,40)",
-            "ses-1", "wf-9f8e7d", "call_ydaLTWADFkH6AtEXUxsfdltF", "item_1", "files/abc123",
-            "/api/v1/workflows/wf-1", "/api/v1/learning/sessions/ses-1/steps", "/api/v1/workflows/17/plan", "/api/v1/agent/turn",
+            // Los ids con prefijo, con la forma real de quien los produce (509): Graph, GPT-Live, OpenAI y Gemini.
+            "wf_1789054200000", "call_ydaLTWADFkH6AtEXUxsfdltF", "item_ENQCUyla2TB9mFPFUmDHi", "files/a8k2x9m4q7zt",
+            "resp_07dae34b6353cdd7006aa897181ecc87d2bf67e8e76fc2eb17",
+            "/api/v1/workflows/wf_1789054200000", "/api/v1/learning/sessions/wf_1789054200000/steps", "/api/v1/workflows/17/plan", "/api/v1/agent/turn",
         )) {
             assertEquals(id, puerta.mensaje(id), promesa(p) + " · «$id» es opaco")
         }
         for (noId in listOf("wf-zorbax", "#Zorbax12", "#a1b2c3", "com.whatsapp", "3009876542", "ses-Qwyk", "files/Zorbax", "/api/v1/workflows/registrar-a-zorbax")) {
             assertEquals(tramo(noId), puerta.mensaje(noId), promesa(p) + " · «$noId» no es un id")
         }
-        assertEquals("${tramo("la sesión")} ses-1 ${tramo("para")} wf-2", puerta.mensaje("la sesión ses-1 para wf-2"), promesa(p) + " · los ids entre texto quedan")
+        assertEquals("${tramo("la sesión")} wf_1789054200000 ${tramo("para")} wf_1789054140000", puerta.mensaje("la sesión wf_1789054200000 para wf_1789054140000"), promesa(p) + " · los ids entre texto quedan")
     }
 
     @Test
@@ -337,5 +343,124 @@ class Contrato005SoloSalenMedidas {
             assertTrue(rechazo.startsWith("ya hay una tarea en curso: ") && rechazo.endsWith("(pedido de ${n("y a Qwyk también")} caracteres)"), promesa(p) + " · el rechazo: $rechazo")
             for (l in lineas) sinFuga(p, puerta.mensaje(l), *personas, "3009876542")
         }
+    }
+
+    @Test
+    fun promesa508() {
+        val p = 508
+        // Ocho cifras con # delante: un pedido, una factura, una cédula. No son un sello.
+        for (numero in listOf("#12345678", "#40123456", "#10203040", "#00000000")) {
+            assertEquals(tramo(numero), puerta.mensaje(numero), promesa(p) + " · «$numero» es un número")
+        }
+        assertEquals("${tramo("portapapeles")} ← \"${tramo("pedido #12345678")}\"", puerta.mensaje("portapapeles ← \"pedido #12345678\""), promesa(p))
+        assertEquals(
+            "${tramo("en vivo")}: \"${tramo("paga la factura #40123456 de Claro")}\"",
+            puerta.mensaje("en vivo: \"paga la factura #40123456 de Claro\""), promesa(p),
+        )
+        // Un sello con alguna letra sigue siendo sello, esté donde esté la letra.
+        for (sello in listOf("#a1b2c3d4", "#1234567f", "#0f1e2d3c")) {
+            assertEquals(sello, puerta.mensaje(sello), promesa(p) + " · «$sello» es un sello")
+        }
+
+        // Y el de verdad. Ocho hex de un HMAC salen todo cifras una vez de cada ~43 ((10/16)^8): dos mil destinos distintos por el
+        // TopeDeIntentos y la CuentaDePeticion reales no dejan escapar a un productor que no ponga su letra.
+        val sello = Regex("#[0-9a-f]{8}")
+        val tope = TopeDeIntentos(48)
+        val cuenta = CuentaDePeticion(TestTimeSource(), GraphLog { _, _ -> })
+        repeat(2_000) { i ->
+            val destino = TopeDeIntentos.Destino.Nodo("a11y:id=com.app:id/fila_$i;cls=android.widget.TextView;text=Zorbax", "Zorbax")
+            val sellado = tope.enLog(destino)
+            assertTrue(sello.matches(sellado), promesa(p) + " · el destino no salió sellado: «$sellado»")
+            assertTrue(sellado.any { it in 'a'..'f' }, promesa(p) + " · el sello de precisión salió todo cifras: «$sellado»")
+            cuenta.llamada("tap", tope.clave(destino), sellado)
+            cuenta.resultado("tap", actuo = true)
+            val linea = assertNotNull(cuenta.cerrar(), promesa(p) + " · la cuenta no dejó línea")
+            assertEquals(linea, puerta.mensaje(linea), promesa(p) + " · la línea real de peticion perdió su sello")
+        }
+    }
+
+    @Test
+    fun promesa509() {
+        val p = 509
+        // Lo que producen de verdad Graph (`wf_` y `Date.now()`, sesión y workflow), GPT-Live (llamada y delegación), OpenAI
+        // Responses (medido en el teléfono) y Gemini (el video subido): suelto, en su ruta y en la línea que lo lleva.
+        for (id in listOf(
+            "wf_1789054200000", "call_ydaLTWADFkH6AtEXUxsfdltF", "item_ENQCUyla2TB9mFPFUmDHi",
+            "resp_07dae34b6353cdd7006aa897181ecc87d2bf67e8e76fc2eb17", "msg_07dae34b6353cdd7006aa8971e8b6487d2a94a31ae5992d797",
+            "files/a8k2x9m4q7zt",
+            "/api/v1/workflows/wf_1789054200000", "/api/v1/learning/sessions/wf_1789054200000/steps",
+            "/api/v1/workflows/3f2c9a1e-7b4d-4e8a-9c21-0d5e6f7a8b9c/plan", "/api/v1/workflows/123456/prepend-alignment",
+        )) {
+            assertEquals(id, puerta.mensaje(id), promesa(p) + " · «$id» es un id real")
+        }
+        assertEquals(
+            "▶ ${tramo("enseñando")} (${tramo("sesión")} wf_1789054200000, ${tramo("workflow")} wf_1789054140000)",
+            puerta.mensaje("▶ enseñando (sesión wf_1789054200000, workflow wf_1789054140000)"), promesa(p),
+        )
+        // Otro largo, otra forma, o una palabra con una cifra: no es id. Tampoco una ruta con un segmento así.
+        for (noId in listOf(
+            "ses-3001234567", "wf-anapaula1", "call_mama2", "files/3001234567", "wf_3001234567", "wf_17890542000001",
+            "call_juanitaperezgomezdelrio1", "call_ydaLTWADFkH6AtEXUxsfdlt", "item_1", "item_anapaulagomezperez123", "resp_07dae34b",
+            "msg_mamapaulina", "files/abc123", "files/mariapaulina", "sess_3001234567", "evt_1234567",
+            "/api/v1/workflows/3001234567", "/api/v1/workflows/wf-anapaula1", "/api/v1/learning/sessions/ses-juanperez7/steps",
+        )) {
+            assertEquals(tramo(noId), puerta.mensaje(noId), promesa(p) + " · «$noId» no es un id")
+        }
+    }
+
+    @Test
+    fun promesa510() {
+        val p = 510
+        // Direcciones, teléfonos partidos y claves que se disfrazaban de medida.
+        for (fuga in listOf(
+            "el apartamento 301B de la calle 45 B", "marca 300 s 123 s 4567 s", "300 ms 123 4567", "B 12345678 B",
+            "mi código de verificación es 482913 s", "pin 1234h", "12.345.678 caracteres", "nombre de 123456789 caracteres",
+            "300 caracteres 123 caracteres 4567 caracteres", "7731 GB", "el código del paso 4521",
+        )) {
+            assertEquals(tramo(fuga), puerta.mensaje(fuga), promesa(p) + " · «$fuga» no es una medida")
+        }
+        assertEquals("${tramo("el código del paso 4521 y turno")}: ${tramo("9876")}", puerta.mensaje("el código del paso 4521 y turno: 9876"), promesa(p))
+
+        // Las medidas como las escriben los logs de verdad: Engine, GraphBrain, Reintentos.corto, el freno, la voz y GeminiBrain.
+        for (igual in listOf(
+            "■ 3 turnos · 5 acciones · 12s · resumen de 40 caracteres", "turno 999 · 1234ms · graph", "paso 12", "reintento 2/3",
+            "45KB", "3MB", "80%", "5 min", "10000 ms", "120 KB",
+            "llamadas=5 distintas=3 intentos_max=2 «—» primera=120 ms ultima=900 ms desde_peticion=1500 ms rechazadas=0 retiradas=1",
+        )) {
+            assertEquals(igual, puerta.mensaje(igual), promesa(p) + " · «$igual» es medida")
+        }
+        for ((linea, sale) in listOf(
+            "el tope de 90 s del arranque se agotó" to "${tramo("el tope de")} 90 s ${tramo("del arranque se agotó")}",
+            "altavoz abierto: 24000 Hz mono PCM16, cola de 30 s" to "${tramo("altavoz abierto")}: ${tramo("24000 Hz mono PCM16, cola de")} 30 s",
+            "la corrida no soltó en 5000 ms tras el alto" to "${tramo("la corrida no soltó en")} 5000 ms ${tramo("tras el alto")}",
+            "pasaron 10000 ms sin apretón de manos" to "${tramo("pasaron")} 10000 ms ${tramo("sin apretón de manos")}",
+            "interacción → HTTP 200 · 1234ms · envié 45KB de pantalla" to "${tramo("interacción")} → HTTP 200 · 1234ms · ${tramo("envié")} 45KB ${tramo("de pantalla")}",
+        )) {
+            assertEquals(sale, puerta.mensaje(linea), promesa(p) + " · «$linea»")
+        }
+    }
+
+    @Test
+    fun promesa511() {
+        val p = 511
+        for (igual in listOf("(4,60)", "tap(120,300)", "swipe(1,2→3,40)", "(99999,-99999)", "celda:12,-3", "celda:99999,99999", "‹12345›")) {
+            assertEquals(igual, puerta.mensaje(igual), promesa(p) + " · «$igual» cabe")
+        }
+        for ((fuga, sale) in listOf(
+            "(3001234,567)" to "(${tramo("3001234,567")})",
+            "tap(123456,1)" to "tap(${tramo("123456,1")})",
+            "swipe(1,2→3,400000)" to "swipe(${tramo("1,2")}→${tramo("3,400000")})",
+            "celda:3001234567,12" to "${tramo("celda")}:${tramo("3001234567,12")}",
+            "celda:1,123456" to "${tramo("celda")}:${tramo("1,123456")}",
+            "‹3001234567›" to tramo("‹3001234567›"),
+            "‹123456›" to tramo("‹123456›"),
+        )) {
+            assertEquals(sale, puerta.mensaje(fuga), promesa(p) + " · «$fuga»")
+            assertEquals(sale, puerta.mensaje(sale), promesa(p) + " · idempotente con «$fuga»")
+        }
+        // Un tramo gigante se marca con el tope, y la marca vuelve a pasar igual.
+        val gigante = puerta.mensaje("Zorbax".repeat(20_000))
+        assertEquals("‹99999›", gigante, promesa(p) + " · un tramo de 120000 caracteres")
+        assertEquals(gigante, puerta.mensaje(gigante), promesa(p) + " · idempotente con un tramo gigante")
     }
 }
