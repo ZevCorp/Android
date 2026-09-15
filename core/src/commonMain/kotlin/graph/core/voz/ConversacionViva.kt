@@ -1,5 +1,7 @@
 package graph.core.voz
 
+import graph.core.json.PROFUNDIDAD_MAXIMA
+import graph.core.json.demasiadoAnidado
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart

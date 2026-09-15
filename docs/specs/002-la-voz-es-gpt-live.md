@@ -193,7 +193,9 @@ Todo en `core/src/commonMain/kotlin/graph/core/voz/`, sin dependencias nuevas:
 - `CompuertaDeEco.kt` — la compuerta y `ModoDeCaptura`.
 - `DetectorDeInterrupcion.kt` — el barge-in con la compuerta activa.
 - `Fatales.kt` — qué fallo no se arregla reconectando.
-- `JsonCrudo.kt` — el tope de 64 niveles medido antes de parsear, y el texto crudo de un valor sin re-serializarlo.
+- `JsonCrudo.kt` — el tope de 64 niveles medido antes de parsear, y el texto crudo de un valor sin re-serializarlo. Desde la
+  integración de la ola 1, la guarda (`demasiadoAnidado`, `PROFUNDIDAD_MAXIMA`) vive en `core/…/json/Profundidad.kt`, compartida
+  con la 413 de la spec 004.
 
 Pone verdes: **201-217**.
 

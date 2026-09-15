@@ -36,7 +36,7 @@ import kotlinx.serialization.json.JsonPrimitive
  *    además se leen de Graph y Windows les pone `""` por defecto ([FieldOption]), llevan el default y
  *    `@EncodeDefault`: viajan siempre y un `null` o una clave que falta no tiran la respuesta (414).
  *
- * Y dos de lectura (413, 416): toda respuesta pasa por [demasiadoAnidado] antes de parsearse, y una lista o un plan
+ * Y dos de lectura (413, 416): toda respuesta pasa por [graph.core.json.demasiadoAnidado] antes de parsearse, y una lista o un plan
  * sin su clave (`workflows`, `steps`) es un fallo, no una lista vacía.
  */
 

@@ -8,6 +8,8 @@ import graph.core.graph.Reintentos
 import graph.core.graph.TransportReply
 import graph.core.graph.TurnTransport
 import graph.core.graph.enviarConReintentos
+import graph.core.json.PROFUNDIDAD_MAXIMA
+import graph.core.json.demasiadoAnidado
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.delay
 import kotlinx.serialization.KSerializer
@@ -438,4 +440,21 @@ class LearningClient(
         /** La clave de un mapa en la ruta de kotlinx (`['pais']`): es un dato, no el esquema, y no va al log (419). */
         private val CLAVE_DE_MAPA = Regex("""\['[^']*']""")
     }
+}
+
+/** Cuántos bytes ocupa [texto] en UTF-8, sin copiarlo: lo que se registra de una respuesta en vez de la respuesta. */
+private fun bytesUtf8(texto: String): Int {
+    var n = 0
+    var i = 0
+    while (i < texto.length) {
+        val c = texto[i]
+        n += when {
+            c.code < 0x80 -> 1
+            c.code < 0x800 -> 2
+            c.isHighSurrogate() && i + 1 < texto.length && texto[i + 1].isLowSurrogate() -> { i++; 4 }
+            else -> 3
+        }
+        i++
+    }
+    return n
 }

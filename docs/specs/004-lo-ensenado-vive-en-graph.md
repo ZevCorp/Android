@@ -250,7 +250,8 @@ Todo en `core/src/commonMain/kotlin/graph/core/graph/`, sin dependencias nuevas:
   `TeachSession.cs`; `vacioEsAusente`; `WorkflowResumen` (espejo de `WorkflowSummary.FromJson`).
 - `learning/LearningClient.kt` — las catorce llamadas, con topes, reintentos y errores (la decimocuarta, `cerradaEnGraph`, es de la 421).
 - `learning/NombreDeWorkflow.kt` — espejo de `NombreDeWorkflow.cs`.
-- `learning/Profundidad.kt` — la guarda de 64 niveles antes de parsear (de la revisión, abajo).
+- `learning/Profundidad.kt` — la guarda de 64 niveles antes de parsear (de la revisión, abajo). Desde la integración de
+  la ola 1 vive en `core/…/json/Profundidad.kt`, compartida con la voz.
 
 Y `app/…/platform/GraphTransport.kt` implementa `send` con `HttpURLConnection` (GET, POST, PUT sin
 cuerpo binario, DELETE; tope de lectura por llamada).
@@ -294,7 +295,7 @@ Un revisor independiente aprobó `d13ab95` con cambios. Lo que encontró, y cóm
   pila desde ~1000 (`toString`) y compararlos desde ~5000 (`equals`), medido con 1 MB de pila. Es un
   `StackOverflowError`: ningún `catch (e: Exception)` lo atrapa y en Android tumba el proceso. Bastaba un
   `{"interpretation":[[[…]]]}` de ~2,4 KB en `interpret-steps`, cuyo log hacía `toString().length`. Ahora
-  `learning/Profundidad.kt` cuenta los niveles en una pasada lineal que respeta textos y escapes **antes de parsear**
+  la guarda de profundidad (hoy `core/…/json/Profundidad.kt`) cuenta los niveles en una pasada lineal que respeta textos y escapes **antes de parsear**
   cualquier respuesta, con el tope de System.Text.Json en U: 64 se leen y 65 son `GraphException`. Ningún `JsonElement`
   que salga de `LearningClient` pasa de 64 niveles, y ningún log vuelca JSON de Graph: dice bytes. `interpretSteps`
   atrapa además `Throwable`, salvo la cancelación.
@@ -311,10 +312,10 @@ la guarda en `LearningClient`, un paso cuya respuesta viene anidada de más cuen
 video que la trae queda para reprocesar. Lo que 4C guarde de `processVideo` ya llega acotado; un `JsonElement` que no
 pase por `LearningClient` no lo cubre esta guarda.
 
-**La guarda se unifica al integrar las ramas.** La rama de voz (`yokh/voz-gpt-live`) tiene la misma cuenta en
-`core/…/voz/JsonCrudo.kt` (`demasiadoAnidado`, `PROFUNDIDAD_MAXIMA`; spec 002, promesa 203). La de aquí lleva los mismos
-nombres, la misma firma y el mismo tope a propósito: al integrar queda una sola, en un paquete común a las dos, y ambas
-specs apuntan a ella. Hasta entonces, un arreglo en una se copia en la otra.
+**La guarda se unificó al integrar las ramas.** La rama de voz (`yokh/voz-gpt-live`) tenía la misma cuenta en
+`core/…/voz/JsonCrudo.kt` (spec 002, promesa 203), con los mismos nombres, la misma firma y el mismo tope a propósito. En
+`yokh/integracion` queda una sola, `graph.core.json.demasiadoAnidado` con `PROFUNDIDAD_MAXIMA` = 64, que usan
+`LearningClient` y la voz: sabotearla rompe la 203 y la 413 a la vez.
 
 ### Revisión de la 4A2 — la lección bajo cancelación (hecha)
 
