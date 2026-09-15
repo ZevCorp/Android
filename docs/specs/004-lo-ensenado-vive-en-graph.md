@@ -7,7 +7,8 @@ verdes y casos nuevos en 404 y 406; cada arreglo se vio ROJO con un sabotaje rea
 417-418 verdes y casos nuevos en 408 y 410-415; cada arreglo se vio ROJO con un sabotaje real, abajo) · **segunda revisión de la
 4A2 cerrada** (promesas 419-420 verdes y caso nuevo en 411; cada arreglo se vio ROJO con un sabotaje real, abajo) · **verificado contra
 el código de Graph** (`e9d0d44`, 2026-09-15; promesas 421-423 verdes y la 420 corregida: un `finish` repetido cobra otra vez; cada
-arreglo se vio ROJO con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
+arreglo se vio ROJO con un sabotaje real, abajo) · **control de la ronda contra Graph y decisiones C y F del Capitán** (2026-09-15;
+promesas 424-426 verdes y casos nuevos en 411, 412 y 421; cada arreglo se vio ROJO con un sabotaje real, abajo) · Nace de leer el cliente Windows (`U-Windows-App`) que ya graba, guarda y ejecuta
 workflows en Graph · Rama: `yokh/aprendizaje-graph`
 
 Hoy el Android aprende solo: `ActiveLearning`, `GeminiLearning`, `GeminiWorkflow` y `WorkflowRepo`
@@ -52,7 +53,7 @@ entiende, un cierre que se reintenta después de haberse cobrado, un workflow qu
 
 Bloque 401+ (la 001 usa 1-99). Los números no se reciclan. El enunciado de cada promesa es
 **literal** el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato004EnsenadoEnGraph.kt`
-para 401-406, `Contrato004LeccionEnGraph.kt` para 407-412 y 417-422, y `Contrato004RespuestasDeGraph.kt` para 413-416 y 423, método `promesaNNN`); si cambia uno, cambia el
+para 401-406, `Contrato004LeccionEnGraph.kt` para 407-412, 417-422 y 424-426, y `Contrato004RespuestasDeGraph.kt` para 413-416 y 423, método `promesaNNN`); si cambia uno, cambia el
 otro en el mismo commit.
 
 | # | Promesa | Fase |
@@ -98,7 +99,7 @@ esperas; un `TestTimeSource` que avanzan el guion y las esperas. Ninguna toca re
 |---|---|
 | 401 | Las claves de cada request son exactamente las de `Contracts.cs`/`TeachSession.cs` (sesión en snake, paso en camel, `note{role,transcript,mode}`, cierre `{}`, plan `{variables, execution_intent}`, las cuatro de `/teach/*`); un `""` del request viaja; `alternativeTargets` viaja como lista y el resto de pistas como texto. Respuestas con `""` y `null` en `workflow_id`, `summary`, `error`, `url`, `label` → ausentes (y un `error:""` con HTTP 200 no termina nada); un campo que Graph agregue no rompe; el `PlanStep` expone superficie, `readiness` (número o texto), huella, `clickPos`, `alternativeTargets` y `nodePath`; la interpretación de `process-video` llega cruda e idéntica; `createdAt` `{low negativo, high}` da el mismo instante que el número llano |
 | 402 | Las nueve llamadas de aprendizaje y workflows con y sin email: `X-API-Key`, `X-Miracle-App: android_app`, `X-Miracle-Device-Id`, nunca `X-Miracle-Feature`; las cuatro de `/teach/*`, además, `X-Miracle-Feature: conscious_bridge`. Método y URL de cada una, con el id escapado en la ruta; la key no viaja ni en la URL ni en el cuerpo |
-| 403 | `mandarPaso` con `503, 0, 200` → 3 llamadas, esperas `[800, 1600]`; cada transitorio solo y primero se reintenta; `429` con `Retry-After` 4 → `[4000]`; `-1` → 1 llamada y el mensaje dice que no se reintentó. `terminar` con `504×3` → 3 llamadas, esperas `[3000, 8000]` y `FinishPendiente` con el id de sesión; `504, 200` → 2; `-1` → 1 llamada, 0 esperas; `400` → 1. Una llamada colgada se corta en su tope y cuenta como lectura agotada (1 llamada). El tope que recibe el transporte: 90 s general, 5 min en `/teach/*`. Cancelar sale como `CancellationException`, tipo exacto |
+| 403 | `mandarPaso` con `503, 0, 200` → 3 llamadas, esperas `[800, 1600]`; cada transitorio solo y primero se reintenta; `429` con `Retry-After` 4 → `[4000]`; `-1` → 1 llamada y el mensaje dice que no se reintentó. `terminar` con `504×3` → 3 llamadas, esperas `[3000, 8000]` y `FinishPendiente` con el id de sesión; `504, 200` → 2; `-1` → 1 llamada, 0 esperas; `400` → 1. Una llamada colgada se corta en su tope y cuenta como lectura agotada (1 llamada). El tope que recibe el transporte: 90 s general, 5 min en `/teach/*`. Cancelar sale como `CancellationException`, tipo exacto. `process-video` no se reintenta: lo juzga la 426 |
 | 404 | Graph lista viejo → nuevo (con `createdAt` Neo4j) → el cliente devuelve nuevo → viejo; sin fecha, por id descendente. `nombre()` de «Workflow sin descripción», «User workflow summary:», `""` y «No description» no contiene el relleno y sí la app, «2 sep 13:42» (con desfase de -5 h) y «6 pasos»; una descripción de verdad se respeta tal cual; «user workflow summary - registrar» (minúsculas, sin dos puntos) también es relleno |
 | 405 | `borrar` con `404` → no lanza, 1 llamada `DELETE`; con `500` → `GraphException` tipo exacto. `prependAlignment` con `500 {"error":…}` o con un transporte que lanza → no lanza, devuelve `false` y una línea del log trae el id y el status (`HTTP 500`, `HTTP 0`), no el texto de Graph (419); con `200` → `true` y ninguna línea de fallo; cancelar sale tal cual |
 | 406 | `interpretSteps` con `503×4`, `-1`, transporte que lanza, cuerpo ilegible, `{}`, `interpretation:null` e `interpretation:""`, sin key y sin pasos → `null` sin excepción, y el log dice «el modelo no opinó» con la causa medida (el status, «no respondió a tiempo», «no se pudo leer» o el tipo de lo que se lanzó, como `StackOverflowError`), nunca el texto de Graph (419); una `interpretation` de 2000 niveles y un transporte que lanza un `Error` (no una `Exception`) → `null` y «no opinó», sin volcarla en el log; con `interpretation` de verdad → el JSON crudo idéntico; cancelar sale tal cual |
@@ -106,8 +107,8 @@ esperas; un `TestTimeSource` que avanzan el guion y las esperas. Ninguna toca re
 | 408 | `crearSesion` con `401`, `-1`, `400 {error}`, `200` sin id y `503×4`, y sin key (cero llamadas) → `NoSePuede` con la causa en una línea. Después: `pasoObservado` devuelve `false`, la nota se ignora, `terminar` lanza `IllegalStateException` (tipo exacto) y `descartar` devuelve `false`; ni una llamada más que la de abrir, ni una escritura, ni video, y ningún lector vivo (la prueba falla a los 20 s si queda uno). Tras un no, un segundo `empezar` con Graph sano enseña. Cancelado en el último instante de `empezar` —con la sesión ya abierta en Graph, cuando lee la hora—: sale cancelado, `pasoObservado` devuelve `false` y un segundo `empezar` enseña |
 | 409 | En la crónica, `disco escribe lecciones/ses-1.json` va después del último paso y antes del primero de video, `context-notes` y `finish`; una sola escritura bajo `lecciones/`, que se lee entera (pasos, identidad, dónde empezó y terminó, nota) y sin motivo. Con un paso colgado que el tope de vaciado corta y sin dónde terminó: el colgado y el de detrás cuentan como no enviados, ninguno viaja después de `finish`, y el motivo dice «2 de 3» y «dónde terminó». Con el almacén cayéndose a mitad de `lecciones/`: nada bajo `lecciones/`, `leccion` nula, un aviso con la causa y la sesión cerrada |
 | 410 | Dos trozos de nota → una `context-notes` a esa sesión con los dos, en el orden en que se dijeron, antes de `finish`; sin nota ni resumen del video → cero `context-notes` y un `finish`; la nota con `500` → `finish` igual y un aviso con la causa; sin voz y con resumen del video → la nota lleva el resumen, antes de `finish` |
-| 411 | `finish` con `504×3` → 3 cierres, esperas `[3000, 8000]`, `PENDIENTE`, «pendiente de cerrar en Graph» y un archivo en `cierres-pendientes/` con sesión, workflow y cuándo. Al arrancar con Graph aún en 504 se queda; con Graph sano sale con un solo `finish` a esa sesión y se borra, y el arranque siguiente no llama a nadie. `finish` con `-1` → un cierre, `INCIERTO`, «pudo haberlo cerrado» y ningún pendiente. Un pendiente que al arrancar recibe `400` o `-1` se borra: no se reintenta para siempre. Al arrancar con dos pendientes y Graph en 504: dos `finish`, uno por sesión, y ninguna espera. `finish` con `401`, `403` o sin key → `PENDIENTE` y un archivo en `cierres-pendientes/`; al arrancar con `401`, `403` o sin key (cero llamadas) se conservan los tres, y con Graph sano se cierran. Con siete pendientes y Graph en 504, un arranque hace cinco `finish` y queda `(0, 7, 0)`, y el siguiente empieza por los dos que no se intentaron; si cada `finish` tarda 50 s en el reloj inyectado, el arranque hace tres |
-| 412 | El video que lanza o devuelve `null` → `finish` igual, `CERRADA`, `videoParaReprocesar` y una marca en `videos-por-reprocesar/` con la sesión, la lección y el motivo; con resumen, sin marca. Descartar con un paso en vuelo, dos en cola y una nota → solo existen el `POST …/sessions` y ese paso: ni pasos, ni nota, ni `finish`, ni video, ni escrituras, y `terminar` lanza `IllegalStateException`. Descartar antes de que el lector arranque → solo el `POST …/sessions`. `descartar` devuelve `true` al descartar y al repetirlo; mientras `terminar` espera un paso en vuelo devuelve `false`, y los tres pasos, la nota, la lección y el `finish` salen igual |
+| 411 | `finish` con `504×3` → 3 cierres, esperas `[3000, 8000]`, `PENDIENTE`, «pendiente de cerrar en Graph» y un archivo en `cierres-pendientes/` con sesión, workflow y cuándo. Al arrancar con Graph aún en 504 se queda; con Graph sano sale con un solo `finish` a esa sesión y se borra, y el arranque siguiente no llama a nadie. `finish` con `-1` → un cierre, `INCIERTO`, «pudo haberlo cerrado» y ningún pendiente. Un pendiente que al arrancar recibe `400` o `-1` se borra: no se reintenta para siempre. Al arrancar con dos pendientes y Graph en 504: dos `finish`, uno por sesión, y ninguna espera. `finish` con `401`, `403` o sin key → `PENDIENTE` y un archivo en `cierres-pendientes/`; al arrancar con `401`, `403` o sin key (cero llamadas) se conservan los tres, y con Graph sano se cierran. Con siete pendientes y Graph en 504, un arranque hace cinco `finish` y queda `(0, 7, 0)`, y el siguiente empieza por los dos que no se intentaron; si cada `finish` tarda 50 s en el reloj inyectado, el arranque hace tres; si cada consulta tarda 15 s y cada cierre 40 s, hace tres consultas y dos cierres, queda `(0, 7, 0)` y cada consulta viaja con `TOPE_DE_CONSULTA` (20 s), menos que el tope general |
+| 412 | El video que lanza o devuelve `null` → `finish` igual, `CERRADA`, `videoParaReprocesar` y una marca en `videos-por-reprocesar/` con la sesión, la lección y el motivo; con resumen, sin marca. Descartar con un paso en vuelo, dos en cola y una nota → solo existen el `POST …/sessions`, ese paso y, en segundo plano, el `DELETE` de la sesión (425): ni pasos, ni nota, ni `finish`, ni video, ni escrituras, y `terminar` lanza `IllegalStateException`. Descartar antes de que el lector arranque → solo el `POST …/sessions` y el `DELETE`. `descartar` devuelve `true` al descartar y al repetirlo; mientras `terminar` espera un paso en vuelo devuelve `false`, y los tres pasos, la nota, la lección y el `finish` salen igual |
 | 413 | En un hilo de pila chica (512 KB), para que un `toString` a 2000 niveles reviente siempre y el runner siga: `{"interpretation":…}` con 63 niveles se lee y con 64 (65 con el cuerpo) es `GraphException` 200 que dice «64 niveles»; unos `[{` dentro de un texto o tras una comilla escapada no cuentan, y tras `"c:\\"` el texto cierra y sí cuentan. Una respuesta de 2000 niveles en las diez llamadas que leen (sesión, paso, cierre, lista, workflow, si ya se cerró, plan, `upload-token`, `file-state`, `process-video`) → `GraphException` tipo exacto con «64 niveles», sin el JSON en el mensaje ni en el log; un 500 con el `error` a 2000 niveles y un `503×4` con el cuerpo a 2000 niveles → `GraphException` con su status y «64 niveles», sin `[[[` en el mensaje ni en el log; `interpretSteps` → `null` y «no opinó … 64 niveles». La lección con el `LearningClient` real: el paso cuya respuesta viene anidada cuenta como no enviado con el porqué y el siguiente sale; el video que la trae queda para reprocesar con «64 niveles»; la lección llega a disco, la sesión se cierra y ni el log ni el disco guardan `[[[` |
 | 414 | `plan` con `variables {"pais":null,"edad":7}` → `""` y `"7"`; `variables:null` → ninguna; opciones `{"value":"co","text":…}`, `"label":null`, `"value":null` y `{"label":"Chile"}` → `""` donde falta. `processVideo` con `notes:[null,{…},null]` y `questions:["…",null]` → sin los `null`, con el resto y la interpretación intactos. Al grabar, `FieldOption("", "")` viaja con `value` y `label` vacíos |
 | 415 | `borrar("")`, `borrar("  ")`, `workflow("")` y `plan(" ")` con un transporte que respondería 404 → `IllegalArgumentException` tipo exacto que dice «id», «en blanco» y «graph», y cero llamadas. `{"id":17}` en la lista → `"17"`, y `borrar` va a `DELETE …/workflows/17`. `prependAlignment("")` y `("  ")` → `false`, cero llamadas y una línea del log con «id», «en blanco» y «graph» |
@@ -116,9 +117,12 @@ esperas; un `TestTimeSource` que avanzan el guion y las esperas. Ninguna toca re
 | 418 | `terminar` en su propia corrutina, que la prueba cancela en un punto exacto. Cancelado durante el video → la corrutina sale cancelada, una `context-notes` antes de un `finish`, la lección en disco, una marca de video con «cancel», un segundo `terminar` lanza `IllegalStateException` con «terminada» y el log trae «■ aprendí». Cancelado durante el `finish` con Graph en 504 → los 3 intentos con `[3000, 8000]`, un pendiente, y el arranque siguiente lo cierra. Cancelado vaciando la cola con un paso colgado → un `finish` y ningún paso después, el video ni se llama y queda marcado, y en disco `[true, false, false]` con «se canceló» |
 | 419 | Seis demostraciones con el cliente REAL y un solo log para el cliente y la lección, como `LogBus` en la app: la descripción «Registrar a Ana Pérez CC 1037», pasos con `label`, `value`, `selectedValue`, `selectedLabel` y `semanticTarget` sensibles, una nota y un video con resumen e interpretación sensibles. Cierran entera, con ecos, pendiente, fallida, incierta y con el lector muerto por una cancelación que nombra al paciente. Con ecos, Graph rechaza un paso repitiendo su valor, responde a otro algo ilegible que lo trae, devuelve la nota en el error y manda un video procesado que no se lee; el cierre pendiente y el fallido repiten el nombre. Además: un arranque al que Graph responde `400` con el nombre, `interpretSteps` con un `500` y con algo ilegible que traen lo dicho, `uploadToken` con un `archiveError` que nombra al paciente y `prependAlignment` con un `500` que nombra el workflow. Ningún fragmento sensible aparece en ninguna línea; el mensaje para el usuario sí lleva el nombre; cada cierre deja su línea «■» con su sesión, y el paso rechazado, su `HTTP 400` |
 | 420 | Con Graph sano: `disco escribe cierres-pendientes/ses-1.json` antes del primer `finish` y `disco borra` después, sin pendiente al final y sin pedir tope. El proceso muere procesando el video y con `finish` en vuelo: con el disco de ese instante, el arranque hace un `finish` a `ses-1` y lo borra. Cancelado en el video y con `finish` en vuelo, con Graph colgado: el cierre le pide `TOPE_DE_CIERRE_CANCELADO` (2 min) a una espera inyectada y no suelta antes; al vencer, sale cancelado, con un `finish` y el pendiente en disco, y el arranque lo cierra. Muere tras un `finish` que salió, justo al borrar el provisional, contra un Graph con la memoria de `e9d0d44` (`GraphDeVerdad`), donde un `finish` repetido responde 200 y cobra otra vez: el arranque no hace ningún `finish`, el LLM cobró una sola vez, queda `(1, 0, 0)` y el siguiente no llama |
-| 421 | Un pendiente de una sesión que `GraphDeVerdad` ya cerró → una sola llamada, `GET /api/v1/workflows/ses-1`, ningún `finish`, un cobro, `(1, 0, 0)`, el pendiente borrado y una línea del log con la sesión y «ya estaba cerrada». Con `completedAt` y un `status` que no es `done` → tampoco hay `finish`. Con la sesión en `recording` → el GET y un `finish`, un cobro. Con el GET en `503`, `-1` o `404` → un GET, ninguna espera y el `finish` de siempre: `(1, 0, 0)` si sale, `(0, 0, 1)` con `404` |
+| 421 | Un pendiente de una sesión que `GraphDeVerdad` ya cerró → una sola llamada, `GET /api/v1/workflows/ses-1`, ningún `finish`, un cobro, `(1, 0, 0)`, el pendiente borrado y una línea del log con la sesión y «ya estaba cerrada». Con `completedAt` y un `status` que no es `done` → tampoco hay `finish`; con `status` `done` y `completedAt` nulo o ausente, tampoco. Con la sesión en `recording` → el GET y un `finish`, un cobro. Con el GET en `503`, `-1` o `404` → un GET, ninguna espera y el `finish` de siempre: `(1, 0, 0)` si sale, `(0, 0, 1)` con `404` |
 | 422 | Una lección con un paso y una nota se queda procesando el video con su provisional en disco, y otro `Leccion` sobre el mismo almacén corre `reintentarPendientes`: cero llamadas y `(0, 1, 0)`. Al soltar el video la lección cierra: en lo que le llegó a `GraphDeVerdad`, ningún paso ni nota de `ses-1` después de su `finish`, un solo cobro y ningún pendiente. Terminada otra lección como `PENDIENTE` (504), un arranque del mismo proceso sí la cierra |
 | 423 | Con cuerpos que copian la forma de `e9d0d44`: la lista y un workflow con `variables` en lista de objetos, fechas `{low, high}` y ramas se leen (ids, `createdAt`, `totalSteps`, `status`, las variables siguen en lista); el cierre trae el workflow entero. El plan con eco de `variables` y `executionIntent`, `runtimeIntelligence`, `branchContext` objeto y `null`, la alineación en orden 0 (`app:com.x`) y `key` sin selector → tres pasos en su orden; `404 not found or has no steps` y `500 has no executable steps` → `GraphException` con su status y 4 llamadas en total. La alineación con `already_present` y con `learned` → `true` y una línea del log con el id y cuál de las dos; `404` y `400` → `false` con su status; ni el workflow ni el texto de Graph en el log |
+| 424 | Un pendiente de `ses-1` abierto en `GraphDeVerdad` y dos arranques, cada uno con su `Leccion`: el primero se queda con su `finish` en vuelo y el segundo corre → cero llamadas, el disco sin tocar, `(0, 0, 0)` con `otroArranqueEnCurso` y una línea del log con «en curso»; suelto el primero → el GET y un `finish`, un cobro, `(1, 0, 0)`, el pendiente borrado, y el arranque siguiente corre. El primero cancelado con su `finish` colgado → el pendiente sigue, y el arranque siguiente corre: el GET, un `finish`, `(1, 0, 0)` y un cobro |
+| 425 | Grabando con la sesión abierta en `GraphDeVerdad` y el DELETE colgado → `descartar` vuelve `true` antes de 2 s; soltado, un solo `DELETE /api/v1/workflows/ses-1`, ninguna espera, la sesión ya no existe, cero cobros y una línea «ya no está en graph» con el id. `404`, `500`, `503`, `429` con `Retry-After`, `-1` y un transporte que lanza, con el nombre en la respuesta → un DELETE y ninguna espera; con `404`, «ya no está en graph» y ninguna línea «no se borró»; con el resto, una línea con el id, «no se borró» y `HTTP n`; ninguna línea con «Ana», «Pérez», «1037» ni «Registrar». Sin empezar, o con `401` al abrir → `false` y ninguna llamada más que la de abrir. Descartada mientras Graph abría → `NoSePuede` y el DELETE de esa sesión. Con un pendiente de la sesión en disco → `disco borra` antes de `red DELETE`, y el arranque siguiente no llama. Con un arranque que tiene el `finish` de esa sesión en vuelo → nada de la sesión le llega a Graph después del DELETE, y no queda pendiente |
+| 426 | `processVideo` con `500`, `502`, `503`, `504`, `408`, `0`, `429` con `Retry-After` 4 y `-1` → `GraphException` con ese status, una sola llamada y ninguna espera; colgada, con un tope de 200 ms → `-1` y una llamada. `upload-token` y `file-state` con `503, 200` → dos llamadas y `[800]`. Una lección cuyo video llama al `processVideo` real con Graph en `503` → una llamada, `CERRADA`, `videoParaReprocesar` y la marca en disco; el arranque siguiente no llama a nadie y la marca sigue |
 
 Las 407-412 viven en `Contrato004LeccionEnGraph.kt` y juzgan la lección con el `LearningClient` **real**
 encima de un transporte que responde por ruta y cuenta cuántas llamadas hay en vuelo, un `Almacen` en
@@ -132,8 +136,8 @@ lección de la 413, el transporte por rutas, la crónica y el almacén en memori
 de 512 KB de pila (`correConPilaChica`, en `Corre.kt`): sin guarda, lo que desborda desborda siempre, y el
 `StackOverflowError` sale como un AssertionError que lo dice en vez de llevarse el runner.
 
-Las 421-422 viven con ellas y suman `GraphDeVerdad`: un Graph con la memoria y las reglas de `e9d0d44` —la sesión en `recording`,
-pasos y notas aceptados también sobre una sesión cerrada, un `finish` que responde 200 y cobra cada vez, 404 para lo que no existe—
+Las 421, 422 y 424-426 viven con ellas y suman `GraphDeVerdad`: un Graph con la memoria y las reglas de `e9d0d44` —la sesión en `recording`,
+pasos y notas aceptados también sobre una sesión cerrada, un `finish` que responde 200 y cobra cada vez, un `DELETE` que la borra, 404 para lo que no existe—
 que cuenta los cobros y lo que le llegó, por cualquier transporte. La 423 vive con las 413-416 y lee cuerpos que copian la forma de
 Graph (`workflowDeGraph`). Las 417-422 no duermen ni dependen de hilos: la cancelación llega en un punto
 exacto con un `CompletableDeferred` que suelta el transporte o el video, con `CoroutineStart.UNDISPATCHED` para que `terminar`
@@ -270,24 +274,25 @@ MediaProjection y sin red real:
 - `Leccion.kt` — una enseñanza. `empezar` abre la sesión (sin sesión no se enseña); `pasoObservado` y `nota`
   solo encolan, y **un solo lector** manda en serie; `terminar` va en este orden: vaciar la cola (tope 30 s)
   → la lección a disco → el video (una función que devuelve su resumen o `null`) → la nota → el cierre → el
-  resultado «SIN comprobar»; `descartar` no publica nada; `reintentarPendientes` es para el arranque.
+  resultado «SIN comprobar»; `descartar` no publica nada y borra en Graph la sesión que ya abrió (425); `reintentarPendientes` es para el arranque, uno a la vez
+  por proceso (424).
 
 Lo que deja en el almacén, un archivo por sesión (el id de sesión, escapado, es el nombre):
 
 | Ruta | Qué | Cuándo |
 |---|---|---|
 | `lecciones/<sesión>.json` | sesión, workflow, descripción, identidad, dónde empezó y terminó, cuándo, cada paso con su resultado, la nota y el motivo si falta algo | al terminar, antes de la red |
-| `cierres-pendientes/<sesión>.json` | `sessionId`, `workflowId`, `cuandoMs`, `intentos` (cuántas veces lo intentó un arranque) | provisional, junto con la lección y antes de la red (420). Se borra si `finish` sale, si Graph no respondió a tiempo o si dijo que no, o si al arrancar Graph dice que ya la cerró (421); se queda si no salió tras sus tres intentos, por la key (401/403, sin key) o porque un cierre cancelado agotó su tope |
+| `cierres-pendientes/<sesión>.json` | `sessionId`, `workflowId`, `cuandoMs`, `intentos` (cuántas veces lo intentó un arranque) | provisional, junto con la lección y antes de la red (420). Se borra si `finish` sale, si Graph no respondió a tiempo o si dijo que no, o si al arrancar Graph dice que ya la cerró (421), o si la demostración se descarta (425); se queda si no salió tras sus tres intentos, por la key (401/403, sin key) o porque un cierre cancelado agotó su tope |
 | `videos-por-reprocesar/<sesión>.json` | `sessionId`, `leccion`, `motivo`, `cuandoMs` | el video lanzó, no dejó nada o se canceló el cierre |
 
 Pone verdes: **407-412**.
 
-**Abierto, del Capitán.** Descartar no llama a Graph, igual que Windows. Verificado en el código de Graph (`e9d0d44`): cada paso
+**Decidido por el Capitán (C, 2026-09-15): descartar borra en Graph (425).** Verificado en el código de Graph (`e9d0d44`): cada paso
 se guarda al llegar (`Neo4jWorkflowRepository.js:322-365`) y una sesión sin `finish` se queda en `recording`. `GET /workflows` no
-filtra por estado (`:132-175`), así que una demostración descartada **se ve en la lista**, sin resumen y con los pasos que alcanzaron
-a viajar, y con al menos un paso **le llega al cerebro** como herramienta (`AgentWorkflowStore.js:45-50`). Borrarla
-(`DELETE /workflows/{id}`) es borrar datos y cambia lo que el usuario ve en la lista: no se decidió aquí. La llamada ya existe,
-`LearningClient.borrar`, lista y sin usar.
+filtra por estado (`:132-175`), así que una demostración descartada **se veía en la lista**, sin resumen y con los pasos que alcanzaron
+a viajar, y con al menos un paso **le llegaba al cerebro** como herramienta (`AgentWorkflowStore.js:45-50`). Antes, descartar no
+llamaba a Graph, como Windows. Ahora, si la sesión ya se abrió, un `DELETE /workflows/{id}` de un intento la borra en segundo plano
+(ver «Control de la ronda contra Graph», abajo).
 
 ### Revisión de la 4A1 — lo que Graph manda raro (hecha)
 
@@ -431,7 +436,12 @@ Un mapeo del código de Graph (`e9d0d44`, solo lectura) contrastó cada supuesto
   proceso que muere entre un `finish` que salió y el borrado del provisional dejaba al arranque cerrando, y cobrando, otra vez. Ahora
   el arranque pregunta primero con un `GET /workflows/{id}` de un solo intento (`LearningClient.cerradaEnGraph`): con `done` o
   `completedAt` la da por cerrada sin `finish`; si no se sabe —no respondió, no la encuentra, sin key—, el `finish` de siempre.
-  **Costo que queda:** si Graph ya la había cerrado y el GET no responde pero el `finish` sí, cobra otra vez.
+  **Costo que queda:** si Graph ya la había cerrado y el GET no responde pero el `finish` sí, cobra otra vez. Y un `finish` **en
+  vuelo** no se ve: Graph ya lo recibió y sigue post-procesando —el LLM en `WorkflowLearner.js:87`, `status: "done"` y `completedAt`
+  recién en `:114`—, y la función de Vercel sigue hasta sus 60 s (`vercel.json:10`) aunque el cliente se corte. En esa ventana el GET
+  ve `recording` y el arranque manda un segundo `finish`, que cobra otra vez. Pasa si el proceso murió con el `finish` en vuelo y la
+  app arranca enseguida, o si el tope de un cierre cancelado (420) lo cortó y un arranque lo toma antes de que Graph termine. El
+  cliente no puede garantizar nada aquí: no sabe cuándo salió ese `finish`, y Graph no tiene un «cerrando» que preguntar.
 - **Pasos y notas sobre una sesión cerrada se guardan (422).** Con el id en la ruta, `resolveSessionId` no exige la sesión en memoria
   (`LearningSessionService.js:40-49`), y `recordStep` y `addContextNote` miran el dueño, no el estado (`WorkflowLearner.js:49-67`):
   201. `Leccion` no manda un paso ni una nota después de su `finish`: la cola se cierra y el lector termina antes de escribir la
@@ -487,6 +497,73 @@ lleva sabotaje.
 
 `./gradlew :app:compileReleaseKotlin -q --rerun` → exit 0. `app/` no se toca.
 
+### Control de la ronda contra Graph, y las decisiones C y F del Capitán (esta corrida)
+
+Un control independiente de `e533199^..795bc9e` aprobó con observaciones, y el Capitán decidió C y F. Cómo quedaron:
+
+- **Dos arranques a la vez (424).** Nada impedía que la app, al volver al frente dos veces, corriera dos `reintentarPendientes` en el
+  mismo proceso: los dos leían `cierres-pendientes/ses-X.json`, los dos GET veían `recording`, los dos mandaban `finish` —Graph cobra
+  el LLM dos veces, `WorkflowLearner.js:69-121` no mira el estado— y `anotarIntento` y `borrarPendiente` competían por el archivo. La
+  422 cubría lección↔arranque, no arranque↔arranque. Ahora un candado del proceso, tomado con `Mutex.tryLock`, que no espera, deja
+  correr un barrido a la vez: el segundo vuelve enseguida con `otroArranqueEnCurso`, sin llamar a Graph ni tocar el disco. No se une
+  al que corre: quien llama no gana nada esperando, y así no hereda una cancelación ajena. El candado se suelta en un `finally` con
+  `unlock`, que no suspende: si el barrido se cancela, el arranque siguiente corre.
+- **La consulta dentro del tope (411).** El GET de la 421 usaba el tope general (90 s) y después el `finish` otros 90 s, así que un
+  arranque podía durar 2 min más 3 min, no «más un intento». Ahora el GET tiene su propio tope, `LearningClient.TOPE_DE_CONSULTA`
+  (20 s), y el tope del arranque se mira otra vez antes del `finish`: si se agotó mientras Graph contestaba, el cierre no empieza,
+  queda para el siguiente y no se le anota el intento. Un arranque dura como mucho 2 min más un cierre de 90 s.
+- **La rama `status == "done"` sin juez (421).** El contrato solo tenía `done` con `completedAt`: mirar solo `completedAt` quedaba
+  verde. Ahora juzga `done` con `completedAt` nulo y ausente.
+- **El `finish` en vuelo (421, solo texto).** Es el costo que queda en «Lo que Graph hace de verdad».
+- **C · Descartar borra en Graph (425).** `DELETE /workflows/{id}` borra el workflow con sus pasos y ramas
+  (`Neo4jWorkflowRepository.js:735-749`), 404 si no existe (`registerPublicApiRoutes.js:560-573`); después, un paso o un `finish`
+  sobre ese id es 404 (`WorkflowLearner.js:23-36`). `descartar` vuelve enseguida y el borrado corre en `segundoPlano`, un parámetro
+  nuevo de `Leccion` que por defecto es el `scope` del lector. En este orden: a) la sesión queda marcada como descartada en el
+  proceso, y ningún arranque que empiece después la toca; b) toma el candado de la 424, que espera al arranque en curso —si ya iba
+  por esa sesión, su `finish` sale ANTES del DELETE— y borra el pendiente de la sesión si lo hay; c) un DELETE sin reintentos: 2xx y
+  404 cuentan como hecho, y otro fallo deja en el log el id y `HTTP n`. Si la sesión se abre justo después de descartar (se descartó
+  mientras Graph abría), también se borra. Sin sesión en Graph no se llama. La marca sale del registro al terminar, con el pendiente
+  fuera del disco: un registro que no se vacía tapa la sesión en todo lo que viene después, y con ids que se repiten tapó `ses-1` en las
+  418, 420-422, 424 y 425 del contrato. Si el pendiente no se pudo borrar, la marca se queda: ningún arranque de este proceso cierra, y
+  publica, una demostración descartada.
+- **F · `process-video` una sola vez (426).** Graph ya reintenta hasta 5 veces contra Gemini, y cada intento es consumo
+  (`GeminiVideoClient.js:260-300`): con los reintentos del cerebro, un `process-video` eran hasta 4 × 5 = 20 `generateContent`. Ahora
+  `processVideo` va con `reintentos = 0`: un 5xx, un 429, un `-1` o el tope son `GraphException`, y la lección deja el video en
+  `videos-por-reprocesar/`. Nada lo reintenta solo, ni al arrancar. `upload-token` y `file-state` siguen con los reintentos del cerebro.
+
+**Lo que no cubre el contrato.** No hay juez multihilo para el candado de la 424: `Mutex.tryLock` es seguro entre hilos, pero el
+contrato corre en uno. Tampoco se juzgan el borrado cancelado antes de salir ni la marca que se queda cuando el pendiente no se pudo
+borrar, porque el almacén en memoria solo falla al escribir. Otro proceso sobre el mismo disco no lo cubren ni la 422 ni la 424.
+
+### Verificación del control y de C y F (2026-09-15)
+
+Las pruebas se escribieron primero. Contra `795bc9e` con dos novedades sin cablear —el campo `otroArranqueEnCurso` y la constante
+`TOPE_DE_CONSULTA`—, el juez dijo `CONTRATO ROTO: 2 promesa(s) incumplida(s)`: la 411, «la consulta no contó en el tope del arranque:
+un cierre empezó pasados 2m expected:<[ses-t1, ses-t2]> but was:<[ses-t1, ses-t2, ses-t3]>»; la 424, «con un arranque en curso, otro
+llamó a Graph: [GET /api/v1/workflows/ses-1, POST …/ses-1/finish]». La 421 siguió verde: su caso nuevo caza un sabotaje, no un defecto.
+La implementación (`9e1315b`) lo dejó en `CONTRATO INTACTO: 39 promesas.` Las de C y F, contra `9e1315b`: `CONTRATO ROTO: 3 promesa(s)
+incumplida(s)`. La 412 dijo «después de descartar, algo salió … but was:<[POST …/sessions, POST …/ses-1/steps]>»; la 425, «descartada
+con la sesión abierta en Graph … but was:<[POST /api/v1/learning/sessions]>»; la 426, «HTTP 502: process-video se repitió», con cuatro
+llamadas. La implementación (`733bf2a`) lo dejó en `CONTRATO INTACTO: 41 promesas.` Después, 12 sabotajes sobre el código commiteado,
+cada uno con el juez entero y revertido con `git checkout`:
+
+| # | Sabotaje | Lo que dijo el juez |
+|---|---|---|
+| 424 | el candado de la instancia y no del proceso | `con un arranque en curso, otro llamó a Graph: [GET /api/v1/workflows/ses-1, POST /api/v1/learning/sessions/ses-1/finish]`. Solo la 424 |
+| 424 | el candado se suelta sin `finally` | `cancelado el arranque que corría, el candado quedó tomado y el siguiente no corrió`. Solo la 424 |
+| 421 | `cerradaEnGraph` mira solo `completedAt` | `con status done y completedAt nulo, el arranque volvió a cerrarla expected:<[GET …/ses-1]> but was:<[GET …/ses-1, POST …/ses-1/finish]>`. Solo la 421 |
+| 411 | no se mira el tope del arranque tras la consulta | `la consulta no contó en el tope del arranque: un cierre empezó pasados 2m expected:<[ses-t1, ses-t2]> but was:<[ses-t1, ses-t2, ses-t3]>`. Solo la 411 |
+| 411 | la consulta con el tope general | `la consulta no viajó con su tope corto expected:<[20s, 20s, 20s]> but was:<[1m 30s, 1m 30s, 1m 30s]>`. Solo la 411 |
+| 425 | `descartar` no borra | `descartada con la sesión abierta en Graph expected:<[POST …/sessions, DELETE /api/v1/workflows/ses-1]> but was:<[POST …/sessions]>`. Rompe también la 412, que espera el DELETE |
+| 425 | el DELETE dentro de `descartar`, en línea | `descartar esperó al DELETE: bloquea a quien descarta expected:<true> but was:<null>`. Solo la 425 |
+| 425 | el DELETE con los reintentos del cerebro | `HTTP 503: el DELETE no fue uno solo expected:<[DELETE …/wf-ses-1]> but was:<[DELETE …/wf-ses-1, DELETE …`. Solo la 425 |
+| 425 | el borrado no espera al arranque en curso | `a Graph le llegó algo de la sesión después del DELETE: [GET …/ses-1, DELETE …/ses-1, POST …`. Solo la 425 |
+| 425 | el borrado no borra el pendiente | `el pendiente no se borró antes del DELETE: [red POST …/sessions, disco escribe cierres-pendientes/ses-1.json, red DELETE …`. Solo la 425 |
+| 425 | el fallo del DELETE va al log con el mensaje | `HTTP 500: el log llevó la descripción o lo que Graph repitió expected:<[]> but was:<[[leccion] la sesión descartada ses-1 no se borró en grap…`. Solo la 425 |
+| 426 | `processVideo` con los reintentos del cerebro | `HTTP 502: process-video se repitió expected:<[POST …/process-video]> but was:<[POST …/process-video, POST …, POST …, POST …]>`. Solo la 426 |
+
+`app/` no se toca: ninguna llamada de la app usa `Leccion` ni `LearningClient`.
+
 ### Lo que viene (specs y fases propias, sobre este cliente)
 
 4B grabador por accesibilidad · 4C enseñanza activa por Graph (cablea la lección, el almacén y el video) ·
@@ -501,8 +578,13 @@ Lo que el código de Graph ya les pide:
   Graph guarda las notas del video en la memoria de ese usuario y el turno la lee con el suyo. Si viaja vacío, los dos caen en
   `anon`. Hoy no pueden diferir porque ninguna parte de la app llama a esas rutas, y `LearningClient` no fija el `userId`: lo
   recibe de quien llama.
-- **4C** llama a `reintentarPendientes` en segundo plano, y puede hacerlo también con una lección cerrándose: la 422 lo cubre dentro
-  del proceso.
+- **4C** llama a `reintentarPendientes` en segundo plano, y puede hacerlo con una lección cerrándose o con otro arranque en curso: la
+  422 cubre lección↔arranque y la 424 arranque↔arranque, dentro del proceso. La 422 no cubría dos arranques: los dos mandaban `finish`.
+  Un arranque que vuelve con `otroArranqueEnCurso` no se reintenta ni espera: lo cierra el que corre. Otro proceso sobre el mismo disco
+  no lo cubre ninguna.
+- **4C** le pasa a `Leccion` un `segundoPlano` que viva más que la pantalla: ahí corre el DELETE de una demostración descartada (425).
+  Con el scope de la pantalla, salir de ella puede cancelar el borrado.
+- **4C** no reintenta `process-video` (426): un fallo deja el video en `videos-por-reprocesar/` y se reprocesa si el usuario lo pide.
 
 ---
 
@@ -510,7 +592,7 @@ Lo que el código de Graph ya les pide:
 
 | Qué | Windows | Android | Por qué |
 |---|---|---|---|
-| Reintentos en transitorio (0, 408, 429, 502, 503, 504) | `GraphClient` no reintenta | igual que el turno: hasta 3 reintentos con 800 / 1600 / 3200 ms (429 con `Retry-After`: eso, hasta 10 s), todo dentro del tope de la llamada | la red móvil (spec 001). El cierre tiene su propio calendario, el de Windows |
+| Reintentos en transitorio (0, 408, 429, 502, 503, 504) | `GraphClient` no reintenta | igual que el turno: hasta 3 reintentos con 800 / 1600 / 3200 ms (429 con `Retry-After`: eso, hasta 10 s), todo dentro del tope de la llamada; `process-video`, una sola vez (426) | la red móvil (spec 001). El cierre tiene su propio calendario, el de Windows; `process-video` ya lo reintenta Graph contra Gemini, y cada intento es consumo |
 | Tope | 90 s por request (`HttpClient.Timeout`) | 90 s **por llamada**, intentos y esperas incluidos (5 min en `/teach/*`); en `terminar`, 90 s **por intento** | con reintentos, un tope por intento haría la llamada de hasta 6 min; el cierre ya tiene sus tres intentos contados y un 504 de Vercel tarda lo que tarda |
 | Lectura agotada en `terminar` | llega como cancelación y no se reintenta | `-1`, no se reintenta y lanza `GraphException` (no `FinishPendiente`) | Graph pudo haber cerrado, y cobrado, la sesión: reintentar más tarde lo decide quien llama (4C) |
 | `error` en un cuerpo 2xx | se ignora | termina la llamada con ese texto; `""` no cuenta | criterio del cerebro (promesa 6) |
@@ -525,11 +607,11 @@ Lo que el código de Graph ya les pide:
 | Vaciar la cola al parar | espera 30 s y cierra con el lector todavía vivo: un paso colgado puede llegar después de `finish` | pasados los 30 s se corta el lector antes de escribir la lección; lo que no salió cuenta como no enviado, con su motivo | ningún paso viaja después del cierre, y la lección dice la verdad |
 | Nota de contexto | viaja el resumen del video, no lo hablado | una sola nota con lo hablado y el resumen del video, si hay | lo que el usuario explica de viva voz es el contexto más fiel |
 | Cierres pendientes | un solo `pending-finish.json` que se reescribe entero; al cerrar, solo el transitorio deja pendiente; al arrancar, un intento por pendiente y todo lo no transitorio se descarta | un archivo por sesión con escritura atómica, provisional desde antes de la red; `-1` no deja pendiente y al arrancar se descarta; `401`/`403` y sin key dejan pendiente al cerrar y se conservan al arrancar, con un solo criterio (`trasFallo`); al arrancar, un intento por pendiente, como Windows, hasta 5 y 2 min, empezando por los que menos se intentaron | reescribir una lista entera es perder todas por un corte; un proceso que muere a mitad del cierre no pierde la sesión (420); una key mal puesta se arregla, la sesión no murió por eso; tres intentos con esperas y un post-procesado cada uno se repetirían en cada arranque; con Graph caído, N pendientes × 90 s se comerían el arranque (411) |
-| Reintentar un cierre pendiente | `PendingFinish.cs` manda `finish` directo | antes pregunta con un GET de un intento si Graph ya la cerró (`status` `done` o `completedAt`); si sí, la da por cerrada sin `finish`. Y no toca una sesión que una lección de este proceso está cerrando | un `finish` repetido responde 200 y cobra el LLM otra vez (`WorkflowLearner.js:69-121`); una nota que llega después del `finish` se guarda igual (421, 422) |
+| Reintentar un cierre pendiente | `PendingFinish.cs` manda `finish` directo | antes pregunta con un GET de un intento si Graph ya la cerró (`status` `done` o `completedAt`); si sí, la da por cerrada sin `finish`. Con 20 s de tope, dentro del tope del arranque. Un solo arranque a la vez por proceso, y no toca una sesión que una lección de este proceso está cerrando o descartó | un `finish` repetido responde 200 y cobra el LLM otra vez (`WorkflowLearner.js:69-121`); una nota que llega después del `finish` se guarda igual; dos arranques a la vez cerraban dos veces (421, 422, 424) |
 | Cuándo se vacía la cola | en `recorder.StopAsync`, después del video y de la nota (`WorkflowTeachSession.cs:374`) | lo primero de `terminar`, antes de la lección, el video y la nota | la lección lleva los últimos pasos, y ninguno viaja después de que el video y la nota ya se mandaron |
 | Cancelar el cierre | `StopAsync(CancellationToken.None)` (`FaceWindow.xaml.cs:3193`): nada del cierre se cancela, ni el video | se cancela lo que espera —vaciar la cola, el video, que queda para reprocesar y ni se empieza si ya se canceló—; la lección, la nota, el cierre y su pendiente corren bajo `NonCancellable` y la cancelación sale después, con la lección TERMINADA; la red del cierre, con 2 min de tope desde la cancelación | un `viewModelScope` se cancela al salir de la pantalla: minutos de video para nadie no sirven, pero una sesión sin cerrar ni pendiente se pierde (418), y quien cancela no puede quedar esperando 4,7 min (420) |
 | El lector de pasos se muere | el lector es de `WorkflowRecorder` y vive lo que vive la grabación | vive en el `scope` que le pasan: si se cancela o falla, lo que no viajó cuenta como no enviado y la lección sale incompleta; `pasoObservado` dice `false` | un scope ajeno se puede cancelar sin que la lección se entere; `join()` no es «cola vacía» (417) |
-| Descartar | `DiscardAsync` para el video y borra el mp4, sin llamar a Graph, y no tiene llamadores; `WorkflowRecorder` no tiene descarte | `descartar` corta el lector, suelta la cola y la nota; no llama a Graph ni escribe nada | el único «cerrar» que tiene Graph es `finish`, que post-procesa y persiste: cerrar sería publicar |
+| Descartar | `DiscardAsync` para el video y borra el mp4, sin llamar a Graph, y no tiene llamadores; `WorkflowRecorder` no tiene descarte | `descartar` corta el lector, suelta la cola y la nota, no escribe nada y no cierra la sesión; si ya se abrió en Graph, la borra con un `DELETE` de un intento en segundo plano, después de esperar al arranque en curso y de borrar su pendiente (425) | el único «cerrar» que tiene Graph es `finish`, que post-procesa y persiste: cerrar sería publicar. Y una sesión sin cerrar sale en la lista y le llega al cerebro (decisión C del Capitán) |
 | Lista sin `workflows` o plan sin `steps` | `= new()`: lista vacía o plan de 0 pasos | `GraphException` que nombra la clave; vacías sí valen | una respuesta rota no se presenta como «no tienes workflows» ni como un plan que no hace nada (416) |
 | `null` dentro de `notes` o `questions` | entra a la lista | se descarta | un hueco no le sirve a nadie, y tirar el resultado perdería un video que Gemini ya cobró (414) |
 | Un valor de `variables` que no es texto | `null` entra; un número o un objeto tiran el plan | `null`, objeto o lista → `""`; número → su texto | un plan no se pierde por un campo raro (414) |
@@ -593,16 +675,16 @@ no es hablar con el Graph vivo: lo que depende del despliegue sigue abajo, en «
 - **Una sesión sin `finish` se ve.** Se queda en `recording` y sale en `GET /workflows`, que no filtra por estado
   (`Neo4jWorkflowRepository.js:132-175`); con al menos un paso, le llega al cerebro como herramienta
   (`src/application/use-cases/AgentWorkflowStore.js:45-50`). Refuta el supuesto de que una demostración descartada no deja nada
-  visible; el borrado sigue abierto (4A2). **Riesgo aparte:** el cerebro lee el catálogo con `getCatalog(null)`
+  visible; desde la 425, descartar la borra (`DELETE`, `Neo4jWorkflowRepository.js:735-749`: el workflow con sus pasos y ramas). **Riesgo aparte:** el cerebro lee el catálogo con `getCatalog(null)`
   (`AgentWorkflowStore.js:45`), sin filtrar por key, así que el cerebro de una key ve los workflows de las demás, con sus descripciones.
 - **Alineación.** Ver «Lo que Graph hace de verdad» (`registerPublicApiRoutes.js:579-619`).
 - **`/teach/*` es Gemini, sin alternativa.** `upload-token`, `file-state` y `process-video` van siempre contra Gemini, con la config de
   enseñanza (`TeachVideoService.js:12-15,54-110,117-159`). Solo `process-video` genera y reintenta: hasta 5 intentos cuando Gemini da
   429 o 5xx, con esperas de 0,8 s a 6,4 s, y cada intento se registra como consumo (`GeminiVideoClient.js:40-42,211-220,256-300`).
   `upload-token` reserva el archivo con una sola llamada y `file-state` consulta una vez (`:78-113`). Si los 5 intentos fallan, Graph
-  responde 502 (`TeachVideoService.js:156-158`), que este cliente reintenta como transitorio. La función de Vercel tiene
-  `maxDuration: 60` (`vercel.json:8-11`): un 504 puede llegar mientras Gemini genera y factura. **Costo:** un `process-video` son
-  hasta 4 llamadas del cliente (403) × 5 intentos de Graph = 20 `generateContent`. `interpret-steps` no usa Gemini sino el LLM del
+  responde 502 (`TeachVideoService.js:156-158`): es transitorio, pero `process-video` no se reintenta (426). La función de Vercel tiene
+  `maxDuration: 60` (`vercel.json:8-11`): un 504 puede llegar mientras Gemini genera y factura. **Costo:** un `process-video` es
+  una sola llamada del cliente (426) × hasta 5 intentos de Graph = hasta 5 `generateContent`; con los reintentos del cerebro eran 20. `interpret-steps` no usa Gemini sino el LLM del
   cerebro (`src/application/use-cases/TeachStepsInterpreter.js:32-38,50`), igual que `finish` (`WorkflowLearner.js:85-90`).
 - **Las notas del video son del `userId`.** `process-video` guarda cada nota con `memoryRepository.remember(userId, …)`, y un `userId`
   vacío es `anon` (`TeachVideoService.js:123,138-140`). El turno lee la memoria con su propio `userId`, también `anon` si falta
