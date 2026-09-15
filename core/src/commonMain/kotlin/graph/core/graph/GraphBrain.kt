@@ -17,6 +17,8 @@ private val NO_LOG = GraphLog { _, _ -> }
  *
  * Reglas del bucle, copiadas de Windows (docs/specs/001):
  *  - el objetivo viaja en el primer turno; después viaja el `session` opaco que devolvió Graph;
+ *  - cada objetivo abre un hilo nuevo: el primer turno de cada corrida viaja sin `session`
+ *    (`AgentLoop.cs:96`), aunque haya uno de la corrida anterior o uno reanudado (promesa 12);
  *  - `results` van en el mismo orden que las acciones; la respuesta a una pregunta va en `inform`,
  *    aparte y una sola vez (Graph la enruta al `ask_user` pendiente; en `results` se perdería);
  *  - la captura viaja solo si el turno anterior pidió `needsScreenshot`;
@@ -40,7 +42,6 @@ class GraphBrain(
 ) : ThreadedBrain {
 
     private var session: String? = null
-    private var resumed: String? = null
     private var goal = ""
     private var firstTurn = true
     private var pendingInform: String? = null
@@ -54,11 +55,18 @@ class GraphBrain(
     /** Graph no reporta tokens en el contrato del turno; la rotación de ventana no aplica. */
     override val totalTokens: Int get() = 0
 
-    override fun resume(id: String) { resumed = id.ifBlank { null } }
+    /**
+     * No-op a propósito: con Graph no se reanuda un hilo entre activaciones. Medido en el teléfono
+     * (spec 001, Nivel 4): con el `session` de la corrida anterior y un `goal` nuevo en el mismo
+     * request, Graph siguió el hilo viejo e ignoró el objetivo («abre los ajustes» terminó en «la
+     * calculadora está abierta»). Windows nunca reanuda; aquí tampoco (promesa 12). La respuesta a una
+     * pregunta dentro de la MISMA corrida no necesita reanudar: viaja en `inform` sobre el hilo vivo.
+     */
+    override fun resume(id: String) = Unit
 
     override fun begin(goal: String) {
         this.goal = goal
-        session = resumed
+        session = null // objetivo nuevo, hilo nuevo (promesa 12)
         firstTurn = true
         pendingInform = null
         wantShot = false
@@ -73,9 +81,8 @@ class GraphBrain(
 
         val request = TurnRequest(
             session = session,
-            // El objetivo va una sola vez: en el primer turno de la corrida. Repetirlo abriría una
-            // conversación nueva en cada turno. Con un hilo reanudado viaja igual (es un objetivo
-            // nuevo sobre el mismo hilo).
+            // El objetivo va una sola vez: en el primer turno de la corrida, que siempre abre hilo.
+            // Repetirlo abriría una conversación nueva en cada turno.
             goal = if (firstTurn) goal else null,
             userId = userId()?.ifBlank { null },
             state = state.toTurnState(
@@ -92,6 +99,7 @@ class GraphBrain(
         val url = baseUrl().trimEnd('/') + TURN_PATH
 
         turns++
+        val hilo = if (request.session == null) "nuevo" else "continúa" // nunca el contenido del session
         val started = TimeSource.Monotonic.markNow()
         val reply = post(url, body, headers)
         val response = parse(reply)
@@ -99,7 +107,7 @@ class GraphBrain(
         session = response.session.ifEmpty { session }
         wantShot = response.needsScreenshot
         val turn = response.toBrainTurn()
-        log.log("graph", "turno $turns · HTTP ${reply.status} · ${started.elapsedNow().inWholeMilliseconds}ms · ${turn.actions.size} acciones")
+        log.log("graph", "turno $turns · session=$hilo · HTTP ${reply.status} · ${started.elapsedNow().inWholeMilliseconds}ms · ${turn.actions.size} acciones")
         return turn
     }
 
