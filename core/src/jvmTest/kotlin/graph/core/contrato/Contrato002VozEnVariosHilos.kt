@@ -61,6 +61,9 @@ class Contrato002VozEnVariosHilos {
         /** Sin terminar y sin que nada se mueva este tiempo, no es carga: algo quedó colgado. */
         const val QUIETA_MS = 3_000L
 
+        /** Si más rondas que esto piden reintento, no es la máquina: es una carrera que solo enlentece y el reintento la tapa. */
+        const val UMBRAL_REINTENTOS = RONDAS / 10
+
         const val PREGUNTA = "haz muchas cosas a la vez"
         const val AVISO = "[aviso del sistema] "
         const val AUDIO = "→{\"type\":\"session.input_audio.append\""
@@ -126,7 +129,12 @@ class Contrato002VozEnVariosHilos {
         class SinTiempo(val que: String) : Ronda
     }
 
-    private enum class Espera { CUMPLIDA, QUIETA, VENCIDA }
+    /** Cómo terminó una espera; QUIETA guarda cuánto tiempo real pasó sin moverse. */
+    private sealed interface Espera {
+        data object Cumplida : Espera
+        class Quieta(val ms: Long) : Espera
+        data object Vencida : Espera
+    }
 
     private fun JsonObject.texto(vararg camino: String): String? {
         var e: Any? = this
@@ -139,6 +147,34 @@ class Contrato002VozEnVariosHilos {
 
     private fun enviado(linea: String): JsonObject = Json.parseToJsonElement(linea.drop(1)).jsonObject
 
+    /** Señales de carrera ya visibles en el canal aunque la ronda no haya terminado: diagnóstico de una QUIETA. */
+    private fun señales(canal: CanalDeVariosHilos): List<String> {
+        val señales = mutableListOf<String>()
+        if (canal.intercalados.get() > 0) señales += "intercalado"
+        val pedidas = mutableSetOf<String>()
+        val contestadas = mutableMapOf<String, Int>()
+        var pidioSinSalida = false
+        canal.foto().forEach { e ->
+            if (e.startsWith("←")) {
+                pedidas += e.drop(1)
+                return@forEach
+            }
+            val m = enviado(e)
+            when (m.texto("type")) {
+                "response.item.create" -> m.texto("item", "call_id")?.let { contestadas[it] = (contestadas[it] ?: 0) + 1 }
+                "response.create" -> if ((pedidas - contestadas.keys).isNotEmpty()) pidioSinSalida = true
+            }
+        }
+        if (contestadas.values.any { it > 1 }) señales += "salida repetida"
+        if (pidioSinSalida) señales += "llamada sin salida"
+        return señales
+    }
+
+    /** El mensaje de una Carrera por quietud: cuánto tardó de verdad y si hay otra pista, para separarla de la máquina. */
+    private fun mensajeQuieta(ms: Long, señales: List<String>): String =
+        if (señales.isEmpty()) "CARRERA DETECTADA (quieta $ms ms, sin otras señales)"
+        else "CARRERA DETECTADA (quieta $ms ms + ${señales.joinToString(", ")})"
+
     /**
      * Espera a que se cumpla, hasta [fin]. QUIETA si [progreso] no cambió en [QUIETA_MS] sin cumplirse; sin [progreso] (nada
      * corre en paralelo que pueda colgarse) solo vence.
@@ -147,26 +183,30 @@ class Contrato002VozEnVariosHilos {
         var visto = progreso?.invoke()
         var desde = System.nanoTime()
         while (true) {
-            if (cumple()) return Espera.CUMPLIDA
+            if (cumple()) return Espera.Cumplida
             val ahora = System.nanoTime()
             val p = progreso?.invoke()
             if (p != visto) {
                 visto = p
                 desde = ahora
             } else if (progreso != null && ahora - desde >= QUIETA_MS * 1_000_000) {
-                return Espera.QUIETA
+                return Espera.Quieta((ahora - desde) / 1_000_000)
             }
-            if (ahora >= fin) return Espera.VENCIDA
+            if (ahora >= fin) return Espera.Vencida
             delay(2)
         }
     }
 
     @Test
     fun promesa236() {
+        var reintentos = 0
         repeat(RONDAS) { ronda ->
             var r = unaRonda(ronda)
             // NO TERMINAR A TIEMPO PUEDE SER LA MÁQUINA: se repite una vez. Una carrera detectada no se repite.
-            if (r is Ronda.SinTiempo) r = unaRonda(ronda)
+            if (r is Ronda.SinTiempo) {
+                reintentos++
+                r = unaRonda(ronda)
+            }
             when (r) {
                 Ronda.Limpia -> Unit
                 is Ronda.Carrera -> fail(promesa(236) + " · CARRERA DETECTADA en la ronda $ronda: ${r.que}")
@@ -176,6 +216,12 @@ class Contrato002VozEnVariosHilos {
                 )
             }
         }
+        // UN REINTENTO SUELTO ES LA MÁQUINA; MUCHOS, NO: una carrera que solo enlentece puede vencer el primer intento y
+        // pasar en el segundo, quedando enmascarada como carga. Si se repite demasiado seguido, ya no es la máquina.
+        if (reintentos > UMBRAL_REINTENTOS) {
+            fail(promesa(236) + " · SOSPECHA DE CARRERA LENTA: $reintentos de $RONDAS rondas necesitaron reintento")
+        }
+        println("236: rondas reintentadas = $reintentos")
     }
 
     private fun unaRonda(ronda: Int): Ronda = runBlocking(Dispatchers.Default) {
@@ -228,7 +274,7 @@ class Contrato002VozEnVariosHilos {
         val voz = alcance.async { conv.conversar() }
         canal.entrada.send(Recibido.Mensaje(SESION))
         canal.entrada.send(Recibido.Mensaje(usuario(PREGUNTA)))
-        if (esperar(fin, null) { "Te escucho." in foto(dicho) } != Espera.CUMPLIDA) return Ronda.SinTiempo("confirmar la sesión")
+        if (esperar(fin, null) { "Te escucho." in foto(dicho) } != Espera.Cumplida) return Ronda.SinTiempo("confirmar la sesión")
 
         val aceptados = ConcurrentLinkedQueue<String>()
         val hechas = AtomicInteger()
@@ -256,10 +302,12 @@ class Contrato002VozEnVariosHilos {
             if (k % 6 == 5) delay(1)
         }
         val operaciones = { "${hechas.get()} de ${HILOS * OPERACIONES} operaciones" }
-        when (esperar(fin, { hechas.get() }) { hilos.all { it.isDone } }) {
-            Espera.CUMPLIDA -> Unit
-            Espera.QUIETA -> return Ronda.Carrera("los hilos que le hablan a la voz se quedaron quietos sin terminar: ${operaciones()}")
-            Espera.VENCIDA -> return Ronda.SinTiempo("los hilos iban por ${operaciones()}")
+        when (val e = esperar(fin, { hechas.get() }) { hilos.all { it.isDone } }) {
+            Espera.Cumplida -> Unit
+            is Espera.Quieta -> return Ronda.Carrera(
+                "${mensajeQuieta(e.ms, señales(canal))} · los hilos que le hablan a la voz se quedaron quietos sin terminar: ${operaciones()}",
+            )
+            Espera.Vencida -> return Ronda.SinTiempo("los hilos iban por ${operaciones()}")
         }
         for (h in hilos) {
             try {
@@ -278,27 +326,31 @@ class Contrato002VozEnVariosHilos {
             return "${l.count { it.startsWith("←") }} de $LLAMADAS entregadas, $contestadas contestadas, lo último que salió: $ultimo"
         }
         val terminada = "$LLAMADAS de $LLAMADAS entregadas, $LLAMADAS contestadas, lo último que salió: response.create"
-        when (esperar(fin, ::movimiento) { estado() == terminada }) {
-            Espera.CUMPLIDA -> Unit
-            Espera.QUIETA -> return Ronda.Carrera("la voz se quedó quieta sin contestarlo todo: ${estado()}")
-            Espera.VENCIDA -> return Ronda.SinTiempo("contestar: ${estado()}")
+        when (val e = esperar(fin, ::movimiento) { estado() == terminada }) {
+            Espera.Cumplida -> Unit
+            is Espera.Quieta -> return Ronda.Carrera(
+                "${mensajeQuieta(e.ms, señales(canal))} · la voz se quedó quieta sin contestarlo todo: ${estado()}",
+            )
+            Espera.Vencida -> return Ronda.SinTiempo("contestar: ${estado()}")
         }
 
         // EL TURNO. Sin ninguna llamada en curso, 2000 ms de silencio lo cierran; con una que una carrera dejó colgada, no.
         reloj.ms.addAndGet(10_000)
         canal.entrada.send(Recibido.Mensaje(SIN_HECHOS))
-        when (esperar(fin, ::movimiento) { foto(log).any { "usuario dijo: $PREGUNTA" in it } }) {
-            Espera.CUMPLIDA -> Unit
-            Espera.QUIETA -> return Ronda.Carrera("el turno no se cerró: quedó una llamada en curso. ${foto(log).takeLast(8)}")
-            Espera.VENCIDA -> return Ronda.SinTiempo("cerrar el turno")
+        when (val e = esperar(fin, ::movimiento) { foto(log).any { "usuario dijo: $PREGUNTA" in it } }) {
+            Espera.Cumplida -> Unit
+            is Espera.Quieta -> return Ronda.Carrera(
+                "${mensajeQuieta(e.ms, señales(canal))} · el turno no se cerró: quedó una llamada en curso. ${foto(log).takeLast(8)}",
+            )
+            Espera.Vencida -> return Ronda.SinTiempo("cerrar el turno")
         }
 
         val restante = ((fin - System.nanoTime()) / 1_000_000).coerceAtLeast(1)
         withTimeoutOrNull(restante) { conv.detener() } ?: return Ronda.SinTiempo("detener la voz")
-        when (esperar(fin, ::movimiento) { voz.isCompleted }) {
-            Espera.CUMPLIDA -> Unit
-            Espera.QUIETA -> return Ronda.Carrera("la voz no terminó al detenerla")
-            Espera.VENCIDA -> return Ronda.SinTiempo("terminar la voz al detenerla")
+        when (val e = esperar(fin, ::movimiento) { voz.isCompleted }) {
+            Espera.Cumplida -> Unit
+            is Espera.Quieta -> return Ronda.Carrera("${mensajeQuieta(e.ms, señales(canal))} · la voz no terminó al detenerla")
+            Espera.Vencida -> return Ronda.SinTiempo("terminar la voz al detenerla")
         }
 
         return try {
