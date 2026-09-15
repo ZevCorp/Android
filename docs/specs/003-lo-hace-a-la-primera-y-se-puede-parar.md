@@ -59,6 +59,7 @@ el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato003FrenoYPu
 | 317 | Ninguna línea de log de la ejecución lleva lo que el usuario escribió, pidió o lo que la pantalla muestra: solo tipos, largos, celdas y nombres de herramienta. | revisión 3A-3C |
 | 318 | Una corrida de fuera no se abre encima de otra: la segunda dice «ya hay una tarea en curso» sin pedir turnos ni tocar el teléfono, y un motor sin tarea abierta termina como parada sin pedir otro turno. | revisión 3A-3C |
 | 319 | Pedir el alto al mismo tiempo que termina la tarea nunca deja el freno armado sin tarea ni hace nacer parada a la siguiente. | revisión 3A-3C |
+| 320 | Un paso consciente dentro de una corrida no devuelve el tope a cero ni abre otra petición; una corrida nueva de fuera sí. | revisión 3A-3C, parte 2 |
 
 **La que cierra el asunto es la 301.** Es la que U no tiene: en U un freno sin `Empezar` es un
 freno que no frena y nadie se entera. Aquí una puerta sin tarea abierta no deja pasar nada y lo dice.

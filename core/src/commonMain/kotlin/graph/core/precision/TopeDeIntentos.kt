@@ -12,8 +12,9 @@ import kotlin.math.roundToInt
  * EL DESTINO ES LO QUE SE TOCA, NO CÓMO SE PIDE. Un toque cuenta por el selector del nodo vivo bajo el
  * punto: dos coordenadas del mismo botón son el mismo botón. Sin nodo, la celda de [CELDA_DP] dp que
  * contiene el punto. Por nombre, con una lista de homónimos previa, `which` elige el candidato y ese
- * candidato ES su nodo; sin lista, `which` no abre un destino nuevo (en U, which=1, 2, 3… eran claves
- * nuevas del MISMO botón, sin límite). Al escribir cuenta el campo tal como se pidió.
+ * candidato ES su nodo; sin lista, o con una lista sin candidatos, `which` no abre un destino nuevo (en U,
+ * which=1, 2, 3… eran claves nuevas del MISMO botón, sin límite). Al escribir cuenta el campo tal como se
+ * pidió; por nombre, aplanado como cualquier nombre (como U: «Teléfono» y «TELÉFONO » son el mismo campo).
  *
  * LO LOGRADO NO CUENTA, Y LO QUE NO SE SABE NO SE ADIVINA. Tres «Siguiente» que avanzan son trabajo, no
  * insistencia. Logro es que la acción se dio y escribió o cambió la huella ([logro]); una lista de
@@ -57,7 +58,7 @@ class TopeDeIntentos(private val celdaPx: Int) {
         /** La acción lanzó: un intento que no se logró. */
         class Revento(val queSalio: String) : Salida()
 
-        /** Se contestó con una lista de homónimos: no es intento, pero se recuerda (es lo que hace valer `which`). */
+        /** Se contestó con una lista de homónimos: no es intento, pero se recuerda (con candidatos, es lo que hace valer `which`). */
         class Lista(val texto: String, val candidatos: List<String> = emptyList()) : Salida()
 
         /** Fue intento. [cambio] `null`: no hubo huella con que juzgarlo. */
@@ -77,8 +78,8 @@ class TopeDeIntentos(private val celdaPx: Int) {
     /** Escribir por coordenada: el campo pedido es el punto pedido (su celda), no el nodo que lo resuelve. */
     fun alEscribirEn(x: Int, y: Int): Destino.Campo = Destino.Campo(clave(celda(x, y)), "($x,$y)")
 
-    /** Escribir por nombre de campo, tal como se pidió. */
-    fun alEscribir(campo: String): Destino.Campo = Destino.Campo(campo.trim())
+    /** Escribir por nombre de campo, tal como se pidió y aplanado: «Teléfono», «telefono» y «TELÉFONO » son un campo. */
+    fun alEscribir(campo: String): Destino.Campo = Destino.Campo(aplanar(campo), campo.trim())
 
     /** El destino como se compara. Lo usa también la [CuentaDePeticion]: dos criterios de «mismo sitio» acabarían discrepando. */
     fun clave(destino: Destino): String = when (destino) {
@@ -128,19 +129,16 @@ class TopeDeIntentos(private val celdaPx: Int) {
     }
 
     /**
-     * La clave de un nombre y su lista. Con lista de ese nombre, `which` se lee como número (`"02"` y
+     * La clave de un nombre y su lista. Con lista de ese nombre y candidatos, `which` se lee como número (`"02"` y
      * `"+2"` son el 2) y lleva al selector del candidato; lo que no es un número del 1 al N no elige nada.
-     * Sin lista, el nombre a secas.
+     * Sin lista, o con una lista sin candidatos, el nombre a secas: no hay entre qué elegir, y un número que abriera
+     * destino dejaría insistir sin límite en el mismo botón (which=1…6, doce toques).
      */
     private fun nombreYLista(destino: Destino.Nombre): Pair<String, Salida.Lista?> {
         val nombre = aplanar(destino.nombre)
-        val lista = listas[nombre] ?: return nombre to null
-        val n = destino.which?.trim()?.toIntOrNull()?.takeIf { it >= 1 } ?: return nombre to lista
-        return when {
-            lista.candidatos.isEmpty() -> "$nombre#$n" to lista
-            n <= lista.candidatos.size -> lista.candidatos[n - 1] to lista
-            else -> nombre to lista
-        }
+        val lista = listas[nombre]?.takeIf { it.candidatos.isNotEmpty() } ?: return nombre to null
+        val n = destino.which?.trim()?.toIntOrNull()?.takeIf { it in 1..lista.candidatos.size } ?: return nombre to lista
+        return lista.candidatos[n - 1] to lista
     }
 
     /** La lista que nombra este destino: la de su nombre, o la que tiene su nodo entre los candidatos. */

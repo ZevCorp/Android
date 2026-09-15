@@ -36,6 +36,11 @@ import kotlin.concurrent.Volatile
  * UNA CORRIDA DE FUERA A LA VEZ. [correr] no abre una corrida encima de otra: la segunda lanza [CorridaEnCurso]
  * sin pedir un turno ni tocar (promesa 318). Antes corría anidada en la primera: cuando la primera cerraba la tarea,
  * la segunda seguía pagando turnos a Graph sin poder pararse. Lo único que anida es [pasoConsciente].
+ *
+ * UNA CORRIDA DE FUERA ES UNA PETICIÓN, AUNQUE ARME MUCHAS PUERTAS. Cada [arma] hace una puerta nueva (cada ronda, cada
+ * paso consciente, el catálogo), pero el [tope] y la [cuenta] son los del armado. [correr] abre la petición al abrir la
+ * corrida y la cierra al acabarla, con su línea `peticion:`; un paso consciente no devuelve el tope a cero (promesa 320).
+ * Antes cada puerta nacía sin tope: el paso consciente de un workflow podía insistir por tercera vez en el mismo botón.
  */
 class ArmadoDeEjecucion(
     val freno: Freno,
@@ -47,6 +52,10 @@ class ArmadoDeEjecucion(
     private val lanza: ((suspend () -> Unit) -> Unit)? = null,
     /** Lo que se deja a la corrida soltar sola tras el alto antes de cortar su trabajo. */
     private val graciaMs: Long = GRACIA_MS,
+    /** Dos intentos y no tres (3C), compartido por todas las puertas que arma: la app le da uno por proceso. */
+    private val tope: TopeDeIntentos? = null,
+    /** La medida de la petición (3C), compartida igual que [tope]. */
+    private val cuenta: CuentaDePeticion? = null,
 ) {
     companion object {
         /**
@@ -83,7 +92,10 @@ class ArmadoDeEjecucion(
     /** ¿Hay una corrida en marcha? Es lo mismo que una tarea abierta: sin corrida no hay nada que parar. */
     val enCurso: Boolean get() = freno.abierta
 
-    /** Arma una corrida sobre una puerta nueva a las [manos]. El cerebro se crea con el MCP ya armado: su catálogo sale de ahí. */
+    /**
+     * Arma una corrida sobre una puerta nueva a las [manos], con el [tope] y la [cuenta] del armado: una puerta nueva no es
+     * una petición nueva. El cerebro se crea con el MCP ya armado: su catálogo sale de ahí.
+     */
     fun <B : Brain> arma(
         manos: Manos,
         cerebro: (Mcp) -> B,
@@ -120,7 +132,8 @@ class ArmadoDeEjecucion(
         return Mcp(puerta.gestos, puerta.sistema, aprendidas, puerta.reproductor, log = log).tools
     }
 
-    private fun puerta(manos: Manos) = Puerta(freno, manos.telefono, manos.gestos, manos.sistema, manos.reproductor, log)
+    private fun puerta(manos: Manos) =
+        Puerta(freno, manos.telefono, manos.gestos, manos.sistema, manos.reproductor, log, tope = tope, cuenta = cuenta)
 
     /**
      * Corre [bloque] como la corrida de fuera de [pedido]: abre la tarea, recuerda su trabajo para [cortaSiNoSuelta]
@@ -132,6 +145,10 @@ class ArmadoDeEjecucion(
      *
      * EL PEDIDO NO SE NOMBRA. La tarea se llama [CORRIDA] y el log dice el largo del pedido: el log sale del
      * teléfono por la telemetría (promesa 317).
+     *
+     * ABRE Y CIERRA LA PETICIÓN. Abierta la tarea, [abrePeticion] como la persona: el [tope] vuelve a cero y la [cuenta]
+     * mide desde aquí. Al acabar —bien, parada o reventada— la cuenta deja su línea, dentro de la sesión de telemetría de
+     * esta corrida y no al empezar la siguiente. Una corrida rechazada encima no abre ni cierra nada (promesa 320).
      */
     suspend fun <T> correr(pedido: String, bloque: suspend () -> T): T {
         if (!freno.empiezaSiNoHayOtra(CORRIDA)) {
@@ -142,10 +159,12 @@ class ArmadoDeEjecucion(
         trabajo = suyo
         log.log("freno", "tarea abierta «$CORRIDA» (pedido de ${pedido.length} caracteres)")
         try {
+            abrePeticion(QuienHabla.PERSONA, tope, cuenta)
             return bloque().also { sigue() }
         } finally {
             freno.termine()
             if (trabajo === suyo) trabajo = null
+            cuenta?.cerrar()
         }
     }
 
@@ -181,7 +200,8 @@ class ArmadoDeEjecucion(
     /**
      * Un paso consciente de un workflow: corre [motor] dentro de la corrida. Si lo paraste dentro NO devuelve
      * «paso hecho»: lanza [Paraste] y la corrida entera termina, sin seguir con el paso siguiente (promesa 316).
-     * Un fallo que no es parada se queda en el paso: `false`, y el workflow decide.
+     * Un fallo que no es parada se queda en el paso: `false`, y el workflow decide. No abre petición: sigue la de la
+     * corrida, con su tope y su cuenta (promesa 320).
      */
     suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine): Boolean = freno.enTarea(PASO_CONSCIENTE) {
         try {

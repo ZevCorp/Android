@@ -4,6 +4,7 @@ import graph.core.contrato.Contrato003FrenoYPuerta.Bitacora
 import graph.core.contrato.Contrato003FrenoYPuerta.CerebroGuionado
 import graph.core.contrato.Contrato003FrenoYPuerta.Mano
 import graph.core.contrato.Contrato003FrenoYPuerta.Voz
+import graph.core.contrato.Contrato003TopeYCuenta.Telefono
 import graph.core.domain.AgentAction
 import graph.core.domain.Brain
 import graph.core.domain.BrainTurn
@@ -13,8 +14,10 @@ import graph.core.domain.Voice
 import graph.core.domain.Workflow
 import graph.core.domain.WorkflowStep
 import graph.core.precision.ArmadoDeEjecucion
+import graph.core.precision.CuentaDePeticion
 import graph.core.precision.Freno
 import graph.core.precision.Paraste
+import graph.core.precision.TopeDeIntentos
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
@@ -32,14 +35,16 @@ import kotlin.test.assertTrue
 import kotlin.test.fail
 import kotlin.time.Duration.Companion.milliseconds
 import kotlin.time.Duration.Companion.seconds
+import kotlin.time.TestTimeSource
 import kotlin.time.TimeSource
 
 /**
  * CONTRATO 003, FASE 3B — LA APP SOLO EJECUTA POR LA PUERTA (docs/specs/003-lo-hace-a-la-primera-y-se-puede-parar.md).
  *
  * La lección de U, otra vez: su freno era correcto como clase y nadie lo cableaba. Una clase bien probada
- * no dice nada del cableado, así que estas dos promesas leen las FUENTES de la app (en jvm, porque solo
- * jvm lee disco) y además juzgan el [ArmadoDeEjecucion] real que la app usa.
+ * no dice nada del cableado, así que estas promesas leen las FUENTES de la app (en jvm, porque solo
+ * jvm lee disco) y además juzgan el [ArmadoDeEjecucion] real que la app usa. La 320 hace lo mismo con el tope y la
+ * cuenta de la 3C: el armado los comparte, y la app le da uno de cada por proceso.
  */
 class Contrato003LaAppPorLaPuerta {
 
@@ -47,6 +52,7 @@ class Contrato003LaAppPorLaPuerta {
         val PROMESAS = mapOf(
             307 to "El motor y el MCP solo se arman sobre la puerta: ningún archivo de la app construye un ExecutionEngine o un Mcp, ni entrega el servicio de accesibilidad crudo como manos.",
             308 to "La píldora, la notificación y cualquier otra orden de parar usan el mismo alto: frenan la corrida en curso por la misma puerta.",
+            320 to "Un paso consciente dentro de una corrida no devuelve el tope a cero ni abre otra petición; una corrida nueva de fuera sí.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
 
@@ -248,6 +254,21 @@ class Contrato003LaAppPorLaPuerta {
         assertFalse(Regex("""\.run\s*\(""").containsMatchIn(consciente), promesa(308) + " · consciousStep corre un motor por su cuenta: $consciente")
         assertTrue("consciousStep(" in cuerpo(app.codigo, Regex("""fun newSession\s*\(""")), promesa(308) + " · los workflows ya no dan sus pasos conscientes con consciousStep")
 
+        // Tras pensar la propuesta tampoco se sigue con el alto pedido: la anticipación tarda (Gemini reintenta) y un alto que
+        // cae ahí no puede acabar en una propuesta dicha y pendiente. La sentencia siguiente a `anticipation.consider(` es
+        // `Ejecucion.sigue()` sola y a su misma sangría: ni dentro de un `runCatching` que se trague la parada, ni tras un
+        // `if`, ni con otro nombre delante.
+        val anticipa = cuerpo(app.codigo, Regex("""private suspend fun anticipate\s*\(""")).lines()
+        val piensa = anticipa.indexOfFirst { "anticipation.consider(" in it }
+        assertTrue(piensa >= 0, promesa(308) + " · anticipate ya no piensa con anticipation.consider")
+        val trasPensar = anticipa.drop(piensa + 1).firstOrNull { it.isNotBlank() }?.trimEnd()
+        assertEquals(anticipa[piensa].takeWhile { it == ' ' } + "Ejecucion.sigue()", trasPensar,
+            promesa(308) + " · tras anticipation.consider se propone sin mirar antes el alto con Ejecucion.sigue()")
+        // Y `Ejecucion` es el objeto de Ejecucion.kt: nada en la app se declara con ese nombre ni lo trae de otro sitio o con alias.
+        val otroEjecucion = Regex("""\bimport\s+[\w.]+\s+as\s+Ejecucion\b|\btypealias\s+Ejecucion\b|\bimport\s+(?!com\.zevcorp\.graph\.Ejecucion\b)[\w.]*\.Ejecucion\b|\b(object|class|interface|val|var)\s+Ejecucion\b|\bfun\s+Ejecucion\s*\(|[(,]\s*Ejecucion\s*:""")
+        val sombras = fuentes.flatMap { f -> f.donde(otroEjecucion).filterNot { f.nombre == EJECUCION && it.endsWith(": object Ejecucion {") } }
+        assertEquals(emptyList(), sombras, promesa(308) + " · algo en la app se llama Ejecucion sin ser el objeto de $EJECUCION")
+
         // Ejecucion.parar es el alto del armado, y nada más: el corte tras la gracia es del armado (se juzga abajo por
         // comportamiento), y la app solo le da con qué lanzarlo, sin cambiarle la gracia.
         val ejecucion = fuentes.uno(EJECUCION)
@@ -360,5 +381,66 @@ class Contrato003LaAppPorLaPuerta {
         assertEquals(emptyList(), mano.entradas, promesa(308))
         assertFalse(freno.abierta, promesa(308) + " · la corrida cortada no soltó el freno")
         assertTrue(bitacora.lineas.any { it.startsWith("freno:") && "corto" in it }, promesa(308) + " · el corte no quedó en el log: ${bitacora.lineas}")
+    }
+
+    @Test
+    fun promesa320() = corre {
+        // El armado real con un tope y una cuenta compartidos, como los de la app. «Guardar» no responde: cada toque que
+        // llega al teléfono es un fallo, y el tercero de una misma petición no tiene que llegar.
+        val bitacora = Bitacora()
+        val freno = Freno(log = bitacora)
+        val armado = ArmadoDeEjecucion(
+            freno, bitacora, tope = TopeDeIntentos(Contrato003TopeYCuenta.CELDA), cuenta = CuentaDePeticion(TestTimeSource(), bitacora),
+        )
+        val tel = Telefono(alTocar = { false })
+        val mano = Mano()
+        val manos = ArmadoDeEjecucion.Manos(tel.telefono, mano.gestos, mano.sistema, tel.reproductor)
+        fun toca(veces: Int) = CerebroGuionado(BrainTurn(actions = List(veces) { AgentAction.Tap(550, 900) }), BrainTurn(done = true, text = "hecho"))
+        fun toques() = tel.entradas.count { it == "tap" }
+        fun medidas() = bitacora.lineas.filter { it.startsWith("peticion: ") }
+
+        var trasElPaso = -1
+        var medidasDentro = -1
+        armado.correr("guarda el documento") {
+            armado.arma(manos, { toca(2) }, Voz(), pausa = { 0 }).motor.run("guarda el documento")
+            // Una corrida que se intenta abrir encima no es una petición nueva.
+            runCatching { armado.correr("guárdalo otra vez") { "encima" } }
+            // El paso consciente arma su motor sobre otra puerta y vuelve a tocar «Guardar»: es la tercera de la petición.
+            armado.pasoConsciente("toca guardar", armado.arma(manos, { toca(1) }, Voz(), maxTurnos = 8, pausa = { 0 }).motor)
+            trasElPaso = toques()
+            medidasDentro = medidas().size
+        }
+        assertEquals(2, trasElPaso, promesa(320) + " · el paso consciente o la corrida de encima devolvieron el tope a cero: el tercer toque llegó")
+        assertEquals(0, medidasDentro, promesa(320) + " · dentro de la corrida se cerró una petición: ${medidas()}")
+        val primera = medidas()
+        assertEquals(1, primera.size, promesa(320) + " · la corrida no dejó su medida al acabar: ${bitacora.lineas}")
+        assertTrue(primera.single().startsWith("peticion: llamadas=3 ") && primera.single().endsWith(" rechazadas=1 retiradas=0"),
+            promesa(320) + " · ${primera.single()}")
+
+        // Una corrida nueva de fuera sí abre otra petición: el mismo toque vuelve a llegar y deja su propia medida.
+        armado.correr("guarda el documento") { armado.arma(manos, { toca(1) }, Voz(), pausa = { 0 }).motor.run("guarda el documento") }
+        assertEquals(3, toques(), promesa(320) + " · una corrida nueva de fuera no devolvió el tope a cero")
+        assertEquals(2, medidas().size, promesa(320) + " · la corrida nueva no dejó su propia medida: ${medidas()}")
+        assertTrue(medidas().last().startsWith("peticion: llamadas=1 "), promesa(320) + " · ${medidas().last()}")
+
+        // Y la app los comparte de verdad: Ejecucion tiene UN tope y UNA cuenta por proceso y se los da a su único armado.
+        // Nadie más en la app construye otro, los esconde tras un alias, ni abre o reinicia una petición: eso es de `correr`.
+        val fuentes = fuentesDeLaApp()
+        val ejecucion = fuentes.uno(EJECUCION)
+        fun compartido(clase: String): String {
+            val construidos = fuentes.flatMap { it.donde(Regex("""(?<![\w.])$clase\s*\(""")) }
+            assertEquals(1, construidos.size, promesa(320) + " · la app no tiene un único $clase: $construidos")
+            return Regex("""^    private val (\w+)\s*=\s*$clase\s*\(""", RegexOption.MULTILINE).find(ejecucion.codigo)?.groupValues?.get(1)
+                ?: fail(promesa(320) + " · el $clase de la app no es un `private val` de $EJECUCION: $construidos")
+        }
+        val tope = compartido("TopeDeIntentos")
+        val cuenta = compartido("CuentaDePeticion")
+        val armadoDeLaApp = ejecucion.donde(Regex("""\bArmadoDeEjecucion\s*\(""")).singleOrNull() ?: fail(promesa(320) + " · $EJECUCION no arma un único ArmadoDeEjecucion")
+        assertTrue(Regex("""\btope\s*=\s*$tope\b""").containsMatchIn(armadoDeLaApp) && Regex("""\bcuenta\s*=\s*$cuenta\b""").containsMatchIn(armadoDeLaApp),
+            promesa(320) + " · el armado de la app no recibe el tope y la cuenta del proceso: $armadoDeLaApp")
+        val escondido = Regex("""\btypealias\s+\w+\s*=\s*([\w.]*\.)?(TopeDeIntentos|CuentaDePeticion)\b|\bimport\s+[\w.]*\b(TopeDeIntentos|CuentaDePeticion)\s+as\s+\w+|::\s*(TopeDeIntentos|CuentaDePeticion)\b""")
+        assertEquals(emptyList(), fuentes.flatMap { it.donde(escondido) }, promesa(320) + " · un tope o una cuenta se esconden tras un alias")
+        assertEquals(emptyList(), fuentes.flatMap { it.donde(Regex("""\b(abrePeticion|nuevaPeticion)\s*\(""")) },
+            promesa(320) + " · la app abre o reinicia una petición por su cuenta")
     }
 }

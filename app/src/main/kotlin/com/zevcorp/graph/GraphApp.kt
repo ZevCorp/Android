@@ -566,7 +566,9 @@ class GraphApp : Application() {
         // Coherente con la vía activa: sin subconsciente, la anticipación solo ve el MCP base.
         val availableLearned = if (subconsciousExecution) learnedTools.list() else emptyList()
         val tools = Ejecucion.herramientas(service, availableLearned).joinToString(", ") { it.name }
+        // Pensar la propuesta tarda (Gemini reintenta): si la paraste mientras, ni se dice ni queda pendiente (spec 003).
         val foresight = runCatching { anticipation.consider(request, summary, tools) }.getOrNull() ?: return
+        Ejecucion.sigue()
         when (foresight.action) {
             // Proactivo: propone la acción directa por voz y, si el usuario acepta ("sí, hazlo"),
             // el hilo unificado la ejecuta EXACTAMENTE (consumePendingVoice → contexto "offer").

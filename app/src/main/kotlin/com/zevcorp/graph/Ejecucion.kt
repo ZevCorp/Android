@@ -1,5 +1,6 @@
 package com.zevcorp.graph
 
+import android.content.res.Resources
 import com.zevcorp.graph.platform.AndroidSystemApi
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
@@ -12,21 +13,29 @@ import graph.core.domain.McpTool
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import graph.core.precision.ArmadoDeEjecucion
+import graph.core.precision.CuentaDePeticion
 import graph.core.precision.Freno
+import graph.core.precision.TopeDeIntentos
 import kotlinx.coroutines.launch
 
 /**
  * LA EJECUCIÓN DE LA APP (spec 003, fase 3B). Tres cosas y ninguna más:
  *  1. Es el ÚNICO sitio que entrega las manos crudas —el servicio de accesibilidad y `AndroidSystemApi`— y las
  *     entrega al [ArmadoDeEjecucion], que las cierra detrás de la puerta. Toda corrida se arma con [arma].
- *  2. Tiene UN [Freno] por proceso. Toda corrida entra por [correr]: sin tarea abierta la puerta no toca nada.
+ *  2. Tiene UN [Freno], UN tope de intentos y UNA cuenta de petición por proceso, y los da al armado: todas las puertas
+ *     que arma los comparten. Toda corrida entra por [correr]: sin tarea abierta la puerta no toca nada, y cada corrida
+ *     es una petición (spec 003, promesa 320).
  *  3. [parar] es el único alto: la píldora, la notificación, el botón y, a futuro, la voz lo piden aquí. Cuándo
  *     cortar una corrida que no suelta lo decide el armado (core, juzgado por comportamiento); la app solo le da
  *     su scope para lanzar ese corte.
  */
 object Ejecucion {
     private val freno = Freno(log = LogBus, avisa = { texto -> bubble()?.speak(texto) })
-    private val armado = ArmadoDeEjecucion(freno, LogBus, lanza = { corte -> GraphApp.instance.scope.launch { corte() } })
+    /** Dos intentos y no tres por petición. La celda de 48 dp a la densidad de la pantalla, sin esperar a la app. */
+    private val tope = TopeDeIntentos(TopeDeIntentos.celdaPx(Resources.getSystem().displayMetrics.density))
+    /** La medida de cada petición: su línea `peticion:` sale al acabar cada corrida. */
+    private val cuenta = CuentaDePeticion(log = LogBus)
+    private val armado = ArmadoDeEjecucion(freno, LogBus, lanza = { corte -> GraphApp.instance.scope.launch { corte() } }, tope = tope, cuenta = cuenta)
 
     private fun bubble() = (GraphApp.instance.ui as? GraphAccessibilityService)?.bubble
 

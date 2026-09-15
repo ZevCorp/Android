@@ -179,12 +179,13 @@ class Contrato003LoQueSaleYUnaCorrida {
             freno.termine()
         }
 
-        // La corrida entera: el pedido, lo que el motor escribe y manda por MCP, la pregunta y el resumen de Graph,
-        // la pantalla de un chat, una herramienta aprendida y un workflow que fallan, un paso consciente que revienta,
-        // una corrida que se intenta abrir encima y un alto.
+        // La corrida entera, con el tope y la cuenta compartidos como en la app: el pedido, lo que el motor escribe y manda
+        // por MCP, la pregunta y el resumen de Graph, la pantalla de un chat, una herramienta aprendida y un workflow que
+        // fallan, un paso consciente que revienta, una corrida que se intenta abrir encima, un alto y la medida de cada una.
         run {
+            val desde = log.lineas.size
             val freno = Freno(log = log)
-            val armado = ArmadoDeEjecucion(freno, log)
+            val armado = ArmadoDeEjecucion(freno, log, tope = TopeDeIntentos(144), cuenta = CuentaDePeticion(TestTimeSource(), log))
             val mano = Mano()
             val chat = object : Phone by mano.telefono {
                 override suspend fun state(withScreenshot: Boolean) = ScreenState(TITULO, "$CONTACTO: ¿$MENSAJE?", 1080, 2400)
@@ -241,12 +242,13 @@ class Contrato003LoQueSaleYUnaCorrida {
             val parado = CerebroGuionado(BrainTurn(actions = listOf(AgentAction.Tap(1, 1))), alPensar = { armado.parar("píldora") })
             runCatching { armado.correr(PEDIDO) { armado.arma(manos, { parado }, Voz(), pausa = { 0 }).motor.run(PEDIDO) } }
 
-            // Que cada vía de verdad escribió su línea: sin ellas, un log vacío daría verde.
+            // Que cada vía de verdad escribió su línea EN ESTA CORRIDA: sin ellas, un log vacío daría verde.
+            val suyas = log.lineas.drop(desde)
             for (esperada in listOf(
                 "run: ▶", "run: turno 1", "run:   ▪ computer-use type(", "run: 🗣", "run: ❓", "run: ■", "run: ✋",
-                "mcp: 🧩", "workflow: ■", "freno: tarea abierta", "freno: alto pedido", "freno: suelto",
-            )) assertTrue(log.lineas.any { it.startsWith(esperada) }, promesa(317) + " · no hay línea «$esperada»: ${log.lineas}")
-            assertTrue(log.lineas.any { it.startsWith("workflow:") && "consciente falló" in it }, promesa(317) + " · ${log.lineas}")
+                "mcp: 🧩", "workflow: ■", "freno: tarea abierta", "freno: alto pedido", "freno: suelto", "peticion: ",
+            )) assertTrue(suyas.any { it.startsWith(esperada) }, promesa(317) + " · no hay línea «$esperada»: $suyas")
+            assertTrue(suyas.any { it.startsWith("workflow:") && "consciente falló" in it }, promesa(317) + " · $suyas")
         }
 
         val fugas = log.lineas.filter { linea -> plano(linea).let { l -> MARCAS.any { it in l } || TROZOS.any { it in l } } }

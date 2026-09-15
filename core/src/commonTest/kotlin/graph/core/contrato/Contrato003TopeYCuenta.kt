@@ -9,14 +9,17 @@ import graph.core.domain.UiPlayer
 import graph.core.precision.CuentaDePeticion
 import graph.core.precision.Freno
 import graph.core.precision.NodoVivo
+import graph.core.precision.Paraste
 import graph.core.precision.Puerta
 import graph.core.precision.QuienHabla
 import graph.core.precision.TopeDeIntentos
 import graph.core.precision.TopeDeIntentos.Destino
 import graph.core.precision.TopeDeIntentos.Salida
 import graph.core.precision.abrePeticion
+import kotlinx.coroutines.CancellationException
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
@@ -185,6 +188,72 @@ class Contrato003TopeYCuenta {
         repeat(3) { p.reproductor.tapLabel("Guardar") }
         assertEquals(2, tel.entradas.count { it == "tapLabel" }, promesa(310) + " · la tercera por etiqueta tocó el teléfono")
         assertTrue(bitacora.rechazos().any { it.startsWith("tope: no paso «tap_label") }, promesa(310) + " · ${bitacora.lineas}")
+
+        // Con el alto pedido manda el freno, no el tope: hacia un destino ya castigado sale Paraste, sin rechazo del tope
+        // y sin sumar nada a la cuenta. Mirar el tope antes que el freno deja el mismo log de siempre y devuelve `false`.
+        run {
+            val b = Bitacora()
+            val t = Telefono(GUARDAR, alEscribir = { false }, alTocarEtiqueta = { false })
+            val tope = TopeDeIntentos(CELDA)
+            val cuenta = CuentaDePeticion(TestTimeSource(), b)
+            val freno = Freno(log = b).also { it.empezar("una petición") }
+            val m = Mano()
+            val castigada = Puerta(
+                freno, t.telefono, m.gestos, m.sistema, t.reproductor, b,
+                nodoEn = { x, y -> t.nodoEn(x, y) }, huella = { t.huella() }, tope = tope, cuenta = cuenta,
+            )
+            val vigiladas = listOf<Pair<String, suspend () -> Boolean>>(
+                "tap" to { castigada.telefono.tap(550, 900) },
+                "type" to { castigada.telefono.type(100, 310, "x") },
+                "tapLabel" to { castigada.reproductor.tapLabel("Guardar") },
+            )
+            abrePeticion(QuienHabla.PERSONA, tope, cuenta)
+            for ((_, entra) in vigiladas) repeat(2) { entra() }
+            freno.pide("píldora")
+            for ((nombre, entra) in vigiladas) {
+                val e = assertFailsWith<Paraste>(promesa(310) + " · $nombre castigado con el alto pedido no terminó en Paraste") { entra() }
+                assertEquals("paraste tú", e.message, promesa(310) + " · $nombre")
+            }
+            assertEquals(emptyList(), b.rechazos(), promesa(310) + " · con el alto pedido contestó el tope, no el freno: ${b.lineas}")
+            assertEquals(listOf("tap", "tap", "type", "type", "tapLabel", "tapLabel"), t.entradas, promesa(310))
+            val linea = cuenta.cerrar() ?: ""
+            assertTrue(linea.startsWith("llamadas=6 ") && linea.endsWith(" rechazadas=0 retiradas=0"),
+                promesa(310) + " · las entradas frenadas contaron en la petición: «$linea»")
+            freno.termine()
+        }
+
+        // Una entrada frenada no suma un fallo: ni la que para al leer la huella, ni la que se cancela en el teléfono.
+        run {
+            var pideAlLeer = false
+            var cortaAlTocar = false
+            val freno = Freno()
+            val t = Telefono(GUARDAR, alTocar = { if (cortaAlTocar) throw CancellationException("cortado") else true })
+            val m = Mano()
+            val tope = TopeDeIntentos(CELDA)
+            val frenada = Puerta(
+                freno, t.telefono, m.gestos, m.sistema, t.reproductor,
+                nodoEn = { x, y -> t.nodoEn(x, y) },
+                huella = { if (pideAlLeer) freno.pide("píldora"); t.huella() },
+                tope = tope,
+            )
+            fun taps() = t.entradas.count { it == "tap" }
+            freno.empezar("tarea 1")
+            frenada.telefono.tap(550, 900)                                        // un fallo: «Guardar» no cambia
+            pideAlLeer = true
+            assertFailsWith<Paraste>(promesa(310)) { frenada.telefono.tap(550, 900) }
+            pideAlLeer = false
+            freno.termine()
+            freno.empezar("tarea 2")
+            cortaAlTocar = true
+            assertFailsWith<CancellationException>(promesa(310)) { frenada.telefono.tap(550, 900) }
+            cortaAlTocar = false
+            assertEquals(2, taps(), promesa(310))
+            assertTrue(frenada.telefono.tap(550, 900), promesa(310) + " · una entrada frenada contó como fallo: la segunda de verdad no llegó")
+            assertEquals(3, taps(), promesa(310) + " · una entrada frenada contó como fallo")
+            assertFalse(frenada.telefono.tap(550, 900), promesa(310) + " · tras dos fallos de verdad el tope no frenó")
+            assertEquals(3, taps(), promesa(310))
+            freno.termine()
+        }
     }
 
     @Test
@@ -206,6 +275,13 @@ class Contrato003TopeYCuenta {
             assertNotNull(r, promesa(311) + " · el campo pedido por tercera vez pasó")
             assertTrue(r.endsWith("Cambia de vía: mira la pantalla y escribe en otro campo, o dile al usuario qué está pasando."), promesa(311) + " · «$r»")
             assertNull(tope.rechazo(tope.alEscribir("Apellido")), promesa(311))
+            // Por nombre, el campo se compara aplanado: «Teléfono», «telefono» y «TELÉFONO » son el mismo campo.
+            val noSeDio = Salida.Intento(dio = false, escribio = false, cambio = null, queSalio = "no se dio")
+            tope.despues(tope.alEscribir("Teléfono"), noSeDio)
+            tope.despues(tope.alEscribir("telefono"), noSeDio)
+            val telefono = tope.rechazo(tope.alEscribir("TELÉFONO "))
+            assertNotNull(telefono, promesa(311) + " · «Teléfono», «telefono» y «TELÉFONO » contaron como tres campos")
+            assertTrue(telefono.startsWith(TERCERA + "«TELÉFONO» ya falló dos veces"), promesa(311) + " · «$telefono»")
             repeat(2) { tope.despues(tope.alTocar(100, 310, null), NO_CAMBIO) }
             assertNotNull(tope.rechazo(tope.alTocar(100, 310, null)), promesa(311))
             assertNull(tope.rechazo(tope.alEscribirEn(100, 310)), promesa(311) + " · escribir heredó los fallos de tocar")
@@ -305,14 +381,18 @@ class Contrato003TopeYCuenta {
             assertNull(tope.rechazo(Destino.Nombre("Descargas")), promesa(312) + " · tres listas contaron como intentos")
         }
 
-        // Sin huella no se juzga «cambió»: no bloquea, y lo dice una vez.
+        // Sin huella no se juzga «cambió»: no bloquea, lo dice una vez, y la cuenta tampoco lo da por actuado.
         run {
             val bitacora = Bitacora()
             val tel = Telefono(GUARDAR)
-            val p = puerta(tel, bitacora, TopeDeIntentos(CELDA), conHuella = false)
+            val cuenta = CuentaDePeticion(TestTimeSource(), bitacora)
+            val p = puerta(tel, bitacora, TopeDeIntentos(CELDA), cuenta, conHuella = false)
             repeat(3) { assertTrue(p.telefono.tap(550, 900), promesa(312) + " · sin huella bloqueó") }
             assertEquals(3, tel.entradas.count { it == "tap" }, promesa(312))
             assertEquals(1, bitacora.lineas.count { it.startsWith("tope: sin huella") }, promesa(312) + " · ${bitacora.lineas}")
+            val linea = cuenta.cerrar() ?: ""
+            assertTrue(linea.startsWith("llamadas=3 ") && " primera=— ultima=— " in linea,
+                promesa(312) + " · sin huella la cuenta dio por actuado un toque que no se juzgó: «$linea»")
         }
     }
 
@@ -360,6 +440,20 @@ class Contrato003TopeYCuenta {
             val r = tope.rechazo(Destino.Nombre("Descargas", "2"))
             assertNotNull(r, promesa(313) + " · el candidato 2 no es el nodo que se tocó")
             assertTrue(OTRO_CANDIDATO in (tope.rechazo(tope.alTocar(540, 900, fila)) ?: ""), promesa(313) + " · tocar el candidato olvidó su lista")
+        }
+
+        // Una lista sin candidatos no deja elegir: el número no abre destino. Antes, which=1…6 eran seis destinos del
+        // mismo botón y dejaban doce toques.
+        run {
+            val tope = TopeDeIntentos(CELDA)
+            tope.despues(Destino.Nombre("Descargas"), Salida.Lista(LISTA))
+            falla(tope, Destino.Nombre("Descargas", "1")); falla(tope, Destino.Nombre("Descargas", "1"))
+            for (w in 1..6) {
+                val r = tope.rechazo(Destino.Nombre("Descargas", "$w"))
+                assertNotNull(r, promesa(313) + " · con una lista sin candidatos, which=$w abrió un destino nuevo")
+                assertFalse("which" in r.substringAfter("en esta petición"), promesa(313) + " · sin candidatos sugirió which: «$r»")
+            }
+            assertEquals(tope.clave(Destino.Nombre("Descargas")), tope.clave(Destino.Nombre("Descargas", "3")), promesa(313))
         }
 
         // Una lista de otro nombre no habilita el número.
@@ -447,6 +541,31 @@ class Contrato003TopeYCuenta {
             val sola = c.cerrar()
             assertNotNull(sola, promesa(315))
             assertTrue("primera=250 ms ultima=250 ms desde_peticion=350 ms" in sola && "=-" !in sola, promesa(315) + " · «$sola»")
+        }
+
+        // Lo retirado y lo rechazado solos no son una petición: sin llamadas no se emite, y no se cuelan en la siguiente.
+        run {
+            val bitacora = Bitacora()
+            val c = CuentaDePeticion(TestTimeSource(), bitacora)
+            c.retirada("tap"); c.rechazada("tap")
+            assertNull(c.cerrar(), promesa(315) + " · sin llamadas, con una retirada y un rechazo, emitió")
+            c.rechazada("type")
+            assertNull(c.nuevaPeticion(), promesa(315) + " · sin llamadas, con un rechazo, emitió")
+            assertTrue(bitacora.lineas.isEmpty(), promesa(315) + " · ${bitacora.lineas}")
+            c.llamada("scroll")
+            assertTrue((c.cerrar() ?: "").endsWith(" rechazadas=0 retiradas=0"), promesa(315) + " · ${bitacora.lineas}")
+        }
+
+        // La petición que abre la persona por abrePeticion mide desde ahí: `desde_peticion` es un número, no «—».
+        run {
+            val reloj = TestTimeSource()
+            val c = CuentaDePeticion(reloj, Bitacora())
+            reloj += 700.milliseconds
+            assertTrue(abrePeticion(QuienHabla.PERSONA, TopeDeIntentos(CELDA), c), promesa(315))
+            reloj += 300.milliseconds; c.llamada("tap", "celda:1,1")
+            reloj += 200.milliseconds; c.resultado("tap", actuo = true)
+            val linea = c.cerrar() ?: ""
+            assertTrue(" primera=200 ms ultima=200 ms desde_peticion=500 ms " in linea, promesa(315) + " · abrir la petición no midió desde ahí: «$linea»")
         }
 
         // Un destino que no es una celda (el selector de un nodo, un nombre) sale como un hash corto: sin lo que el
