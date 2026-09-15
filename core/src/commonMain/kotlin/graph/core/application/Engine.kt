@@ -1,6 +1,7 @@
 package graph.core.application
 
 import graph.core.domain.*
+import graph.core.precision.Freno
 import kotlinx.coroutines.delay
 import kotlin.time.TimeSource
 
@@ -29,6 +30,8 @@ class ExecutionEngine(
     private val mode: ExecutionMode? = null,
     /** Pausa entre steps enviados juntos en un mismo turno (ajustable desde la app). */
     private val stepDelay: () -> Long = { 350 },
+    /** El freno de la tarea en curso (spec 003). Esqueleto: todavía no se usa. */
+    private val freno: Freno? = null,
 ) {
     /**
      * Ejecuta un objetivo hasta que el modelo devuelve el control con texto. Devuelve ese resumen.
