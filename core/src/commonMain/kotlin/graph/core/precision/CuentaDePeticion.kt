@@ -9,8 +9,9 @@ enum class QuienHabla { PERSONA, SISTEMA }
 /**
  * LA MEDIDA DE UNA PETICIÓN (spec 003, promesa 315): cuántas llamadas, cuántas herramientas distintas, el
  * máximo de intentos a un mismo destino y los milisegundos hasta la primera y la última acción que actuó.
- * Una línea `peticion:` en el log por petición. El destino va como [TopeDeIntentos.enLog]: la celda tal cual, y
- * un selector o un nombre como hash corto, porque el log sale del teléfono (promesa 317).
+ * Una línea `peticion:` en el log por petición. El destino va como [TopeDeIntentos.enLog]: la celda tal cual, un selector
+ * por su estructura sellada con la llave del proceso, y un nombre o un campo como su tipo y su largo, porque el log sale del
+ * teléfono (promesa 317).
  *
  * Nace de U (`CuentaDelTurno.cs`, promesa 205): sin una unidad «petición», saber si algo se hizo a la
  * primera era reconstruirlo sumando líneas sueltas con un script.
@@ -41,13 +42,20 @@ class CuentaDePeticion(
     private var retiradas = 0
     private val distintas = LinkedHashSet<String>()
     private val intentos = LinkedHashMap<String, Int>()
+    private val dichos = HashMap<String, String>()
 
-    /** Se pidió una herramienta. Cuenta aunque luego se rechace o se retire. [destino]: la clave del tope, o vacío. */
-    fun llamada(herramienta: String, destino: String = "") {
+    /**
+     * Se pidió una herramienta. Cuenta aunque luego se rechace o se retire. [destino]: la clave del tope, o vacío. [comoSeDice]:
+     * cómo va ese destino al log ([TopeDeIntentos.enLog] del destino entero); sin él, el de la clave suelta.
+     */
+    fun llamada(herramienta: String, destino: String = "", comoSeDice: String? = null) {
         if (primeraLlamada == null) primeraLlamada = ahora()
         llamadas++
         distintas += herramienta
-        if (destino.isNotBlank()) intentos[destino] = (intentos[destino] ?: 0) + 1
+        if (destino.isNotBlank()) {
+            intentos[destino] = (intentos[destino] ?: 0) + 1
+            if (comoSeDice != null) dichos[destino] = comoSeDice
+        }
     }
 
     /** Una herramienta devolvió su resultado; [actuo] lo decide quien sabe leerlo. */
@@ -78,7 +86,7 @@ class CuentaDePeticion(
         }
         val max = intentos.entries.sortedWith(compareByDescending<Map.Entry<String, Int>> { it.value }.thenBy { it.key }).firstOrNull()
         val linea = "llamadas=$llamadas distintas=${distintas.size} " +
-            (if (max == null) "intentos_max=0 «—» " else "intentos_max=${max.value} «${TopeDeIntentos.enLog(max.key)}» ") +
+            (if (max == null) "intentos_max=0 «—» " else "intentos_max=${max.value} «${dichos[max.key] ?: TopeDeIntentos.enLog(max.key)}» ") +
             "primera=${ms(primera, primeraLlamada)} ultima=${ms(ultima, primeraLlamada)} " +
             "desde_peticion=${ms(primera, peticion)} rechazadas=$rechazadas retiradas=$retiradas"
         reiniciar()
@@ -94,6 +102,7 @@ class CuentaDePeticion(
         llamadas = 0; rechazadas = 0; retiradas = 0
         distintas.clear()
         intentos.clear()
+        dichos.clear()
     }
 }
 

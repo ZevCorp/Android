@@ -545,6 +545,18 @@ class Contrato003FrenoYPuerta {
             assertEquals(2, b.lineas.count { it.startsWith("freno: no pude avisar") }, promesa(306) + " · ${b.lineas}")
         }
 
+        // Una cancelación dentro del aviso no es un aviso que falló: sale, como sale de cualquier otro sitio, y el freno suelta igual.
+        run {
+            val b = Bitacora()
+            val f = Freno(log = b, avisa = { throw CancellationException("cancelado mientras avisaba") })
+            f.empezar("con el aviso cancelado")
+            assertFailsWith<CancellationException>(promesa(306) + " · el alto se tragó la cancelación del aviso") { f.pide("botón") }
+            assertFailsWith<CancellationException>(promesa(306) + " · soltar se tragó la cancelación del aviso") { f.termine() }
+            assertFalse(f.abierta, promesa(306) + " · una cancelación en el aviso dejó la tarea abierta")
+            assertFalse(f.pedido, promesa(306) + " · una cancelación en el aviso dejó el alto echado")
+            assertEquals(emptyList(), b.lineas.filter { it.startsWith("freno: no pude avisar") }, promesa(306) + " · una cancelación se contó como aviso fallido")
+        }
+
         // Parada por la puerta dentro de la tarea: la Paraste sale tal cual y también suelta.
         val paraste = assertFailsWith<Paraste>(promesa(306)) {
             freno.enTarea("una que paras") { freno.pide("botón"); p.telefono.tap(2, 2) }

@@ -21,6 +21,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
@@ -568,8 +569,9 @@ class Contrato003TopeYCuenta {
             assertTrue(" primera=200 ms ultima=200 ms desde_peticion=500 ms " in linea, promesa(315) + " · abrir la petición no midió desde ahí: «$linea»")
         }
 
-        // Un destino que no es una celda (el selector de un nodo, un nombre) sale como un hash corto: sin lo que el
-        // nodo muestra, y el mismo destino con el mismo hash para poder seguirlo de una petición a otra.
+        // Un destino que no es una celda sale sin lo que la pantalla muestra. El selector de un nodo, como hash corto de su
+        // estructura (id, cls, path) y nunca de su texto: el mismo nodo da el mismo hash en otra petición y con otro texto
+        // visible, y otro id da otro. Se sigue de una línea a otra sin leer qué dice.
         run {
             val c = CuentaDePeticion(TestTimeSource())
             val selector = "a11y:id=contact_row;text=Juan Pérez;cls=TextView;path=0.3.2"
@@ -583,6 +585,12 @@ class Contrato003TopeYCuenta {
             assertNotNull(h1, promesa(315) + " · «$una»")
             assertEquals(h1, hash.find(otra)?.groupValues?.get(1), promesa(315) + " · el mismo selector dio otro hash: «$una» · «$otra»")
             assertFalse("Juan" in una || "text=" in una, promesa(315) + " · «$una»")
+            c.llamada("tap", selector.replace("Juan Pérez", "Ana Gómez"))
+            assertEquals(h1, hash.find(c.cerrar() ?: "")?.groupValues?.get(1), promesa(315) + " · el hash del nodo cambió con su texto visible")
+            c.llamada("tap", selector.replace("contact_row", "group_row"))
+            val otroNodo = hash.find(c.cerrar() ?: "")?.groupValues?.get(1)
+            assertNotNull(otroNodo, promesa(315))
+            assertNotEquals(h1, otroNodo, promesa(315) + " · otro nodo dio el mismo hash")
             c.llamada("tap", "celda:2,3")
             assertTrue("intentos_max=1 «celda:2,3» " in (c.cerrar() ?: ""), promesa(315) + " · la celda no va tal cual")
         }
@@ -601,6 +609,29 @@ class Contrato003TopeYCuenta {
             assertTrue(Regex("""^llamadas=4 distintas=2 intentos_max=3 «#[0-9a-f]{8}» """).containsMatchIn(linea), promesa(315) + " · el destino no va como hash corto: «$linea»")
             assertTrue(linea.endsWith(" rechazadas=1 retiradas=0"), promesa(315) + " · «$linea»")
             assertTrue(bitacora.lineas.contains("peticion: $linea"), promesa(315) + " · ${bitacora.lineas}")
+        }
+
+        // Por nombre, sin id estructural: el destino va como su tipo y su largo.
+        run {
+            val bitacora = Bitacora()
+            val cuenta = CuentaDePeticion(TestTimeSource(), bitacora)
+            val tel = Telefono(alTocarEtiqueta = { false })
+            val p = puerta(tel, bitacora, TopeDeIntentos(CELDA), cuenta)
+            cuenta.nuevaPeticion()
+            repeat(3) { p.reproductor.tapLabel("Guardar") }
+            val linea = cuenta.cerrar() ?: ""
+            assertTrue(linea.startsWith("llamadas=3 distintas=1 intentos_max=3 «nombre de 7 caracteres» "), promesa(315) + " · un nombre no va como su tipo y su largo: «$linea»")
+
+            // Un campo pedido por nombre, igual; por coordenada, su celda. Un nodo sin id estructural no se sella: no hay qué.
+            // Y el candidato que elige `which` es su nodo: el mismo sello que tocarlo por coordenada.
+            val tope = TopeDeIntentos(CELDA)
+            assertEquals("campo de 8 caracteres", tope.enLog(tope.alEscribir("Teléfono")), promesa(315) + " · un campo por nombre no va como su tipo y su largo")
+            assertEquals("celda:0,2", tope.enLog(tope.alEscribirEn(100, 310)), promesa(315) + " · escribir por coordenada no va por su celda")
+            assertEquals("nodo sin id estructural", tope.enLog(tope.alTocar(10, 10, nodo("a11y:text=Ana;desc=Ana", "Ana", 0, 0, 100, 100))), promesa(315))
+            tope.despues(Destino.Nombre("Descargas"), Salida.Lista(LISTA, listOf(S1, S2)))
+            val candidato = tope.enLog(Destino.Nombre("Descargas", "2"))
+            assertTrue(Regex("""^#[0-9a-f]{8}$""").matches(candidato), promesa(315) + " · el candidato de which no va sellado: «$candidato»")
+            assertEquals(candidato, tope.enLog(tope.alTocar(540, 900, nodo(S2, "Descargas", 0, 850, 1080, 950, tipo = "TextView"))), promesa(315))
         }
     }
 }

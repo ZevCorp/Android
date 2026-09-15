@@ -9,6 +9,7 @@ import graph.core.contrato.Contrato003TopeYCuenta.Telefono
 import graph.core.domain.AgentAction
 import graph.core.domain.Brain
 import graph.core.domain.BrainTurn
+import graph.core.domain.GraphLog
 import graph.core.domain.LearnedTool
 import graph.core.domain.Phone
 import graph.core.domain.ScreenState
@@ -26,12 +27,17 @@ import graph.core.precision.QuienHabla
 import graph.core.precision.TopeDeIntentos
 import graph.core.precision.abrePeticion
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
+import kotlin.test.fail
 import kotlin.time.TestTimeSource
 
 /**
@@ -40,7 +46,9 @@ import kotlin.time.TestTimeSource
  *
  * El log no se queda en el teléfono: `LogBus` reenvía cada línea a la telemetría remota. Medido por los revisores:
  * «tope: no paso «tap(10,10)»: … «Juan Pérez» ya falló dos veces», el selector con `text=` en `peticion:`, el texto
- * de `type` y los argumentos MCP en el motor, y el prompt de la persona como nombre de la tarea del freno.
+ * de `type` y los argumentos MCP en el motor, y el prompt de la persona como nombre de la tarea del freno. Y el destino del
+ * tope salía como FNV-1a de 32 bits sin sal: «#1429ca85» volvía a «ana» por fuerza bruta en menos de un segundo, y el mismo
+ * hash en todos los teléfonos lo hacía un identificador de la persona entre ellos.
  *
  * Y una segunda corrida de fuera (la burbuja y la app a la vez) corría anidada en la primera: cuando la primera
  * cerraba la tarea, la segunda seguía pagando turnos a Graph sin poder pararse ni tocar.
@@ -62,29 +70,80 @@ class Contrato003LoQueSaleYUnaCorrida {
         const val CONTACTO = "Juan Pérez"
         const val NUMERO = "3104459821"
         const val MENSAJE = "nos vemos en el Parque Lleras a las 8"
-        const val CORREO = "lucia.restrepo@correo.co"
+        const val CORREO = "lucia.restrepo@buzon.co"
         const val ASUNTO = "Cumpleaños de Lucía"
         const val CUERPO = "la clave del portón es 4471"
         const val BUSQUEDA = "dermatólogo en Envigado"
-        const val URL = "https://banco.example/cuenta/88123"
+        const val URL = "https://banco.example/saldo/88123"
         const val LUGAR = "Carrera 43A # 1-50"
         const val APP = "Bancolombia"
         const val TITULO = "com.whatsapp · Chat con Juan Pérez"
+        /** Lo más corto que se pide o se ve: un nombre de pila y como se guarda a una madre en los contactos. */
+        const val ANA = "Ana"
+        const val MAMA = "Mamá"
 
         /** Los datos tal como la persona los dio o la pantalla los muestra (del título, lo que no es el paquete). */
-        val DATOS = listOf(PEDIDO, CONTACTO, NUMERO, MENSAJE, CORREO, ASUNTO, CUERPO, BUSQUEDA, URL, LUGAR, APP, TITULO.substringAfter(" · "))
+        val DATOS = listOf(PEDIDO, CONTACTO, NUMERO, MENSAJE, CORREO, ASUNTO, CUERPO, BUSQUEDA, URL, LUGAR, APP, TITULO.substringAfter(" · "), ANA, MAMA)
 
         private val SIN_TILDE = mapOf('á' to 'a', 'é' to 'e', 'í' to 'i', 'ó' to 'o', 'ú' to 'u', 'ü' to 'u', 'ñ' to 'n')
         fun plano(s: String) = s.lowercase().map { SIN_TILDE[it] ?: it }.joinToString("")
 
-        /**
-         * Cada trozo de 10 caracteres de cada dato, sin tildes ni mayúsculas: un `take(24)` o un recorte cualquiera
-         * también es una fuga, no solo el dato entero.
-         */
-        val TROZOS = DATOS.flatMap { plano(it).windowed(10) }.toSet()
+        private val PALABRA = Regex("""[\p{L}\p{N}]+""")
 
-        /** Y lo más corto que delata por sí solo: un apellido, la clave, el número de cuenta. */
-        val MARCAS = listOf("perez", "lucia", "4471", "88123", "lleras", "envigado")
+        /**
+         * Cada trozo de 4 caracteres de cada palabra de cada dato, sin tildes ni mayúsculas: un `take(4)` o un recorte
+         * cualquiera también es una fuga, no solo el dato entero. Dentro de la palabra y no a través de los espacios: «que »
+         * o « el » saldrían en cualquier frase. Por eso los datos están elegidos para que ningún trozo sea parte de una palabra
+         * del propio log («corrida», «cuento», «tarea», «tope», «caracteres»…): un juez que da rojo con el log limpio no juzga.
+         */
+        val TROZOS = DATOS.flatMap { dato -> PALABRA.findAll(plano(dato)).flatMap { it.value.windowed(4) }.toList() }.toSet()
+
+        /** Y lo que delata aunque sea más corto que un trozo, como palabra entera: un nombre de pila, «mamá», la clave. */
+        val MARCAS = listOf("ana", "mama", "juan", "perez", "lucia", "4471", "88123", "lleras", "envigado")
+            .map { Regex("""(?<![\p{L}\p{N}])$it(?![\p{L}\p{N}])""") }
+
+        /** El destino del tope como hash corto. Se quita antes de buscar trozos: ocho hex al azar pueden formar «4471». */
+        val HASH = Regex("""#[0-9a-f]{8}""")
+
+        /** Un diccionario chico de nombres cortos: con él se revertía el hash sin sal del log. */
+        val NOMBRES_CORTOS = listOf("ana", "eva", "luz", "sol", "noa", "leo", "ian", "juan", "mama", "lina", "sara", "pepe")
+
+        /** El hash de antes: FNV-1a de 32 bits sin sal, como lo calcula cualquiera que lea el código. */
+        fun fnvSinSal(s: String): String {
+            var h = 0x811c9dc5.toInt()
+            for (c in s) {
+                h = h xor c.code
+                h *= 0x01000193
+            }
+            return "#" + h.toUInt().toString(16).padStart(8, '0')
+        }
+
+        /** La línea del tercer toque rechazado a un nodo con [selector] que no responde, por la puerta de verdad. */
+        suspend fun rechazoDelNodo(selector: String): String {
+            val log = Bitacora()
+            val tel = Telefono(nodo(selector, CONTACTO, 0, 800, 1080, 950, tipo = "TextView"), alTocar = { false })
+            val mano = Mano()
+            val p = Puerta(
+                Freno().also { it.empezar("corrida") }, tel.telefono, mano.gestos, mano.sistema, tel.reproductor, log,
+                nodoEn = { x, y -> tel.nodoEn(x, y) }, tope = TopeDeIntentos(144),
+            )
+            repeat(3) { p.telefono.tap(540, 900) }
+            return log.lineas.single { it.startsWith("tope: no paso «") }
+        }
+
+        /** Lo que deja en el log tocar tres veces por nombre a [nombre], que no responde: el rechazo y la medida de su petición. */
+        suspend fun rechazoDelNombre(nombre: String): List<String> {
+            val log = Bitacora()
+            val tel = Telefono(alTocarEtiqueta = { false })
+            val mano = Mano()
+            val tope = TopeDeIntentos(144)
+            val cuenta = CuentaDePeticion(TestTimeSource(), log)
+            val p = Puerta(Freno().also { it.empezar("corrida") }, tel.telefono, mano.gestos, mano.sistema, tel.reproductor, log, tope = tope, cuenta = cuenta)
+            abrePeticion(QuienHabla.PERSONA, tope, cuenta)
+            repeat(3) { p.reproductor.tapLabel(nombre) }
+            cuenta.cerrar()
+            return log.lineas.toList()
+        }
     }
 
     private fun manos(mano: Mano) = ArmadoDeEjecucion.Manos(mano.telefono, mano.gestos, mano.sistema, mano.reproductor)
@@ -161,10 +220,12 @@ class Contrato003LoQueSaleYUnaCorrida {
             repeat(3) { p.telefono.tap(540, 900) }
             repeat(3) { p.telefono.type(540, 900, MENSAJE) }
             repeat(3) { p.reproductor.tapLabel(CONTACTO) }
+            repeat(3) { p.reproductor.tapLabel(ANA) }                       // lo más corto: un recorte de cuatro ya es el dato
+            repeat(3) { p.reproductor.tapLabel(MAMA) }
             abrePeticion(QuienHabla.PERSONA, tope, cuenta)
             repeat(2) { p.reproductor.tapLabel(CONTACTO) }                  // lo más intentado es un nombre
             cuenta.cerrar()
-            assertEquals(3, log.lineas.count { it.startsWith("tope: no paso «") }, promesa(317) + " · ${log.lineas}")
+            assertEquals(5, log.lineas.count { it.startsWith("tope: no paso «") }, promesa(317) + " · ${log.lineas}")
             assertEquals(2, log.lineas.count { it.startsWith("peticion: ") }, promesa(317) + " · ${log.lineas}")
 
             // La huella y el nodo que revientan con lo que la pantalla muestra en el mensaje.
@@ -251,7 +312,36 @@ class Contrato003LoQueSaleYUnaCorrida {
             assertTrue(suyas.any { it.startsWith("workflow:") && "consciente falló" in it }, promesa(317) + " · $suyas")
         }
 
-        val fugas = log.lineas.filter { linea -> plano(linea).let { l -> MARCAS.any { it in l } || TROZOS.any { it in l } } }
+        // Lo que el log dice de un destino no se revierte. Un nombre sin id estructural va como su tipo y su largo: el rechazo de
+        // «Ana» es el de cualquier nombre de tres letras, y un diccionario de nombres cortos no la encuentra, ni con el hash sin
+        // sal de antes ni comparando con lo que este mismo proceso escribe de cada nombre.
+        run {
+            val deAna = rechazoDelNombre(ANA)
+            log.lineas += deAna
+            assertTrue(deAna.any { it.startsWith("tope: no paso «") } && deAna.any { it.startsWith("peticion: ") }, promesa(317) + " · $deAna")
+            val porHash = NOMBRES_CORTOS.filter { nombre -> deAna.any { fnvSinSal(nombre) in it } }
+            assertEquals(emptyList(), porHash, promesa(317) + " · un diccionario de nombres cortos recupera el destino desde el hash del log: $deAna")
+            val igualQueAna = NOMBRES_CORTOS.filter { rechazoDelNombre(it) == deAna }
+            assertTrue(igualQueAna.containsAll(listOf("ana", "eva", "luz")),
+                promesa(317) + " · el log de «Ana» la distingue de los nombres de su largo: $igualQueAna · $deAna")
+
+            // Un nodo va por su estructura (id, cls, path), nunca por su texto visible: con «Ana» o con «Eva» en la fila, la misma línea.
+            val conAna = rechazoDelNodo("a11y:id=contact_row;text=$ANA;cls=TextView;path=0.3.2")
+            log.lineas += conAna
+            assertEquals(conAna, rechazoDelNodo("a11y:id=contact_row;text=Eva;cls=TextView;path=0.3.2"), promesa(317) + " · el hash del nodo sale de su texto visible")
+
+            // Con sal por proceso: la misma fila da el mismo hash en este proceso (se sigue de una línea a otra) y otro en otro.
+            // Sin sal, el mismo hash en todos los teléfonos es un identificador de la persona entre ellos.
+            val fila = "a11y:id=contact_row;text=Juan Perez;cls=TextView;path=0.3.2"     // sin tildes: al otro proceso va por argumento
+            val aqui = rechazoDelNodo(fila)
+            assertEquals(aqui, rechazoDelNodo(fila), promesa(317) + " · el mismo destino dio otra línea en el mismo proceso: no se puede seguir")
+            val hashAqui = HASH.find(aqui)?.value ?: fail(promesa(317) + " · el rechazo de un nodo con id no lleva su hash: «$aqui»")
+            val deOtro = rechazoEnOtroProceso(fila)
+            val hashOtro = HASH.find(deOtro)?.value ?: fail(promesa(317) + " · el otro proceso no dejó un rechazo con hash: «$deOtro»")
+            assertNotEquals(hashAqui, hashOtro, promesa(317) + " · dos procesos dan el mismo hash al mismo destino: no hay sal por proceso")
+        }
+
+        val fugas = log.lineas.filter { linea -> plano(linea).replace(HASH, "").let { l -> MARCAS.any { it.containsMatchIn(l) } || TROZOS.any { it in l } } }
         assertEquals(emptyList(), fugas, promesa(317) + " · líneas con lo que la persona escribió, pidió o la pantalla muestra")
     }
 
@@ -348,6 +438,72 @@ class Contrato003LoQueSaleYUnaCorrida {
             assertEquals(1, cerebro.turnos, promesa(318) + " · sin tarea el motor siguió pidiendo turnos")
             assertEquals(listOf("tap"), mano.entradas, promesa(318))
             assertTrue(dijo.startsWith("paraste:"), promesa(318) + " · «$dijo»")
+        }
+
+        // La tarea se cierra mientras Graph piensa y el turno vuelve con una pregunta: sin tarea, ni se dice ni se pregunta.
+        run {
+            val freno = Freno()
+            val armado = ArmadoDeEjecucion(freno)
+            val preguntas = mutableListOf<String>()
+            val usuario = object : UserChannel {
+                override suspend fun ask(question: String): String { preguntas += question; return "sí" }
+            }
+            val cerebro = CerebroGuionado(
+                BrainTurn(actions = listOf(AgentAction.Tap(1, 1)), question = "¿Le mando el mensaje?", speech = "Voy con eso"),
+                alPensar = { freno.termine() },
+            )
+            val voz = Voz()
+            val mano = Mano()
+            val dijo = armado.correr("se cierra mientras piensa") {
+                armado.arma(manos(mano), { cerebro }, voz, usuario = usuario, pausa = { 0 }).motor.run("se cierra mientras piensa")
+            }
+            assertEquals(emptyList(), preguntas, promesa(318) + " · con la tarea cerrada mientras pensaba, el motor le preguntó a la persona")
+            assertEquals(emptyList(), voz.dicho, promesa(318) + " · con la tarea cerrada mientras pensaba, el motor habló")
+            assertEquals(emptyList(), mano.entradas, promesa(318))
+            assertEquals(1, cerebro.turnos, promesa(318))
+            assertTrue(dijo.startsWith("paraste:"), promesa(318) + " · «$dijo»")
+        }
+
+        // Un log que revienta al abrir la corrida no la deja en curso para siempre: suelta, y la siguiente se abre.
+        run {
+            val freno = Freno()
+            val roto = GraphLog { _, mensaje -> if (mensaje.startsWith("tarea abierta")) throw IllegalStateException("log roto") }
+            val armado = ArmadoDeEjecucion(freno, roto)
+            val primera = runCatching { armado.correr("abre ajustes") { "A" } }
+            assertEquals("log roto", primera.exceptionOrNull()?.message, promesa(318) + " · $primera")
+            assertFalse(armado.enCurso, promesa(318) + " · un log roto al abrir dejó la corrida en curso para siempre")
+            val siguiente = runCatching { ArmadoDeEjecucion(freno).correr("pon una alarma") { "B" } }
+            assertEquals("B", siguiente.getOrElse { it.message }, promesa(318) + " · tras un log roto al abrir ya no se abre ninguna corrida")
+        }
+
+        // Una corrida cancelada que todavía no soltó sigue siendo la corrida en curso: otra no se abre encima. Mirar si su
+        // trabajo sigue activo no basta: cancelado deja de estarlo antes de llegar a soltar el freno.
+        run {
+            val freno = Freno()
+            val armado = ArmadoDeEjecucion(freno)
+            val mano = Mano()
+            val segunda = CerebroGuionado(BrainTurn(actions = listOf(AgentAction.Tap(9, 9))), BrainTurn(done = true, text = "B"))
+            val dentro = CompletableDeferred<Unit>()
+            val suelta = CompletableDeferred<Unit>()
+            var b: Result<String>? = null
+            coroutineScope {
+                val primera = launch {
+                    runCatching {
+                        armado.correr("abre ajustes") { withContext(NonCancellable) { dentro.complete(Unit); suelta.await() }; "A" }
+                    }
+                }
+                dentro.await()
+                primera.cancel()                                                    // cancelada, sin llegar a su finally
+                b = runCatching {
+                    armado.correr("pon una alarma") { armado.arma(manos(mano), { segunda }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("pon una alarma") }
+                }
+                suelta.complete(Unit)
+                primera.join()
+            }
+            assertIs<CorridaEnCurso>(b?.exceptionOrNull(), promesa(318) + " · con la primera cancelada y sin soltar, la segunda se abrió encima: $b")
+            assertEquals(0, segunda.turnos, promesa(318) + " · la segunda corrida le pidió turnos a Graph")
+            assertEquals(emptyList(), mano.entradas, promesa(318) + " · la segunda corrida tocó el teléfono")
+            assertFalse(freno.abierta, promesa(318) + " · la corrida cancelada no soltó al acabar")
         }
     }
 }

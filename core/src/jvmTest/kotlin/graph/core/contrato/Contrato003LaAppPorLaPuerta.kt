@@ -264,8 +264,10 @@ class Contrato003LaAppPorLaPuerta {
         val trasPensar = anticipa.drop(piensa + 1).firstOrNull { it.isNotBlank() }?.trimEnd()
         assertEquals(anticipa[piensa].takeWhile { it == ' ' } + "Ejecucion.sigue()", trasPensar,
             promesa(308) + " · tras anticipation.consider se propone sin mirar antes el alto con Ejecucion.sigue()")
-        // Y `Ejecucion` es el objeto de Ejecucion.kt: nada en la app se declara con ese nombre ni lo trae de otro sitio o con alias.
-        val otroEjecucion = Regex("""\bimport\s+[\w.]+\s+as\s+Ejecucion\b|\btypealias\s+Ejecucion\b|\bimport\s+(?!com\.zevcorp\.graph\.Ejecucion\b)[\w.]*\.Ejecucion\b|\b(object|class|interface|val|var)\s+Ejecucion\b|\bfun\s+Ejecucion\s*\(|[(,]\s*Ejecucion\s*:""")
+        // Y `Ejecucion` es el objeto de Ejecucion.kt: nada en la app se declara con ese nombre ni lo trae de otro sitio o con alias;
+        // tampoco al desestructurar (`val (Ejecucion) = …`), como parámetro de una lambda (`{ Ejecucion -> … }`) ni en un `for`.
+        val otroEjecucion = Regex("""\bimport\s+[\w.]+\s+as\s+Ejecucion\b|\btypealias\s+Ejecucion\b|\bimport\s+(?!com\.zevcorp\.graph\.Ejecucion\b)[\w.]*\.Ejecucion\b|\b(object|class|interface|val|var)\s+Ejecucion\b|\bfun\s+Ejecucion\s*\(|[(,]\s*Ejecucion\s*:""" +
+            """|\b(val|var)\s*\([^)]*(?<![\w.])Ejecucion\b|\{[^{}]*?(?<![\w.])Ejecucion\b(?!\s*\.)[^{}]*?->|\bfor\s*\([^)]*?(?<![\w.])Ejecucion\b(?!\s*\.)""")
         val sombras = fuentes.flatMap { f -> f.donde(otroEjecucion).filterNot { f.nombre == EJECUCION && it.endsWith(": object Ejecucion {") } }
         assertEquals(emptyList(), sombras, promesa(308) + " · algo en la app se llama Ejecucion sin ser el objeto de $EJECUCION")
 
@@ -284,6 +286,27 @@ class Contrato003LaAppPorLaPuerta {
         val frenos = fuentes.flatMap { it.donde(Regex("""(?<![\w.])Freno\s*\(""")) }
         assertEquals(1, frenos.size, promesa(308) + " · la app no tiene un único freno: $frenos")
         assertTrue(frenos.single().substringBefore(":").endsWith(EJECUCION), promesa(308) + " · el freno no vive en $EJECUCION: $frenos")
+
+        // Una corrida que llega con otra viva no empieza nada. `run` lo mira con su primera decisión, a la sangría de la función y
+        // antes de sus efectos (el nombre, la telemetría); y lo que cuesta o pisa a la corrida viva —el destilador de memoria, el
+        // contexto pendiente de voz, el pedido de goalPrompts y la ventana de contexto— lo hace solo quien abrió: dentro del
+        // bloque de Ejecucion.correr, donde mirar y abrir es un solo paso.
+        val lineasDeRun = run.lines()
+        val sangriaDeRun = lineasDeRun.first().takeWhile { it == ' ' } + "    "
+        val yaHay = lineasDeRun.indexOf(sangriaDeRun + "if (Ejecucion.enCurso) return yaHayUna()")
+        assertTrue(yaHay > 0, promesa(308) + " · GraphApp.run no mira si ya hay una corrida antes de empezar la suya")
+        val empieza = Regex("""Telemetry\.|bubble\?\.ask\(|memoryDistiller\.|consumePendingVoice\(|goalPrompts\b|maxContextTokens|Ejecucion\.correr\(""")
+        val primerEfecto = lineasDeRun.indexOfFirst { empieza.containsMatchIn(it) }
+        assertTrue(primerEfecto < 0 || yaHay < primerEfecto,
+            promesa(308) + " · GraphApp.run empieza («${lineasDeRun.getOrNull(primerEfecto)?.trim()}») antes de mirar si ya hay una corrida")
+        for (efecto in listOf("memoryDistiller.", "consumePendingVoice(", "goalPrompts.clear(", "maxContextTokens")) {
+            val enRun = run.split(efecto).size - 1
+            val enLaCorrida = corrida.split(efecto).size - 1
+            assertTrue(enRun > 0 && enRun == enLaCorrida,
+                promesa(308) + " · «$efecto» está en GraphApp.run fuera del bloque de Ejecucion.correr ($enRun en run, $enLaCorrida dentro): lo haría también la corrida rechazada")
+        }
+        assertTrue("return CorridaEnCurso.MENSAJE" in cuerpo(app.codigo, Regex("""private fun yaHayUna\s*\(""")), promesa(308) + " · yaHayUna no dice que ya hay una tarea en curso")
+        assertTrue(ejecucion.donde(Regex("""^\s*val enCurso: Boolean get\(\) = armado\.enCurso$""")).isNotEmpty(), promesa(308) + " · Ejecucion.enCurso no es el del armado")
 
         // Sin corrida, parar no arma nada ni lanza un corte.
         val bitacora = Bitacora()
@@ -425,6 +448,7 @@ class Contrato003LaAppPorLaPuerta {
 
         // Y la app los comparte de verdad: Ejecucion tiene UN tope y UNA cuenta por proceso y se los da a su único armado.
         // Nadie más en la app construye otro, los esconde tras un alias, ni abre o reinicia una petición: eso es de `correr`.
+        // Tampoco por referencia (`TopeDeIntentos::nuevaPeticion`): basta con nombrarlas.
         val fuentes = fuentesDeLaApp()
         val ejecucion = fuentes.uno(EJECUCION)
         fun compartido(clase: String): String {
@@ -440,7 +464,7 @@ class Contrato003LaAppPorLaPuerta {
             promesa(320) + " · el armado de la app no recibe el tope y la cuenta del proceso: $armadoDeLaApp")
         val escondido = Regex("""\btypealias\s+\w+\s*=\s*([\w.]*\.)?(TopeDeIntentos|CuentaDePeticion)\b|\bimport\s+[\w.]*\b(TopeDeIntentos|CuentaDePeticion)\s+as\s+\w+|::\s*(TopeDeIntentos|CuentaDePeticion)\b""")
         assertEquals(emptyList(), fuentes.flatMap { it.donde(escondido) }, promesa(320) + " · un tope o una cuenta se esconden tras un alias")
-        assertEquals(emptyList(), fuentes.flatMap { it.donde(Regex("""\b(abrePeticion|nuevaPeticion)\s*\(""")) },
+        assertEquals(emptyList(), fuentes.flatMap { it.donde(Regex("""\b(abrePeticion|nuevaPeticion)\b""")) },
             promesa(320) + " · la app abre o reinicia una petición por su cuenta")
     }
 }

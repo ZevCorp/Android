@@ -453,92 +453,96 @@ class GraphApp : Application() {
             Telemetry.ensureUser(name)
             voice.speak("¡Mucho gusto, $name! Dame un momento…")
         }
-        // Rotación de ventana de contexto: al superar el umbral se abre un hilo nuevo (la memoria
-        // durable sobrevive). Solo aplica al empezar; no interrumpe nada en curso.
-        if (conversationTokens >= maxContextTokens) {
-            LogBus.log("run", "🧠 ventana de contexto nueva (el hilo llegó a $conversationTokens tokens)")
-            conversationId = ""; conversationTokens = 0
-        }
-        // En paralelo (nunca bloquea la ejecución): si el input enseña algo durable, se recuerda.
-        scope.launch(Dispatchers.IO) {
-            memoryDistiller.capture(prompt)?.let { note ->
-                if (memories.add(note)) {
-                    LogBus.log("memory", "🧠 recordado${if (note.app.isNotBlank()) " [${note.app}]" else ""}: ${note.note}")
-                    voice.narrate("Lo recordaré")
-                }
-            }
-        }
-        // Hilo unificado: si el asistente acaba de proponer/preguntar algo por VOZ, este prompt
-        // puede ser la respuesta (venga del panel, las esquinas o donde sea). Se inyecta como
-        // contexto para que "sí, hazlo" signifique EXACTAMENTE lo propuesto.
-        val pending = consumePendingVoice()
-        if (pending != null) LogBus.log("run", "🔗 contexto pendiente (${pending.kind}): \"${pending.question.take(80)}\"")
-        if (pending?.kind == "ask") scope.launch(Dispatchers.IO) {
-            memoryDistiller.captureAnswer(pending.app, pending.question, prompt)?.let { note ->
-                if (memories.add(note)) LogBus.log("memory", "🧠 aprendido de tu respuesta [${note.app}]: ${note.note}")
-            }
-        }
-        val pendingContext = pending?.let {
-            if (it.kind == "offer")
-                "CONTEXTO INMEDIATO: hace un momento le PROPUSISTE por voz al usuario: «${it.question}» " +
-                    "(la tarea que harías, en la app ${it.app}: «${it.task}»). Si su mensaje ACEPTA la " +
-                    "propuesta («sí», «hazlo», «dale»…), tu objetivo es EXACTAMENTE esa tarea, con todos " +
-                    "sus detalles. Si pide otra cosa, obedece lo nuevo e ignora la propuesta."
-            else
-                "CONTEXTO INMEDIATO: hace un momento le PREGUNTASTE por voz al usuario: «${it.question}» " +
-                    "(app ${it.app}). Si su mensaje es la RESPUESTA a esa pregunta, no ejecutes nada: " +
-                    "agradécele brevemente con speak y termina (su respuesta ya quedó guardada en tu " +
-                    "memoria). Si es una orden nueva, ejecútala."
-        }
-        synchronized(goalPrompts) { goalPrompts.clear(); goalPrompts.add(prompt.trim()) }
         // Sesión de telemetría: el prompt y TODOS los logs de su ejecución viajan al panel
         // Android del Provider Studio, con su desenlace (ok · error · cancelled) al cerrar.
         val telemetryId = Telemetry.promptStarted(prompt.trim(), if (user != null) "burbuja" else "app")
-        val result = try { Ejecucion.correr(prompt.trim()) { running {
-            var summary = ""
-            var round = 0
-            // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
-            while (true) {
-                val (goalBase, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
-                val goal = if (pendingContext != null) "$goalBase\n\n$pendingContext" else goalBase
-                bubble?.showExecutionMic(true)
-                val (engine, brain) = newSession(service, user, resume = true)
-                val holder = arrayOf("")
-                val announce = round == 0 // en reencaminados no narra el objetivo largo
-                val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
-                    holder[0] = try { engine.run(goal, announce) }
-                        catch (ce: CancellationException) { throw ce }
-                        catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
-                }
-                engineCanceller = { child.cancel(CancellationException("reencaminar")) }
-                child.join()
-                engineCanceller = null
-                // Persiste el hilo compartido SOLO si terminó limpio. Si quedó con function_calls sin
-                // responder (error/500/Stop/maxTurns/cancelación a mitad), el hilo está ENVENENADO:
-                // reanudarlo haría fallar cualquier tarea futura con 400 "Each Function Response must
-                // be matched to a Function Call by name". En ese caso, la próxima activación arranca
-                // en una ventana nueva (la memoria durable sobrevive; solo se pierde el hilo server-side).
-                if (brain.hasPendingCalls) {
-                    LogBus.log("run", "🧵 hilo con llamadas sin responder; la próxima activación arranca fresca")
-                    conversationId = ""
-                    conversationTokens = 0
-                } else {
-                    conversationId = brain.interactionId
-                    conversationTokens = brain.totalTokens
-                }
-                // Lo paraste: el motor ya devolvió «paraste: …». Ni se reencamina ni se anticipa nada.
-                Ejecucion.sigue()
-                val grew = synchronized(goalPrompts) { goalPrompts.size > builtCount }
-                if (!grew) { summary = holder[0]; break }
-                round++
-                LogBus.log("run", "↻ reencaminando: ahora son ${synchronized(goalPrompts) { goalPrompts.size }} prompts")
-                voice.narrate("Ok, lo ajusto sobre la marcha")
+        val result = try { Ejecucion.correr(prompt.trim()) {
+            // Lo de empezar lo hace solo quien abrió la corrida: una que llega con otra viva ni paga el destilador, ni se
+            // queda con el contexto pendiente de voz, ni pisa el pedido ni la ventana de la que corre (spec 003, promesa 308).
+            // Rotación de ventana de contexto: al superar el umbral se abre un hilo nuevo (la memoria
+            // durable sobrevive). Solo aplica al empezar; no interrumpe nada en curso.
+            if (conversationTokens >= maxContextTokens) {
+                LogBus.log("run", "🧠 ventana de contexto nueva (el hilo llegó a $conversationTokens tokens)")
+                conversationId = ""; conversationTokens = 0
             }
-            bubble?.showExecutionMic(false)
-            // Proactivo: ¿hay UNA acción directa encadenada que valga la pena proponer/hacer ya?
-            anticipate(service, user, summary)
-            summary
-        } } } catch (ocupada: CorridaEnCurso) {
+            // En paralelo (nunca bloquea la ejecución): si el input enseña algo durable, se recuerda.
+            scope.launch(Dispatchers.IO) {
+                memoryDistiller.capture(prompt)?.let { note ->
+                    if (memories.add(note)) {
+                        LogBus.log("memory", "🧠 recordado${if (note.app.isNotBlank()) " [${note.app}]" else ""}: ${note.note}")
+                        voice.narrate("Lo recordaré")
+                    }
+                }
+            }
+            // Hilo unificado: si el asistente acaba de proponer/preguntar algo por VOZ, este prompt
+            // puede ser la respuesta (venga del panel, las esquinas o donde sea). Se inyecta como
+            // contexto para que "sí, hazlo" signifique EXACTAMENTE lo propuesto.
+            val pending = consumePendingVoice()
+            if (pending != null) LogBus.log("run", "🔗 contexto pendiente (${pending.kind}): \"${pending.question.take(80)}\"")
+            if (pending?.kind == "ask") scope.launch(Dispatchers.IO) {
+                memoryDistiller.captureAnswer(pending.app, pending.question, prompt)?.let { note ->
+                    if (memories.add(note)) LogBus.log("memory", "🧠 aprendido de tu respuesta [${note.app}]: ${note.note}")
+                }
+            }
+            val pendingContext = pending?.let {
+                if (it.kind == "offer")
+                    "CONTEXTO INMEDIATO: hace un momento le PROPUSISTE por voz al usuario: «${it.question}» " +
+                        "(la tarea que harías, en la app ${it.app}: «${it.task}»). Si su mensaje ACEPTA la " +
+                        "propuesta («sí», «hazlo», «dale»…), tu objetivo es EXACTAMENTE esa tarea, con todos " +
+                        "sus detalles. Si pide otra cosa, obedece lo nuevo e ignora la propuesta."
+                else
+                    "CONTEXTO INMEDIATO: hace un momento le PREGUNTASTE por voz al usuario: «${it.question}» " +
+                        "(app ${it.app}). Si su mensaje es la RESPUESTA a esa pregunta, no ejecutes nada: " +
+                        "agradécele brevemente con speak y termina (su respuesta ya quedó guardada en tu " +
+                        "memoria). Si es una orden nueva, ejecútala."
+            }
+            synchronized(goalPrompts) { goalPrompts.clear(); goalPrompts.add(prompt.trim()) }
+            running {
+                var summary = ""
+                var round = 0
+                // Bucle de reencaminado: cada audio nuevo cancela el motor y se reinterpreta todo junto.
+                while (true) {
+                    val (goalBase, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
+                    val goal = if (pendingContext != null) "$goalBase\n\n$pendingContext" else goalBase
+                    bubble?.showExecutionMic(true)
+                    val (engine, brain) = newSession(service, user, resume = true)
+                    val holder = arrayOf("")
+                    val announce = round == 0 // en reencaminados no narra el objetivo largo
+                    val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
+                        holder[0] = try { engine.run(goal, announce) }
+                            catch (ce: CancellationException) { throw ce }
+                            catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
+                    }
+                    engineCanceller = { child.cancel(CancellationException("reencaminar")) }
+                    child.join()
+                    engineCanceller = null
+                    // Persiste el hilo compartido SOLO si terminó limpio. Si quedó con function_calls sin
+                    // responder (error/500/Stop/maxTurns/cancelación a mitad), el hilo está ENVENENADO:
+                    // reanudarlo haría fallar cualquier tarea futura con 400 "Each Function Response must
+                    // be matched to a Function Call by name". En ese caso, la próxima activación arranca
+                    // en una ventana nueva (la memoria durable sobrevive; solo se pierde el hilo server-side).
+                    if (brain.hasPendingCalls) {
+                        LogBus.log("run", "🧵 hilo con llamadas sin responder; la próxima activación arranca fresca")
+                        conversationId = ""
+                        conversationTokens = 0
+                    } else {
+                        conversationId = brain.interactionId
+                        conversationTokens = brain.totalTokens
+                    }
+                    // Lo paraste: el motor ya devolvió «paraste: …». Ni se reencamina ni se anticipa nada.
+                    Ejecucion.sigue()
+                    val grew = synchronized(goalPrompts) { goalPrompts.size > builtCount }
+                    if (!grew) { summary = holder[0]; break }
+                    round++
+                    LogBus.log("run", "↻ reencaminando: ahora son ${synchronized(goalPrompts) { goalPrompts.size }} prompts")
+                    voice.narrate("Ok, lo ajusto sobre la marcha")
+                }
+                bubble?.showExecutionMic(false)
+                // Proactivo: ¿hay UNA acción directa encadenada que valga la pena proponer/hacer ya?
+                anticipate(service, user, summary)
+                summary
+            }
+        } } catch (ocupada: CorridaEnCurso) {
             // Otra vía la abrió entre mirar y abrir: lo mismo que arriba.
             Telemetry.promptFinished(telemetryId, "error", ocupada.message ?: CorridaEnCurso.MENSAJE)
             return yaHayUna()

@@ -81,6 +81,22 @@ class TopeDeIntentos(private val celdaPx: Int) {
     /** Escribir por nombre de campo, tal como se pidió y aplanado: «Teléfono», «telefono» y «TELÉFONO » son un campo. */
     fun alEscribir(campo: String): Destino.Campo = Destino.Campo(aplanar(campo), campo.trim())
 
+    /**
+     * Cómo va [destino] al log, que sale del teléfono por la telemetría (promesa 317): nunca lo que la pantalla muestra ni lo
+     * que se pidió. Una celda, tal cual. Un nodo —también el candidato que elige `which`— por su estructura sellada (`id`,
+     * `cls`, `path`, con la llave del proceso). Un nombre o un campo sin id estructural, solo su tipo y su largo: «nombre de
+     * 3 caracteres». Se decide con el destino entero: la clave sola no sabe si «ana» es un nombre o un campo.
+     */
+    fun enLog(destino: Destino): String {
+        val clave = clave(destino)
+        return when {
+            destino is Destino.Celda -> clave
+            destino is Destino.Campo -> if (CELDA_EN_LOG.matches(clave)) clave else "campo de ${clave.length} caracteres"
+            destino is Destino.Nombre && clave == aplanar(destino.nombre) -> "nombre de ${clave.length} caracteres"
+            else -> sellado(clave) ?: "nodo sin id estructural"
+        }
+    }
+
     /** El destino como se compara. Lo usa también la [CuentaDePeticion]: dos criterios de «mismo sitio» acabarían discrepando. */
     fun clave(destino: Destino): String = when (destino) {
         is Destino.Nodo -> destino.selector
@@ -156,19 +172,25 @@ class TopeDeIntentos(private val celdaPx: Int) {
         fun celdaPx(densidad: Float): Int = (CELDA_DP * densidad).roundToInt().coerceAtLeast(1)
 
         /**
-         * Una clave tal como puede ir al log, que sale del teléfono por la telemetría (promesa 317): la celda tal
-         * cual; el selector de un nodo o un nombre, que llevan lo que la pantalla muestra, como un hash corto (`#` y
-         * 8 hex, FNV-1a de 32 bits). El mismo destino da el mismo hash: se sigue de una línea a otra sin leer qué dice.
+         * Una clave suelta tal como puede ir al log, para quien no tiene el [Destino] (una [CuentaDePeticion] con la clave a
+         * mano): la celda tal cual; un selector con estructura, su sello (`#` y 8 hex); lo demás, solo su largo. El mismo
+         * destino da el mismo sello en el mismo proceso: se sigue de una línea a otra sin leer qué dice.
          */
-        fun enLog(clave: String): String {
-            if (CELDA_EN_LOG.matches(clave)) return clave
-            var h = 0x811c9dc5.toInt()
-            for (c in clave) {
-                h = h xor c.code
-                h *= 0x01000193
-            }
-            return "#" + h.toUInt().toString(16).padStart(8, '0')
-        }
+        fun enLog(clave: String): String =
+            if (CELDA_EN_LOG.matches(clave)) clave else sellado(clave) ?: "destino de ${clave.length} caracteres"
+
+        /**
+         * Lo estructural de un selector (`id`, `cls`, `path`, en su orden), sellado; `null` si no tiene. El texto visible
+         * (`text`, `desc`) no entra nunca: ni en claro ni sellado, porque sellarlo seguiría siendo una huella de lo que se ve.
+         */
+        private fun sellado(selector: String): String? =
+            selector.substringAfter("a11y:").split(';')
+                .filter { parte -> parte.substringBefore('=', "") in ESTRUCTURA && parte.substringAfter('=', "").isNotBlank() }
+                .joinToString(";")
+                .ifEmpty { null }
+                ?.let { "#" + sello(it) }
+
+        private val ESTRUCTURA = setOf("id", "cls", "path")
 
         private val CELDA_EN_LOG = Regex("""celda:-?\d+,-?\d+""")
 

@@ -149,16 +149,19 @@ class ArmadoDeEjecucion(
      * ABRE Y CIERRA LA PETICIÓN. Abierta la tarea, [abrePeticion] como la persona: el [tope] vuelve a cero y la [cuenta]
      * mide desde aquí. Al acabar —bien, parada o reventada— la cuenta deja su línea, dentro de la sesión de telemetría de
      * esta corrida y no al empezar la siguiente. Una corrida rechazada encima no abre ni cierra nada (promesa 320).
+     *
+     * ABIERTA LA TAREA, NADA FUERA DEL `try`. Un log que revienta entre abrir y el `try` dejaba la corrida en curso para
+     * siempre: ninguna otra se abría (promesa 318).
      */
     suspend fun <T> correr(pedido: String, bloque: suspend () -> T): T {
+        val suyo = currentCoroutineContext()[Job]
         if (!freno.empiezaSiNoHayOtra(CORRIDA)) {
             log.log("freno", "${CorridaEnCurso.MENSAJE}: no abro otra corrida encima (pedido de ${pedido.length} caracteres)")
             throw CorridaEnCurso()
         }
-        val suyo = currentCoroutineContext()[Job]
-        trabajo = suyo
-        log.log("freno", "tarea abierta «$CORRIDA» (pedido de ${pedido.length} caracteres)")
         try {
+            trabajo = suyo
+            log.log("freno", "tarea abierta «$CORRIDA» (pedido de ${pedido.length} caracteres)")
             abrePeticion(QuienHabla.PERSONA, tope, cuenta)
             return bloque().also { sigue() }
         } finally {

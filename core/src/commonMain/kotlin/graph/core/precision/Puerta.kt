@@ -33,8 +33,9 @@ import kotlin.concurrent.Volatile
  * `SystemApi.openApp` tienen la misma firma y delegan en objetos distintos.
  *
  * EL LOG NOMBRA LA ACCIÓN, NUNCA LO QUE LLEVA (promesa 317). El log sale del teléfono por la telemetría: dice el
- * tipo de entrada, su celda o el largo de su texto, y el destino del tope como hash corto; nunca lo que se
- * escribe, a quién se llama, qué se busca o se copia, qué etiqueta se toca ni lo que la pantalla muestra.
+ * tipo de entrada, su celda o el largo de su texto, y el destino del tope como [TopeDeIntentos.enLog]: su estructura sellada
+ * con la llave del proceso, o su tipo y su largo; nunca lo que se escribe, a quién se llama, qué se busca o se copia, qué
+ * etiqueta se toca ni lo que la pantalla muestra, tampoco sellado.
  */
 class Puerta(
     private val freno: Freno,
@@ -80,11 +81,13 @@ class Puerta(
     private suspend fun vigila(accion: String, herramienta: String, v: Vigilada, entra: suspend () -> Boolean): Boolean {
         val t = tope
         val destino = if (t != null) v.destino(t) else null
-        cuenta?.llamada(herramienta, if (t != null && destino != null) t.clave(destino) else "")
+        // Cómo va el destino al log se decide con el destino entero, antes de actuar: la clave sola no sabe si es un nombre.
+        val enLog = if (t != null && destino != null) t.enLog(destino) else null
+        cuenta?.llamada(herramienta, if (t != null && destino != null) t.clave(destino) else "", enLog)
         if (t != null && destino != null) {
             t.rechazo(destino)?.let { porque ->
                 // El rechazo entero nombra el destino y lo que salió: es para el modelo, no para el log.
-                log.log("tope", "no paso «$accion»: tercera entrada a «${TopeDeIntentos.enLog(t.clave(destino))}», que ya falló dos veces en esta petición")
+                log.log("tope", "no paso «$accion»: tercera entrada a «$enLog», que ya falló dos veces en esta petición")
                 cuenta?.rechazada(herramienta)
                 return false
             }
