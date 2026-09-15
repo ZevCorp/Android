@@ -404,15 +404,17 @@ Límites dichos:
   «ya hay una tarea en curso» y no paga nada (318). `GraphApp.run` lo mira antes de pedir el nombre y de abrir la sesión
   de telemetría, y el armado lo decide de verdad al abrir: el destilador de memoria, el contexto pendiente de voz, el pedido
   de `goalPrompts` y la ventana de contexto los hace solo quien abrió, dentro de `Ejecucion.correr` (308). La sesión de
-  telemetría (`Telemetry.promptStarted`) sigue antes de abrir, pendiente de la decisión sobre telemetría: una corrida que se
-  cruza entre mirar y abrir todavía cambia el prompt en curso de la telemetría y, al rechazarse, lo deja en nulo.
+  telemetría (`Telemetry.promptStarted`) también la abre solo quien abrió, dentro del bloque (321, decisión B1 del Capitán): la
+  línea «freno: tarea abierta» queda fuera de la sesión y la corrida rechazada ya no manda una sesión con «error».
 - El log de la ejecución (puerta, tope, cuenta, motor, freno, MCP y workflows) no lleva lo que la persona
-  escribe, pide o ve, ni un sello que se pueda revertir o seguir de un proceso a otro (317), pero la app sigue mandando el prompt por su cuenta: `Telemetry.promptStarted` y
-  líneas propias de la app como `[app] Pídeme: …` o `＋ audio durante ejecución: …`. Eso queda fuera de esta spec.
+  escribe, pide o ve, ni un sello que se pueda revertir o seguir de un proceso a otro (317), y desde la integración de la ola 1 lo que la
+  app manda por su cuenta (el pedido de `Telemetry.promptStarted`, `[app] Pídeme: …`, `＋ audio durante ejecución: …`) sale a la
+  telemetría remota solo como medida, por la puerta de la spec 005.
 - Cortar el trabajo tras la gracia abandona el turno de Graph en vuelo (promesa 14: no es fallo de red ni se
   reintenta); ese turno pudo cobrarse.
 - «ya hay una tarea en curso» se ve como una respuesta más: `MainActivity` la escribe en su log como cualquier resultado
-  (una línea de la app, pendiente de la decisión sobre telemetría), `AssistActivity` la pone en un globo normal (y en
+  (una línea de la app, que a la telemetría remota sale como medida:
+  spec 005), `AssistActivity` la pone en un globo normal (y en
   `actOn` no la muestra) y la burbuja la saca en el mismo toast. Distinguirla pide un globo de error que hoy no existe.
 - La reunión (`VoiceDock`) cancela su cola de tareas al terminar sin pedir el alto: es desmontaje, no una orden
   de parar, y la puerta igual deja de dejar pasar en cuanto `correr` suelta.

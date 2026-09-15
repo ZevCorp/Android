@@ -453,10 +453,12 @@ class GraphApp : Application() {
             Telemetry.ensureUser(name)
             voice.speak("¡Mucho gusto, $name! Dame un momento…")
         }
-        // Sesión de telemetría: el prompt y TODOS los logs de su ejecución viajan al panel
-        // Android del Provider Studio, con su desenlace (ok · error · cancelled) al cerrar.
-        val telemetryId = Telemetry.promptStarted(prompt.trim(), if (user != null) "burbuja" else "app")
+        // Sesión de telemetría: las medidas del pedido y de su ejecución viajan al panel Android del Provider Studio, con su
+        // desenlace (ok · error · cancelled) al cerrar. La abre solo quien abrió la corrida, dentro del bloque: una rechazada
+        // no pisa ni deja en nulo la sesión de la viva (spec 003, promesa 321).
+        var telemetryId: String? = null
         val result = try { Ejecucion.correr(prompt.trim()) {
+            telemetryId = Telemetry.promptStarted(prompt.trim(), if (user != null) "burbuja" else "app")
             // Lo de empezar lo hace solo quien abrió la corrida: una que llega con otra viva ni paga el destilador, ni se
             // queda con el contexto pendiente de voz, ni pisa el pedido ni la ventana de la que corre (spec 003, promesa 308).
             // Rotación de ventana de contexto: al superar el umbral se abre un hilo nuevo (la memoria
@@ -543,17 +545,16 @@ class GraphApp : Application() {
                 summary
             }
         } } catch (ocupada: CorridaEnCurso) {
-            // Otra vía la abrió entre mirar y abrir: lo mismo que arriba.
-            Telemetry.promptFinished(telemetryId, "error", ocupada.message ?: CorridaEnCurso.MENSAJE)
+            // Otra vía la abrió entre mirar y abrir: lo mismo que arriba, sin sesión propia (321).
             return yaHayUna()
         } catch (ce: CancellationException) {
-            Telemetry.promptFinished(telemetryId, "cancelled", ce.message ?: "detenida por el usuario")
+            telemetryId?.let { Telemetry.promptFinished(it, "cancelled", ce.message ?: "detenida por el usuario") }
             throw ce
         } catch (t: Throwable) {
-            Telemetry.promptFinished(telemetryId, "error", t.message ?: "error")
+            telemetryId?.let { Telemetry.promptFinished(it, "error", t.message ?: "error") }
             throw t
         }
-        Telemetry.promptFinished(telemetryId, "ok", result)
+        telemetryId?.let { Telemetry.promptFinished(it, "ok", result) }
         return result
     }
 

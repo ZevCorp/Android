@@ -165,9 +165,14 @@ class ArmadoDeEjecucion(
             abrePeticion(QuienHabla.PERSONA, tope, cuenta)
             return bloque().also { sigue() }
         } finally {
-            freno.termine()
-            if (trabajo === suyo) trabajo = null
-            cuenta?.cerrar()
+            // Soltar puede lanzar una cancelación (un aviso cancelado sale de `termine`, 306): lo de detrás corre igual y la
+            // cancelación sigue su curso. Si no, la cuenta no cerraba y su línea salía en la corrida siguiente (322).
+            try {
+                freno.termine()
+            } finally {
+                if (trabajo === suyo) trabajo = null
+                cuenta?.cerrar()
+            }
         }
     }
 
