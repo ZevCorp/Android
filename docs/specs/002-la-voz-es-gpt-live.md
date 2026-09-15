@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fase A1 implementada** (2026-09-14; promesas 201-217 verdes) · **fase A2 escrita en rojo** (218-229) · B pendiente · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1 y A2 implementadas** (2026-09-14; promesas 201-229 verdes; B pendiente) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -191,6 +191,14 @@ persona de la voz. Con la corrida a mano en el teléfono como nivel 4.
 | Default de la compuerta | `CompuertaActiva(..., sinCaminoDeEco = false)` y la variable `U_SIN_ECO` lo invierte | `sinCaminoDeEco = true` en la firma | en el teléfono no hay variables de entorno: el default de la decisión del dueño lo dice el código |
 | `PaseParaVolver`, `Consumo`, `Fotograma` | existen para otros protocolos | no existen | GPT-Live nunca los produce y `mira = false`; se añaden cuando haya un protocolo que los use |
 | Concurrencia de `TurnosSinMarca` | `lock` interno | sin candado | commonMain no tiene `synchronized`; A2 lo confina a un solo hilo o corrutina |
+| Varias tandas de llamadas | cada `Pide` corre en su propio `Task.Run`, en paralelo | un solo obrero, en el orden en que llegaron | dos manos sobre la pantalla del teléfono a la vez no se cruzan; la escucha sigue libre igual |
+| La última llamada pendiente se retira | nunca pide respuesta, y el delegado queda esperando | pide respuesta si ya se habían mandado salidas sin pedirla | la regla es «sin pendientes, se pide», no «la tanda que acaba pide» |
+| Un 401 al abrir la primera vez | «No pude abrir la voz en vivo: {causa} (…)» dicho desde `ArrancarAsync` | pasa por la decisión única: «No sigo con la voz en vivo: {causa} («HTTP 401 …»).» | un solo sitio dice los fatales, llegue por la puerta que llegue (promesa 223) |
+| Reconectar con un modo especial puesto | la apertura vuelve a las instrucciones normales | la apertura lleva el modo en curso | quien estaba enseñando sigue enseñando tras un corte |
+| Lo dicho antes de un corte | la frase sigue acumulando en la conexión nueva | se descarta con el marcador | la sesión nueva no lo recuerda, y el log no debe pegarlo a lo siguiente |
+| Llamadas de una conexión ya cerrada | se ejecutan y sus salidas van al socket nuevo | ni se ejecutan ni se contestan | el call_id es de una sesión que ya no existe |
+| Transcripción | por `Dice`, que también lleva los avisos | por `transcribe`, aparte de `dice` | en el teléfono `dice` puede acabar anunciado en voz alta |
+| Vuelco crudo de `response.event` | el mensaje entero salvo los `.delta` | solo el tipo del evento | el contenido es del delegado, y la promesa 227 dice que no se escribe |
 
 ---
 

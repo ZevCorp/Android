@@ -1244,13 +1244,14 @@ class Contrato002VozGptLive {
         v.conv.conversar()
 
         val sin = Voz()
+        // Se juzga DENTRO del guion: al terminar, la voz calla el altavoz por su cuenta, y eso no es el detector.
         sin.guion(llega(sesionAbierta), hace {
             sin.sonando = true
             repeat(10) { sin.oye(eco) }
             repeat(6) { sin.oye(encima) }
+            assertEquals(0, sin.callado, promesa(229) + " · sin compuerta activa el detector no actúa")
+            assertEquals(List(10) { eco.toList() } + List(6) { encima.toList() }, sin.audios().map { it.toList() }, promesa(229) + " · y todo viaja intacto")
         })
         sin.conv.conversar()
-        assertEquals(0, sin.callado, promesa(229) + " · sin compuerta activa el detector no actúa")
-        assertEquals(List(10) { eco.toList() } + List(6) { encima.toList() }, sin.audios().map { it.toList() }, promesa(229) + " · y todo viaja intacto")
     }
 }
