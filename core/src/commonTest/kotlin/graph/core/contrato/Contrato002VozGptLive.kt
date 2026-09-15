@@ -3,6 +3,7 @@ package graph.core.contrato
 import graph.core.voz.Apertura
 import graph.core.voz.Argumento
 import graph.core.voz.CanalDeVoz
+import graph.core.voz.ColaDeReproduccion
 import graph.core.voz.CompuertaDeEco
 import graph.core.voz.ConversacionViva
 import graph.core.voz.DetectorDeInterrupcion
@@ -13,6 +14,7 @@ import graph.core.voz.ProtocoloGptLive
 import graph.core.voz.Recibido
 import graph.core.voz.Reloj
 import graph.core.voz.Resultado
+import graph.core.voz.TelemetriaDeVoz
 import graph.core.voz.TurnosSinMarca
 import graph.core.voz.Utensilio
 import graph.core.voz.causaFatal
@@ -111,6 +113,9 @@ class Contrato002VozGptLive {
             241 to "Los mensajes del servidor llegan en el orden en que se mandaron y enviar no espera a que se lea lo recibido.",
             242 to "Un cierre del servidor llega con su código y motivo; una conexión que se cae sin cerrar llega como cierre por red.",
             243 to "La clave viaja solo en la cabecera, nunca en la URL ni en el log, y cerrar el canal dos veces no rompe nada ni deja hilos vivos.",
+            244 to "La cola del altavoz guarda como mucho 30 segundos y al llenarse descarta lo más viejo; suena solo si tiene bytes, nunca por volumen, y callar la vacía en el acto.",
+            245 to "A la telemetría remota de la voz solo llega la medida: el largo de cada frase y el cierre del turno; ninguna frase, argumento ni texto del delegado sale del teléfono.",
+            246 to "La voz en vivo solo se arranca desde el panel de desarrollador y toma su clave del build interno, nunca de la configuración remota.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -1903,5 +1908,121 @@ class Contrato002VozGptLive {
         assertEquals(listOf<String?>("session.start", "session.start", "response.item.create", "response.create"), muere.tipos(), promesa(238))
         assertEquals(listOf<String?>("[aviso del sistema] la tarea terminó: grabé"), muere.textos(), promesa(238))
         assertEquals(1, muere.enLog("lo escrito en cola se descarta"), promesa(238) + " · ${muere.log}")
+    }
+
+    /* ---------- Fase B1b: la cola del altavoz y lo que de la voz sale del teléfono ---------- */
+
+    /** Un segundo a 24 kHz cuyas muestras dicen qué segundo es: así se ve cuál se descartó. */
+    private fun segundo(n: Int) = pcm(*IntArray(24_000) { n + 1 })
+
+    @Test
+    fun promesa244() {
+        val cola = ColaDeReproduccion()
+        assertEquals(1_440_000, cola.capacidad, promesa(244) + " · 30 s a 24 kHz mono PCM16")
+        assertFalse(cola.sonando(), promesa(244) + " · recién nacida no suena")
+        cola.meter(ByteArray(0))
+        assertFalse(cola.sonando(), promesa(244) + " · un trozo vacío no suena")
+
+        for (s in 0..30) cola.meter(segundo(s))
+        assertEquals(cola.capacidad, cola.pendientes, promesa(244) + " · nunca más de 30 s")
+        assertEquals(48_000L, cola.bytesDescartados, promesa(244) + " · el segundo que no cupo se cuenta")
+        assertContentEquals(segundo(1), cola.sacar(48_000), promesa(244) + " · se descartó el segundo 0, el más viejo: lo primero que suena es el 1")
+        repeat(28) { cola.sacar(48_000) }
+        assertContentEquals(segundo(30), cola.sacar(48_000), promesa(244) + " · lo último que llegó sigue ahí")
+        assertFalse(cola.sonando(), promesa(244) + " · entregada entera al altavoz, ya no suena")
+
+        // Un trozo que no cabe entero: lo más nuevo es su final.
+        val grande = ByteArray(35 * 48_000).also { b -> for (s in 0 until 35) segundo(s).copyInto(b, s * 48_000) }
+        val otra = ColaDeReproduccion()
+        otra.meter(segundo(99))
+        otra.meter(grande)
+        assertEquals(otra.capacidad, otra.pendientes, promesa(244))
+        assertEquals(6 * 48_000L, otra.bytesDescartados, promesa(244) + " · el segundo viejo y los 5 primeros del grande")
+        assertContentEquals(segundo(5), otra.sacar(48_000), promesa(244) + " · de un trozo que no cabe se queda su final")
+
+        // SUENA POR BYTES, NUNCA POR VOLUMEN: el silencio que espera en cola también es Ü hablando.
+        val silencio = ColaDeReproduccion()
+        silencio.meter(ByteArray(4800))
+        assertTrue(silencio.sonando(), promesa(244) + " · 100 ms de ceros en cola suenan: la llave es el estado, no el volumen")
+        assertContentEquals(ByteArray(4800), CompuertaDeEco().filtrar(vozDeLaSala(), sonando = silencio.sonando(), ahora = 0), promesa(244) + " · y la compuerta lo ve sonando")
+        assertEquals(4798, silencio.sacar(4799).size, promesa(244) + " · sacar da muestras enteras: media muestra desalinea todo lo que sigue")
+        assertTrue(silencio.sonando(), promesa(244) + " · mientras quede una muestra, suena")
+        assertEquals(2, silencio.sacar(100).size, promesa(244))
+        assertFalse(silencio.sonando(), promesa(244))
+
+        val orden = ColaDeReproduccion()
+        orden.meter(pcm(1, 2, 3))
+        orden.meter(pcm(4, 5))
+        assertEquals(0, orden.sacar(0).size, promesa(244))
+        assertContentEquals(pcm(1, 2), orden.sacar(4), promesa(244) + " · hasta n bytes, en orden")
+        assertContentEquals(pcm(3, 4, 5), orden.sacar(100), promesa(244) + " · a través de trozos y sin rellenar")
+        assertEquals(0, orden.sacar(100).size, promesa(244))
+
+        // CALLAR VACÍA EN EL ACTO: lo que ya estaba en cola no espera a nadie para irse.
+        val habla = ColaDeReproduccion()
+        habla.meter(seno(7000))
+        habla.meter(seno(7000))
+        habla.callar()
+        assertFalse(habla.sonando(), promesa(244) + " · callada no suena")
+        assertEquals(0, habla.pendientes, promesa(244))
+        assertEquals(0, habla.sacar(4800).size, promesa(244) + " · al altavoz no le queda nada de lo que decía")
+        habla.meter(pcm(9))
+        assertContentEquals(pcm(9), habla.sacar(4800), promesa(244) + " · lo que llega después suena solo")
+    }
+
+    @Test
+    fun promesa245() = corre {
+        val v = Voz(ejecutor = { "SALIDA-SECRETA de ${it.nombre}" })
+        v.guion(
+            llega(sesionAbierta),
+            llega(usuario("mi clave es 1234")), llega(usuario(" y la de casa ÑANDÚ 👋")),
+            llega(pideCon("call_escribir", "escribir", """{"texto":"ARGUMENTO-SECRETO"}""")),
+            llega("""{"type":"response.event","delegation_id":"item_1","event":{"type":"response.output_item.done","item":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"DELEGADO-SECRETO"}]}}}"""),
+            llega("""{"type":"session.algo_nuevo","text":"DESCONOCIDO-SECRETO"}"""),
+            llega(dichoPorU("Tu clave SECRETA")), llega(dichoPorU(" quedó guardada.")),
+            hace { v.reloj.ms = 5_000 }, llega(sinHechos),
+        )
+        v.conv.conversar()
+
+        val local = v.log.map { it.substringBefore(": ") to it.substringAfter(": ") }
+        val remoto = local.mapNotNull { (tag, m) -> TelemetriaDeVoz.paraRemoto(tag, m) }
+        // EL LOG LOCAL LO VE TODO: sin el filtro, esto es lo que saldría.
+        assertEquals(1, v.enLog("usuario dijo: mi clave es 1234 y la de casa ÑANDÚ 👋"), promesa(245) + " · el log local conserva la frase: ${v.log}")
+        assertEquals(1, v.enLog("DESCONOCIDO-SECRETO"), promesa(245) + " · y el evento desconocido volcado entero")
+        for (secreto in listOf("mi clave", "1234", "ÑANDÚ", "👋", "SECRET", "guardada")) {
+            assertTrue(remoto.none { secreto in it }, promesa(245) + " · «$secreto» no sale del teléfono: ${remoto.filter { secreto in it }}")
+        }
+        assertEquals(1, remoto.count { it == "usuario dijo: 37 caracteres" }, promesa(245) + " · el largo de la frase, en caracteres (el emoji es uno): $remoto")
+        assertEquals(1, remoto.count { it == "Ü dijo: 32 caracteres" }, promesa(245) + " · $remoto")
+        assertTrue(remoto.any { it.startsWith("← ") && "session.algo_nuevo" in it }, promesa(245) + " · del evento desconocido, su tipo: $remoto")
+        assertEquals(1, remoto.count { it.startsWith("fin de la escucha por") }, promesa(245) + " · el cierre de la escucha pasa: $remoto")
+        assertTrue("sesión cerrada" in remoto, promesa(245) + " · y el de la sesión")
+        for ((tag, m) in local) {
+            if ("dijo:" in m || '{' in m || "SECRET" in m) continue
+            assertEquals(m, TelemetriaDeVoz.paraRemoto(tag, m), promesa(245) + " · lo que no trae contenido pasa igual")
+        }
+
+        val viva = ConversacionViva.TAG
+        assertEquals("usuario dijo: 16 caracteres", TelemetriaDeVoz.paraRemoto(viva, "usuario dijo: mi clave es 1234"), promesa(245))
+        assertEquals("Ü dijo: 16 caracteres", TelemetriaDeVoz.paraRemoto(viva, "Ü dijo: Ya está 👋\nlisto."), promesa(245) + " · el emoji y el salto de línea cuentan uno cada uno")
+        assertEquals("usuario dijo: 0 caracteres", TelemetriaDeVoz.paraRemoto(viva, "usuario dijo: "), promesa(245))
+        assertTrue(TelemetriaDeVoz.esDeLaVoz(viva) && TelemetriaDeVoz.esDeLaVoz("voz-canal") && TelemetriaDeVoz.esDeLaVoz("voz-audio"), promesa(245) + " · todo tag «voz-» es de la voz")
+        assertFalse(TelemetriaDeVoz.esDeLaVoz("app"), promesa(245))
+        assertEquals("usuario dijo: hola", TelemetriaDeVoz.paraRemoto("app", "usuario dijo: hola"), promesa(245) + " · fuera de la voz el filtro no toca nada")
+
+        // Las formas en que un contenido podría colarse en una línea de la voz.
+        val llamada = Llamada("call_1", "escribir", mapOf("texto" to "SECRETO"))
+        val cuelan = listOf(
+            "voz-canal" to """← {"type":"response.event","event":{"type":"response.output_text.delta","delta":"SECRETO"}}""",
+            viva to "llamada: $llamada",
+            viva to "tanda: ${Hecho.Pide(listOf(llamada))}",
+            viva to "resultado: ${Resultado("call_1", "SECRETO")}",
+            viva to "hecho: ${Hecho.DiceU("SECRETO")}",
+            viva to "hecho: ${Hecho.DiceElUsuario("SECRETO")}",
+            "voz-dev" to "dice: el usuario dijo: SECRETO",
+        )
+        for ((tag, m) in cuelan) {
+            assertTrue(TelemetriaDeVoz.paraRemoto(tag, m)?.contains("SECRETO") != true, promesa(245) + " · «$m» → «${TelemetriaDeVoz.paraRemoto(tag, m)}»")
+        }
     }
 }

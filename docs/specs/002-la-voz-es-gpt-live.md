@@ -105,6 +105,9 @@ si cambia uno, cambia el otro en el mismo commit.
 | 241 | Los mensajes del servidor llegan en el orden en que se mandaron y enviar no espera a que se lea lo recibido. | B1a |
 | 242 | Un cierre del servidor llega con su código y motivo; una conexión que se cae sin cerrar llega como cierre por red. | B1a |
 | 243 | La clave viaja solo en la cabecera, nunca en la URL ni en el log, y cerrar el canal dos veces no rompe nada ni deja hilos vivos. | B1a |
+| 244 | La cola del altavoz guarda como mucho 30 segundos y al llenarse descarta lo más viejo; suena solo si tiene bytes, nunca por volumen, y callar la vacía en el acto. | B1b |
+| 245 | A la telemetría remota de la voz solo llega la medida: el largo de cada frase y el cierre del turno; ninguna frase, argumento ni texto del delegado sale del teléfono. | B1b |
+| 246 | La voz en vivo solo se arranca desde el panel de desarrollador y toma su clave del build interno, nunca de la configuración remota. | B1b |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -117,7 +120,9 @@ de las capturas de U, PCM construido byte a byte y un reloj que es una variable.
 micrófono, altavoz ni Android. La 236 es la única que no cabe en `commonTest`: allí `corre` es un
 `runBlocking` de un solo hilo, que no ve una carrera nunca; vive en `jvmTest` con hilos de verdad. Las 239-243
 juzgan el canal real, que es OkHttp y solo existe en jvm: también viven en `jvmTest`, contra un servidor
-WebSocket por localhost (MockWebServer, y un `ServerSocket` a mano para la caída). Ninguna abre una sesión con OpenAI.
+WebSocket por localhost (MockWebServer, y un `ServerSocket` a mano para la caída). La 246 juzga dónde se
+arranca la voz y de dónde sale su clave, que viven en `app` (Android): en `jvmTest` se leen sus fuentes. Ninguna abre una
+sesión con OpenAI.
 
 | # | Cómo se juzga sin tocar nada |
 |---|---|
@@ -164,6 +169,9 @@ WebSocket por localhost (MockWebServer, y un `ServerSocket` a mano para la caíd
 | 241 | Recién abierto, el servidor manda 200 mensajes y el canal manda 200 sin leer ninguno: el servidor recibe los suyos en orden y después llegan los del servidor, en orden. Una escucha que ya espera no frena un envío: el servidor lo recibe y su respuesta despierta a esa escucha. Una ráfaga de 200 leída con esperas de 1 ms que se cancelan una y otra vez llega entera y en orden |
 | 242 | El servidor manda un mensaje y cierra con 4000 «invalid_request_error.response_input_buffer_full»: llegan el mensaje y `Cierre(4000, …, porRed = false)`; recibir otra vez repite el cierre y enviar lanza sin colgarse. Un `ServerSocket` a mano contesta el 101, manda un mensaje y suelta el socket sin trama: llegan el mensaje y `Cierre(1006, motivo, porRed = true)`, con un motivo sin la clave |
 | 243 | El servidor ve `Authorization: Bearer …` y una URL sin la clave. Tras un mensaje en cada sentido, cerrar dos veces no lanza y el servidor recibe una sola trama 1000 «fin»; recibir da ese cierre y enviar lanza. En 3 s no queda vivo ningún hilo de OkHttp nacido con el canal, y ninguna línea del log trae la clave, «Bearer», la URL ni el contenido de un mensaje |
+| 244 | Recién nacida y con un trozo vacío no suena. 31 segundos cuyas muestras dicen qué segundo son: quedan 1 440 000 B, se cuentan 48 000 descartados, lo primero que sale es el segundo 1 y lo último el 30. Un trozo de 35 s sobre uno de 1 s: se queda el final del grande (sale primero su segundo 5) y se cuentan 6 s. 100 ms de ceros en cola suenan, y la compuerta los ve sonando. `sacar` da muestras enteras (4799 pedidos son 4798), en orden a través de trozos y sin rellenar. Callar deja la cola sin nada que sacar, y lo que llega después suena solo |
+| 245 | Una conversación entera con el canal con guion: el usuario dice su clave con tildes y un emoji, el delegado pide una herramienta con argumentos y escribe texto, llega un evento desconocido con un secreto y Ü contesta. El log local lo trae todo; pasado por el filtro, ni una palabra de eso: salen `usuario dijo: 37 caracteres` y `Ü dijo: 32 caracteres` (el emoji cuenta uno), del evento desconocido solo su tipo, y cada línea sin contenido —el cierre de la escucha y de la sesión incluidos— pasa igual. A mano: el `toString` de `Llamada`, `Resultado`, `Pide`, `DiceU` y `DiceElUsuario`, un JSON del canal y un «dijo:» a mitad de línea no sacan su contenido; fuera de los tags `voz-` no se toca nada |
+| 246 | Fuentes de `app` sin comentarios: el botón «Voz en vivo (prueba)» y toda aparición de `VozEnVivoDev` —calificada, en un `typealias` o en un import con `as`— están dentro de `if (mode == MODE_DEV) { … }`, salvo el import simple; `MODE_DEV` es «dev» y `mode` solo sale de la preferencia. Ningún otro archivo nombra a `VozEnVivoDev` ni a `ConversacionViva`, y en el suyo la conversación vive dentro de la clase. En `VozEnVivoDev.kt` no aparece «remote»; la credencial es `claveDelBuildInterno()`, una expresión que solo nombra `prefs.getString("openaiKey", …)` y `BuildConfig.DEFAULT_OPENAI_KEY`. `LogBus` nombra una vez a `Telemetry` y a `enqueue`, en `TelemetriaDeVoz.paraRemoto(tag, message)?.let { Telemetry.enqueue(tag, it) }`, sin reasignar `tag` ni `message`; nadie más en `app` encola ni declara otro `TelemetriaDeVoz`. Y parar no depende de la pantalla: `detener()` se llama una vez, dentro de `alcance.launch { … }`, con `alcance` propio de la voz |
 
 ---
 
@@ -217,11 +225,29 @@ nunca una sesión real: eso cuesta plata y lo confirma el Capitán.
 
 Pone verdes: **239-243**.
 
-### Fase B — el cableado en `app` (otra corrida)
+### Fase B1b — el equipo de audio, el arranque de prueba y el filtro de telemetría (esta corrida)
 
-El socket real (cabecera `Authorization`, cierre normal «fin»), el micrófono a 24 kHz en trozos de
-100 ms, la cola del altavoz de 30 s que descarta lo viejo, el AEC del sistema, y dónde vive la
-persona de la voz. Con la corrida a mano en el teléfono como nivel 4.
+Lo puro en `core/src/commonMain/kotlin/graph/core/voz/`, lo que toca Android en `app/src/main/kotlin/com/zevcorp/graph/voice/live/`.
+Sin dependencias nuevas y sin abrir nunca una sesión real: el nivel 4 lo confirma el Capitán.
+
+- `ColaDeReproduccion.kt` — la cola del altavoz: 30 s de PCM16 a 24 kHz, descarta lo más viejo por muestras enteras y lo
+  cuenta; `sonando()` es «tiene bytes».
+- `TelemetriaDeVoz.kt` — lo que de una línea de los tags `voz-` puede salir del teléfono: de una transcripción, su largo.
+- `MicrofonoPcm`, `AltavozPcm`, `RelojAndroid` — adaptadores delgados: `AudioRecord` con `VOICE_COMMUNICATION` y el AEC del
+  sistema si lo hay; `AudioTrack` en `MODE_STREAM` alimentado desde la cola por un hilo propio.
+- `VozEnVivoDev` — arma `ConversacionViva` con `CanalOkHttp`, la clave del build interno, la persona corta del teléfono y el
+  catálogo del delegado vacío (las herramientas llegan en la 2B2a). Solo la arranca el panel de desarrollador.
+  Tiene su propio alcance (`SupervisorJob` + `Default`): `stop()` lanza `detener()` ahí y no en el de la pantalla, porque desde
+  el alcance cancelado de una Activity que se cierra `withContext` lanza antes de correr y el micrófono quedaba abierto. El
+  micrófono y el altavoz se sueltan cuando `conversar()` vuelve, por la vía que sea.
+- `LogBus` pasa cada línea por `TelemetriaDeVoz` antes de `Telemetry.enqueue`; `Log.d` y el panel siguen viéndolo todo.
+
+Pone verdes: **244-246**.
+
+### Fase B — lo que queda del cableado en `app` (otra corrida)
+
+Las herramientas del delegado (2B2a), sacar la voz del panel de desarrollador y dónde vive la persona de la voz. Con la
+corrida a mano en el teléfono como nivel 4.
 
 Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer …`) en un `Map`, y `Llamada` y
 `Hecho.Falla` son data classes cuyo `toString` incluye los argumentos y el mensaje. **Nunca se loguean enteros.**
