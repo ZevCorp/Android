@@ -1,6 +1,6 @@
 # Plan de implementación: lo hace a la primera y se puede parar — el freno y la puerta única
 
-Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **Nivel 4 de la 3B hecho** (2026-09-15; en el celular, la píldora y la notificación cortan la corrida sin pedir otro turno a Graph, y la tarea siguiente nace suelta) · **revisión de 3A-3C, parte 1** (2026-09-15; promesas 317-319 nuevas y 306-308, 310 y 315 endurecidas; cada una se vio ROJA con un sabotaje real) · Nace de leer el freno de `U-Windows-App`
+Estado: **fase 3A implementada** (2026-09-14; promesas 301-306 verdes; cada una se vio ROJA con un sabotaje real) · **fase 3B implementada** (2026-09-14; promesas 307-309 y 316 verdes; 17 sabotajes y cada uno puso ROJA su promesa; la 308 juzga además el cableado de `GraphApp` y `Ejecucion`) · **fase 3C implementada** (promesas 310-315 verdes; entró con el merge `297a2c6`) · **Nivel 4 de la 3B hecho** (2026-09-15; en el celular, la píldora y la notificación cortan la corrida sin pedir otro turno a Graph, y la tarea siguiente nace suelta) · **revisión de 3A-3C, parte 1** (2026-09-15; promesas 317-319 nuevas y 306-308, 310 y 315 endurecidas; cada una se vio ROJA con un sabotaje real) · **revisión de 3A-3C, parte 2** (2026-09-15; promesa 320 nueva y 308, 310-313, 315 y 317 endurecidas; la app comparte un tope y una cuenta por proceso; 16 sabotajes y cada uno puso ROJA su promesa) · Nace de leer el freno de `U-Windows-App`
 (`windows-client/src/Actions/Freno.cs`, promesas 21-28 y 59 de su contrato) y de un hallazgo grave
 de U que el Android no puede heredar · Rama: `yokh/precision`
 
@@ -35,8 +35,17 @@ frena, deja un teléfono que no se toca y lo dice en el log.
 ## La especificación
 
 Bloque 301-399 (spec 003). Los números no se reciclan. El enunciado de cada promesa es **literal**
-el del test (`core/src/commonTest/kotlin/graph/core/contrato/Contrato003FrenoYPuerta.kt`, método
-`promesaNNN`); si cambia uno, cambia el otro en el mismo commit.
+el del mapa `PROMESAS` del test que la juzga (método `promesaNNN`); si cambia uno, cambia el otro en el mismo commit.
+Los jueces viven en varios archivos:
+
+| Archivo | Promesas |
+|---|---|
+| `core/src/commonTest/kotlin/graph/core/contrato/Contrato003FrenoYPuerta.kt` | 301-306 |
+| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato003LaAppPorLaPuerta.kt` (lee las fuentes de la app: solo jvm lee disco) | 307, 308, 320 |
+| `core/src/commonTest/kotlin/graph/core/contrato/Contrato003ArmadoYAlto.kt` | 309, 316 |
+| `core/src/commonTest/kotlin/graph/core/contrato/Contrato003TopeYCuenta.kt` | 310-315 |
+| `core/src/commonTest/kotlin/graph/core/contrato/Contrato003LoQueSaleYUnaCorrida.kt` | 317, 318 |
+| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato003Carrera.kt` (hilos de verdad) | 319 |
 
 | # | Promesa | Fase |
 |---|---|---|
@@ -79,18 +88,19 @@ lo avanza en vez de dormir.
 | 305 | `duerme(3000)` con reloj de prueba y el alto pedido a los 120 ms → devuelve `true`, pasó menos de 200 ms y ningún trozo pasó de 40 ms. Sin alto, `duerme(100)` devuelve `false` tras 100 ms en trozos `[40, 40, 20]`. Y con el reloj y la espera reales, un alto a los 120 ms corta un `duerme(3000)` antes de 1 s |
 | 306 | `enTarea { throw Reventon("revienta") }` (una excepción que no es cancelación, para que una `Paraste` no cuente como reventón) → sale tal cual, `abierta` y `pedido` son `false`. Con un alto pedido dentro también, y la frase de devolver el control se dice. Después, un `tap` por la puerta no pasa y lo dice el log. Anidada: `enTarea("exterior") { enTarea("paso consciente") { tap }; … }` → tras el bloque de dentro la tarea sigue abierta, el `tap` siguiente pasa y el alto arma. Un `avisa` que lanza un `Error` (no una `Exception`, como un TTS sin inicializar) en el alto y al soltar: sale la causa de la tarea, el freno suelta y el log dice dos veces «no pude avisar» |
 | 307 | Lee `app/src/main/kotlin/**/*.kt` (se busca subiendo desde el directorio del test): ningún archivo construye `ExecutionEngine(`, `Mcp(`, `WorkflowRunner(` ni `Puerta(`, tampoco con el nombre calificado (solo se exime `AgentAction.Mcp(`), ni los esconde tras `typealias … =`, `import … as` o `::ExecutionEngine`; `ArmadoDeEjecucion(` y `Manos(` solo en `Ejecucion.kt`; ningún argumento `phone`/`gestures`/`player` recibe `service`/`ui`/`this`. Y `ArmadoDeEjecucion` puro con falsos crudos: el motor mira la tarea antes de cada turno, así que la tarea se cierra al narrar la intención de la primera acción; desde ahí el motor, una herramienta MCP y el reproductor de workflows no llegan a ningún falso y la puerta lo dice seis veces |
-| 308 | Fuentes, solo lo que no se puede correr sin Android: `StopReceiver` llama `Ejecucion.parar("notificación")`, la píldora de `FloatingBubble` `Ejecucion.parar("píldora")`, `stopExecution` `Ejecucion.parar("botón")`, y ningún archivo de la app cancela el trabajo de la corrida (`runJob`) ni llama `stopExecution` desde la píldora o la notificación. Dentro del bloque de `Ejecucion.correr` de `GraphApp.run` (llaves contadas, no posiciones en la función): el motor, `Ejecucion.sigue()` tras él, y después reencaminar y `anticipate(`; `consciousStep` devuelve `Ejecucion.pasoConsciente(` y no corre un motor por su cuenta; `Ejecucion.parar` es `armado.parar(porque)` sin decidir el corte; el único `ArmadoDeEjecucion(` de la app le da `lanza = { c -> ….launch { c() } }` y no toca la gracia; un solo `Freno(`, en `Ejecucion.kt`. Por comportamiento, con el armado de verdad y la gracia escrita en el test (1500 ms): `parar` sin tarea no arma ni lanza un corte; dentro de `correr` arma el freno de esa tarea y tres órdenes avisan una vez; una corrida cuyo turno vuelve 100 ms después del alto termina por el alto («✋») y no se corta; y un turno colgado se corta pasada la gracia, no antes (≥ 1500 ms y < 2500 ms), y la corrida termina como cancelación soltando el freno |
+| 308 | Fuentes, solo lo que no se puede correr sin Android: `StopReceiver` llama `Ejecucion.parar("notificación")`, la píldora de `FloatingBubble` `Ejecucion.parar("píldora")`, `stopExecution` `Ejecucion.parar("botón")`, y ningún archivo de la app cancela el trabajo de la corrida (`runJob`) ni llama `stopExecution` desde la píldora o la notificación. Dentro del bloque de `Ejecucion.correr` de `GraphApp.run` (llaves contadas, no posiciones en la función): el motor, `Ejecucion.sigue()` tras él, y después reencaminar y `anticipate(`; `consciousStep` devuelve `Ejecucion.pasoConsciente(` y no corre un motor por su cuenta; en `anticipate`, la sentencia siguiente a `anticipation.consider(` es `Ejecucion.sigue()` sola y a su misma sangría (ni dentro de un `runCatching`, ni tras un `if`), y nada en la app se declara `Ejecucion`, lo importa de otro paquete o lo trae con `import … as` o `typealias`; `Ejecucion.parar` es `armado.parar(porque)` sin decidir el corte; el único `ArmadoDeEjecucion(` de la app le da `lanza = { c -> ….launch { c() } }` y no toca la gracia; un solo `Freno(`, en `Ejecucion.kt`. Por comportamiento, con el armado de verdad y la gracia escrita en el test (1500 ms): `parar` sin tarea no arma ni lanza un corte; dentro de `correr` arma el freno de esa tarea y tres órdenes avisan una vez; una corrida cuyo turno vuelve 100 ms después del alto termina por el alto («✋») y no se corta; y un turno colgado se corta pasada la gracia, no antes (≥ 1500 ms y < 2500 ms), y la corrida termina como cancelación soltando el freno |
 | 309 | `ArmadoDeEjecucion` con `GraphBrain` real sobre un transporte guionado que cuenta requests. Graph manda `[tap, tap, type]` o `[tap, wait, wait]` y el alto llega durante el primer `tap`: una sola acción ejecutada (una línea «▪»), un solo request a Graph y `correr` termina en `Paraste` |
-| 310 | `TopeDeIntentos` puro: un toque que se dio sin cambiar la pantalla y otro que revienta hacia «Guardar» → el tercero se rechaza con «no lo intento una tercera vez: «Guardar» ya falló dos veces en esta petición — 1) … · 2) …» y «Cambia de vía…»; otro destino pasa. Y la `Puerta` de verdad: `tap`, `type` y `tapLabel` fallidos dos veces → el tercero devuelve `false`, el teléfono falso grabó dos entradas y el log dice `tope: no paso «…»: …ya falló dos veces…` (sin el rechazo entero, que nombra el destino: promesa 317) |
-| 311 | Puerta con `nodoEn`: dos puntos distintos (y de celdas distintas) del mismo nodo son un destino; dos nodos pequeños dentro de la misma celda son dos. Sin nodo bajo el punto, dos puntos de la misma celda de 48 dp son un destino y la celda vecina es otro; sin `nodoEn`, la celda. `celdaPx(3f)` = 144 y `celdaPx(2.75f)` = 132. Al escribir cuenta el punto pedido, no el nodo que lo resuelve: el mismo campo pedido en otra celda es otro destino |
-| 312 | Calculadora: cinco toques al mismo nodo «7», cada uno cambia solo el texto del display (la huella sin textos es idéntica antes y después) → cinco entradas y cero rechazos; el cambio aparece solo después de `asentar`. «Guardar»: tres toques sin cambio → el tercero no llega. Escribir tres veces con éxito no se bloquea; un toque que no se dio cuenta como fallo aunque la pantalla cambie; tres listas de homónimos no son intento. Sin `huella`, tres toques sin juzgar no bloquean y el log lo dice una vez |
-| 313 | Sin lista: dos fallos a «Descargas» → `which=1` y `which=2` se rechazan y el rechazo no nombra `which`. Con lista de «Descargas»: dos fallos al 1 → «01» y «+1» se rechazan, el 2 pasa y el rechazo dice «prueba OTRO candidato con which» con la lista; fallos a «2» frenan «02» y «+2»; una lista de «Documentos» no habilita `which` en «Descargas»; el selector del candidato tocado por coordenada es ese candidato |
+| 310 | `TopeDeIntentos` puro: un toque que se dio sin cambiar la pantalla y otro que revienta hacia «Guardar» → el tercero se rechaza con «no lo intento una tercera vez: «Guardar» ya falló dos veces en esta petición — 1) … · 2) …» y «Cambia de vía…»; otro destino pasa. Y la `Puerta` de verdad: `tap`, `type` y `tapLabel` fallidos dos veces → el tercero devuelve `false`, el teléfono falso grabó dos entradas y el log dice `tope: no paso «…»: …ya falló dos veces…` (sin el rechazo entero, que nombra el destino: promesa 317). Con el alto pedido y los tres destinos (toque, escritura y etiqueta) castigados, cada entrada lanza `Paraste`, el tope no contesta y la cuenta cierra con `llamadas=6 … rechazadas=0`: mirar el tope antes que el freno deja el mismo log de siempre y devuelve `false`. Una entrada frenada no suma un fallo: tras un fallo, un alto pedido al leer la huella y una cancelación dentro del `tap`, el toque siguiente llega, y solo el que sigue a ese se rechaza |
+| 311 | Puerta con `nodoEn`: dos puntos distintos (y de celdas distintas) del mismo nodo son un destino; dos nodos pequeños dentro de la misma celda son dos. Sin nodo bajo el punto, dos puntos de la misma celda de 48 dp son un destino y la celda vecina es otro; sin `nodoEn`, la celda. `celdaPx(3f)` = 144 y `celdaPx(2.75f)` = 132. Al escribir cuenta el punto pedido, no el nodo que lo resuelve: el mismo campo pedido en otra celda es otro destino. Por nombre, «Teléfono», «telefono» y «TELÉFONO » son un campo: dos fallos frenan el tercero, y el rechazo lo nombra «TELÉFONO» |
+| 312 | Calculadora: cinco toques al mismo nodo «7», cada uno cambia solo el texto del display (la huella sin textos es idéntica antes y después) → cinco entradas y cero rechazos; el cambio aparece solo después de `asentar`. «Guardar»: tres toques sin cambio → el tercero no llega. Escribir tres veces con éxito no se bloquea; un toque que no se dio cuenta como fallo aunque la pantalla cambie; tres listas de homónimos no son intento. Sin `huella`, tres toques sin juzgar no bloquean, el log lo dice una vez y la cuenta los deja en `primera=— ultima=—` |
+| 313 | Sin lista: dos fallos a «Descargas» → `which=1` y `which=2` se rechazan y el rechazo no nombra `which`. Con lista de «Descargas»: dos fallos al 1 → «01» y «+1» se rechazan, el 2 pasa y el rechazo dice «prueba OTRO candidato con which» con la lista; fallos a «2» frenan «02» y «+2»; una lista de «Documentos» no habilita `which` en «Descargas»; el selector del candidato tocado por coordenada es ese candidato. Una lista sin candidatos no deja elegir: con dos fallos a `which=1`, `which=1…6` se rechazan sin sugerir `which` |
 | 314 | Tope con dos fallos: `abrePeticion(SISTEMA, …)` y `retirada` lo dejan rechazando y la cuenta no emite; `abrePeticion(PERSONA, …)` lo vacía (fallos y listas), emite la línea de la anterior, y por la puerta el tercer toque vuelve a llegar |
-| 315 | `CuentaDePeticion` con `TestTimeSource`: línea exacta `llamadas=5 distintas=3 intentos_max=3 «celda:1,1» primera=800 ms ultima=1400 ms desde_peticion=1000 ms rechazadas=1 retiradas=1` y en el log como `peticion: …`; sin acción que actuó, `primera=— ultima=—`; un resultado sin llamada no cuenta; sin llamadas ni `cerrar` ni `nuevaPeticion` emiten. Un selector va como hash corto `«#xxxxxxxx»`: el mismo selector, el mismo hash en otra petición, sin `text=`; una celda va tal cual. Por la puerta: tres toques a «Guardar» (uno rechazado) y un scroll dejan `llamadas=4 distintas=2 intentos_max=3 «#…» … rechazadas=1` |
+| 315 | `CuentaDePeticion` con `TestTimeSource`: línea exacta `llamadas=5 distintas=3 intentos_max=3 «celda:1,1» primera=800 ms ultima=1400 ms desde_peticion=1000 ms rechazadas=1 retiradas=1` y en el log como `peticion: …`; sin acción que actuó, `primera=— ultima=—`; un resultado sin llamada no cuenta; sin llamadas ni `cerrar` ni `nuevaPeticion` emiten. Un selector va como hash corto `«#xxxxxxxx»`: el mismo selector, el mismo hash en otra petición, sin `text=`; una celda va tal cual. Por la puerta: tres toques a «Guardar» (uno rechazado) y un scroll dejan `llamadas=4 distintas=2 intentos_max=3 «#…» … rechazadas=1`. Una retirada y dos rechazos sin llamadas no emiten ni por `cerrar` ni por `nuevaPeticion`, y no se cuelan en la siguiente; abierta con `abrePeticion(PERSONA, …)`, `desde_peticion` es un número (500 ms), no «—» |
 | 316 | Un workflow de tres pasos (consciente, subconsciente, consciente) como herramienta MCP del motor armado. Sin alto: pasan `tap`, `tapLabel` y `tap` (el paso consciente anidado no cerró la corrida). Con el alto durante el `tap` del paso 1: nada más llega, el workflow no vuelve a leer la pantalla para el paso 2 ni da el paso 1 por hecho, Graph no da otro turno y `correr` termina en `Paraste` |
-| 317 | Una bitácora común recorre, con datos de verdad (un contacto, un número, un mensaje, un correo, una búsqueda, una URL, una dirección, una app y el título de un chat): las 31 entradas de la puerta sin tarea y con el alto echado; el tope y la cuenta sobre la fila de un contacto que no responde (toque, escritura y etiqueta hasta el rechazo, dos líneas `peticion:`) y con la huella y el nodo que revientan con el título en el mensaje; y una corrida del armado con el pedido, `type`, `open_app`, `send_sms`, una herramienta aprendida y un workflow que fallan, un paso consciente cuyo Graph revienta, una pregunta, un resumen, una corrida que se intenta abrir encima y un alto. Cada vía tiene que haber escrito su línea; ninguna línea, sin tildes ni mayúsculas, contiene un trozo de esos datos |
+| 317 | Una bitácora común recorre, con datos de verdad (un contacto, un número, un mensaje, un correo, una búsqueda, una URL, una dirección, una app y el título de un chat): las 31 entradas de la puerta sin tarea y con el alto echado; el tope y la cuenta sobre la fila de un contacto que no responde (toque, escritura y etiqueta hasta el rechazo, dos líneas `peticion:`) y con la huella y el nodo que revientan con el título en el mensaje; y una corrida del armado, con tope y cuenta compartidos, con el pedido, `type`, `open_app`, `send_sms`, una herramienta aprendida y un workflow que fallan, un paso consciente cuyo Graph revienta, una pregunta, un resumen, una corrida que se intenta abrir encima y un alto. Cada vía tiene que haber escrito su línea en esa corrida (también `peticion:`); ninguna línea, sin tildes ni mayúsculas, contiene un trozo de esos datos |
 | 318 | Dentro de una corrida de fuera, `correr` otra lanza `CorridaEnCurso` con «ya hay una tarea en curso»: su cerebro no da un turno, nada llega al teléfono, la primera sigue abierta y el alto la para; después la siguiente se abre y nace suelta. Lo mismo desde dos corrutinas, con la primera esperando a Graph. Un motor sin tarea abierta devuelve «paraste: …» con cero turnos y sin narrar «Paré». Y si la tarea se cierra debajo del motor (en su primer `tap`), no pide el segundo turno |
 | 319 | Hilos de verdad: la píldora pide el alto en bucle desde otro hilo mientras la corrida hace `empezar`/`termine` hasta un millón de vueltas o 3 s. Tras cada `termine`, ni `abierta` ni `pedido`; los avisos alternan «Vale, paro.» → «Listo, tienes el control de vuelta.» sin salirse de orden y hay tantos altos como devoluciones (y más de cero); la tarea siguiente nace suelta. Sin candado: 5.363 frenos armados sin tarea en un millón de vueltas |
+| 320 | El `ArmadoDeEjecucion` real con un tope y una cuenta compartidos y un teléfono cuyo «Guardar» nunca responde. Dentro de una corrida, un motor da dos toques fallidos, se intenta abrir otra corrida encima y un paso consciente arma su motor sobre otra puerta y toca por tercera vez: no llega (dos toques en el teléfono), dentro no se emite ninguna `peticion:`, y al acabar sale una sola, `llamadas=3 … rechazadas=1 retiradas=0`. Una corrida nueva de fuera: el toque vuelve a llegar y deja su propia línea `llamadas=1 …`. Y en la app: `Ejecucion.kt` construye el único `TopeDeIntentos(` y la única `CuentaDePeticion(` como `private val` del objeto y se los da a su único `ArmadoDeEjecucion(`; nada los esconde tras `typealias`, `import … as` o `::`, y nadie en la app llama `abrePeticion(` ni `nuevaPeticion(` |
 
 ---
 
@@ -234,8 +244,9 @@ notificaciones. Lo que el teléfono enseñó y queda fuera de la 3B:
 
 Estado: implementada en `yokh/precision-tope` (310-315 verdes; cada una se vio ROJA primero y con un
 sabotaje real). Nace de `U-Windows-App/windows-client/src/Voice/TopeDeIntentos.cs` y `CuentaDelTurno.cs`
-(spec 017 de U, promesas 204, 205 y 207). Se copió el comportamiento y el porqué, no el archivo. La app
-todavía no la cablea: eso es 3E.
+(spec 017 de U, promesas 204, 205 y 207). Se copió el comportamiento y el porqué, no el archivo. Entró a
+`yokh/precision` con el merge `297a2c6`. Desde la revisión de 3A-3C, parte 2, la app comparte un tope y una cuenta
+por proceso (ver «Tope y cuenta en la app»); lo que dice qué nodo se toca y si la pantalla cambió todavía no: eso es 3E.
 
 En `core/src/commonMain/kotlin/graph/core/precision/`:
 
@@ -243,12 +254,15 @@ En `core/src/commonMain/kotlin/graph/core/precision/`:
   - **El destino** de un toque es el `selector` del nodo bajo el punto (el que se toca de verdad); sin
     nodo, la celda de 48 dp `celda:<x div celdaPx>,<y div celdaPx>`, con `celdaPx` sacado de la densidad
     (`TopeDeIntentos.celdaPx(densidad)`). Al escribir cuenta el campo tal como se pidió: por nombre, el
-    nombre; por coordenada (la puerta), la celda del punto pedido y no el nodo que lo resuelve. Tocar y
+    nombre aplanado como cualquier otro («Teléfono» y «TELÉFONO » son un campo, como en U); por coordenada
+    (la puerta), la celda del punto pedido y no el nodo que lo resuelve. Tocar y
     escribir en el mismo sitio son destinos distintos. Por nombre (`tapLabel`, la voz), el nombre aplanado
     (minúsculas, sin tildes, espacios juntos).
   - **`which`** solo cuenta si en la petición hubo una lista de homónimos de ese nombre, y se lee como
     número (`"02"` y `"+2"` son el 2). Con candidatos, el número lleva al selector del candidato: es el
-    mismo destino que tocar ese nodo por coordenada. Sin lista, o fuera de rango, no abre destino nuevo.
+    mismo destino que tocar ese nodo por coordenada. Sin lista, con una lista sin candidatos (no hay entre qué
+    elegir; U abría `nombre#N` y dejaba doce toques al mismo botón con `which=1…6`), o fuera de rango, no abre
+    destino nuevo.
   - **Fallo** es una excepción o un intento sin logro. **Logro** es que la acción se dio y escribió o
     cambió la huella. Una lista de homónimos no es intento. Un toque que se dio sin huella con que
     juzgar no cuenta como fallo: el tope nunca frena por adivinar.
@@ -282,6 +296,50 @@ calculadora cuya huella sin textos no cambia.
 después; esperar a que la pantalla se asiente (dos lecturas iguales con techo, promesa 169 de U) lo
 cablea 3E.
 
+**Tope y cuenta en la app (revisión de 3A-3C, parte 2).** Hasta aquí `ArmadoDeEjecucion` armaba cada `Puerta` sin tope
+ni cuenta, y una nueva en cada `arma`: cada ronda de reencaminado, cada paso consciente, cada catálogo. Ahora el armado
+recibe `tope` y `cuenta` (parámetros con default `null` al final) y los pone en todas sus puertas, y `Ejecucion` tiene uno
+de cada por proceso, como el freno (la celda sale de `Resources.getSystem().displayMetrics.density`). La petición es la
+corrida de fuera: `correr` llama `abrePeticion(PERSONA, …)` al abrir la tarea —el tope vuelve a cero y la cuenta mide desde
+ahí— y `cuenta.cerrar()` al acabar, bien, parada o reventada, así la línea `peticion:` cae en la sesión de telemetría de su
+corrida y no en la siguiente. Una corrida rechazada encima no abre ni cierra nada, y `pasoConsciente` no reinicia (320). Un
+audio nuevo durante la ejecución reencamina dentro de la misma corrida y es la misma petición: el objetivo se reinterpreta
+junto, no es otro pedido; la acción anticipada, igual.
+
+Lo que queda para **3E** es lo que alimenta al tope desde el teléfono: `nodoEn` (el nodo vivo bajo el punto), `huella` (con
+los textos visibles de la ventana activa) y `asentar` (sin sleeps fijos). Sin ellos, en el teléfono el destino de un toque es
+su celda de 48 dp, y un toque que se dio nunca es fallo ni «actuó» (sin huella no se juzga si cambió): hoy el tope solo frena
+a la tercera un toque, una escritura o una etiqueta que no se dieron (`false`) o reventaron, y `primera=` mide la primera
+escritura que escribió o la primera entrada no vigilada que devolvió `true`.
+
+**Diferencias con U en la cuenta**, a propósito o por ahora:
+- U cuenta intentos por destino también en `map_go_to`, `map_open_app`, `map_unblock` y `file_open` (su
+  `TopeDeIntentos.Acciones`). Android solo en lo que vigila el tope —tocar, escribir y tocar por etiqueta—: `open_app`,
+  `launch_app`, `open_settings` y el resto cuentan como llamadas, sin destino. Un `open_app` repetido no sube `intentos_max`.
+- Sin destinos, U escribe `intentos_max=0` y Android `intentos_max=0 «—»`: la columna del destino está siempre, y la línea se
+  lee con un solo patrón.
+
+Los sabotajes de la parte 2, uno por arreglo, aplicados sobre `8f597f2` y revertidos con `git checkout`:
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| S313 | `which` con una lista sin candidatos vuelve a abrir `nombre#N` | 313 |
+| S311 | escribir por nombre no aplana el campo | 311 |
+| S7b | el tope se mira antes que el freno, con el mismo log y la misma cuenta | 310 |
+| S6 | una entrada frenada (alto al leer la huella o cancelación en el `tap`) suma un fallo | 310 |
+| S5 | `abrePeticion` llama `cerrar()` en vez de `nuevaPeticion()` | 315 |
+| S11 | sin huella la cuenta marca «actuó» (`!= false`) | 312 |
+| S4 | la cuenta emite con cero llamadas si hubo retiradas o rechazos | 315 |
+| S8a | una puerta con un tope nuevo en cada `arma` | 320 |
+| S8b | `pasoConsciente` abre otra petición | 320 |
+| S8c | `correr` no abre la petición | 320 |
+| S8d | `correr` abre la petición antes de mirar si hay otra corrida | 320 |
+| S8e | `correr` no cierra la petición al acabar | 320 |
+| S8f | `Ejecucion` no da el tope ni la cuenta al armado | 320 |
+| S9a | `anticipate` propone sin `Ejecucion.sigue()` tras `consider` | 308 |
+| S9b | `Ejecucion.sigue()` dentro de un `runCatching` que se traga la parada | 308 |
+| S9c | un `private object Ejecucion { fun sigue() = Unit }` dentro de `GraphApp` | 308 |
+
 Límites dichos:
 - El rechazo no llega al modelo: la puerta devuelve `false` y el motor lo traduce a «no se pudo
   ejecutar la acción» (mismo límite que 3A). Desde la revisión de 3A-3C tampoco va al log, que sale del
@@ -291,11 +349,14 @@ Límites dichos:
   ese nodo. Tocar «Guardar» por etiqueta y por coordenada son dos destinos hasta que 3D lo resuelva.
 - Sin `huella`, un toque que se dio no se juzga: ni fallo para el tope ni «actuó» para la cuenta.
 - Sin candado (el del freno llegó con la promesa 319; el tope y la cuenta no lo tienen): dos entradas
-  simultáneas desde hilos distintos podrían contarse mal. Una sola corrida de fuera toca a la vez (318).
+  simultáneas desde hilos distintos podrían contarse mal. Desde la parte 2 hay uno de cada por proceso, pero una sola
+  corrida de fuera toca a la vez (318) y el catálogo de la anticipación arma su puerta sin actuar.
 
 ## Lo que NO entra, y por qué
 
-- **Tope de intentos, homónimos, telemetría por petición**: fases 3C, 3D y 3E.
+- **Homónimos** (3D) y **lo que alimenta el tope desde el teléfono** —`nodoEn`, `huella` y `asentar`— y **que el rechazo
+  llegue al modelo** (3E). El tope de dos intentos y la línea `peticion:` ya entraron: 3C, y cableados en la app en la
+  revisión de 3A-3C, parte 2.
 - **Que el motor abra la tarea**: la abre quien arma la corrida (3B). Un motor que la abriera la
   cerraría también en el step consciente de un workflow, a mitad de la corrida de fuera.
 
@@ -315,5 +376,8 @@ Límites dichos:
   líneas propias de la app como `[app] Pídeme: …` o `＋ audio durante ejecución: …`. Eso queda fuera de esta spec.
 - Cortar el trabajo tras la gracia abandona el turno de Graph en vuelo (promesa 14: no es fallo de red ni se
   reintenta); ese turno pudo cobrarse.
+- «ya hay una tarea en curso» se ve como una respuesta más: `MainActivity` la escribe en su log como cualquier resultado
+  (una línea de la app, pendiente de la decisión sobre telemetría), `AssistActivity` la pone en un globo normal (y en
+  `actOn` no la muestra) y la burbuja la saca en el mismo toast. Distinguirla pide un globo de error que hoy no existe.
 - La reunión (`VoiceDock`) cancela su cola de tareas al terminar sin pedir el alto: es desmontaje, no una orden
   de parar, y la puerta igual deja de dejar pasar en cuanto `correr` suelta.
