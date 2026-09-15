@@ -121,8 +121,8 @@ trae_test() {
     fallos=$((fallos+1))
     return
   fi
-  if ! codigo_tocado="$(git diff --name-only "$base...$rev" -- 'core/src/commonMain/**/*.kt' 'app/src/main/**/*.kt' 2>&1)" \
-     || ! test_tocado="$(git diff --name-only "$base...$rev" -- 'core/src/commonTest/**' 'app/src/test/**' 2>&1)"; then
+  if ! codigo_tocado="$(git diff --name-only "$base...$rev" -- 'core/src/*Main/**/*.kt' 'app/src/main/**/*.kt' 2>&1)" \
+     || ! test_tocado="$(git diff --name-only "$base...$rev" -- 'core/src/*Test/**/*.kt' 'app/src/test/**/*.kt' 'app/src/androidTest/**/*.kt' 2>&1)"; then
     rojo "  ✘  no se pudo comparar $base...${rev:0:9}: no se sabe si trae su propio test"
     printf '%s\n' "$codigo_tocado" | head -2 | sed 's/^/     /'
     fallos=$((fallos+1))
