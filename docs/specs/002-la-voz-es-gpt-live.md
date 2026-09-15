@@ -64,13 +64,13 @@ si cambia uno, cambia el otro en el mismo commit.
 |---|---|---|
 | 201 | La apertura es un solo `session.start` a `wss://api.openai.com/v1/live/sessions` con la clave en la cabecera y no en la URL; modelo gpt-live-1, voz marin, audio PCM a 24 kHz, y las herramientas viajan solo dentro de la delegación a gpt-5.6-luna, con las instrucciones del delegado byte a byte. | A1 |
 | 202 | Escribir manda el mensaje del usuario y pide respuesta; entregar resultados es un mensaje por llamada y no pide respuesta, y pedirla es un mensaje aparte. | A1 |
-| 203 | De las tres copias de una llamada solo cuenta `response.output_item.done`; sus argumentos llegan como mapa de texto y un valor no texto viaja como su JSON crudo; un JSON ilegible no revienta: en los argumentos da un mapa vacío y en el mensaje entero, ningún hecho. | A1 |
+| 203 | De las tres copias de una llamada solo cuenta `response.output_item.done`; sus argumentos llegan como mapa de texto y un valor no texto viaja como su JSON crudo; un JSON ilegible no revienta, ni uno demasiado anidado: en los argumentos da un mapa vacío y en el mensaje entero, ningún hecho. | A1 |
 | 204 | El audio de salida vacío o hecho de ceros no suena; una pausa de pico 1 y una muestra con solo el byte alto sí suenan con el PCM exacto; el micrófono viaja en `session.input_audio.append` con su PCM exacto en base64. | A1 |
 | 205 | Las transcripciones se traducen a lo que dijo el usuario y a lo que dijo Ü; `error` da Falla con su code literal (vacío si no trae), `session.closed` da Falla con su motivo y code vacío; ningún mensaje de GPT-Live produce CierraElTurno ni HablaronEncima; solo `session.started` es Abierta. | A1 |
-| 206 | `session.usage.updated` da la Duración acumulada solo si trae segundos numéricos. | A1 |
+| 206 | `session.usage.updated` da la Duración acumulada solo si trae segundos numéricos, finitos y no negativos. | A1 |
 | 207 | Un resultado de herramienta nunca pasa de 32 768 bytes serializados: si no cabe se recorta sin partir caracteres y dice cuánto se recortó de cuánto; si cabe, viaja entero; y GPT-Live no se declara capaz de mirar, porque una captura no cabe. | A1 |
 | 208 | Cambiar de modo no reabre la sesión: manda `session.update` con la delegación entera y detrás `session.instructions.append` con el prefijo literal de cambio de modo y las reglas nuevas, o con el de vuelta y la persona de la voz cuando se regresa al modo de siempre. | A1 |
-| 209 | Dictar es `session.commentary.append` con delegation_id nulo y el prefijo literal delante del texto; no abre sesión nueva ni pide `response.create`. | A1 |
+| 209 | Dictar es `session.commentary.append` con delegation_id nulo y el prefijo literal delante del texto; no abre sesión nueva ni pide `response.create`, y en blanco no manda nada. | A1 |
 | 210 | El primer trozo del usuario abre turno y el segundo no; el turno se cierra una sola vez a los 2000 ms exactos del último trozo, no a los 1999, y el audio en ceros no retrasa el cierre. | A1 |
 | 211 | No se cierra el turno con llamadas en curso; la devolución de la última vuelve a contar el silencio desde ese momento; y una llamada devuelta antes de oírse no queda en curso. | A1 |
 | 212 | Una pausa sin respuesta de Ü sigue siendo la misma petición; cerrar sin que Ü contestara no abre una petición nueva. | A1 |
@@ -91,6 +91,8 @@ si cambia uno, cambia el otro en el mismo commit.
 | 227 | El audio y las transcripciones del delegado nunca se escriben en el log. | A2 |
 | 228 | Al acercarse al tope de 128 items por sesión se avisa una vez en el log, sin cortar la conversación. | A2 |
 | 229 | Cuando el detector dispara, el altavoz se calla, la compuerta se reabre y el trozo viaja intacto; sin compuerta activa el detector no actúa. | A2 |
+| 230 | Cambiar de modo en plena sesión manda la delegación nueva sin reabrir, y si la sesión se corta, la reapertura ya abre en el modo vigente. | A2 |
+| 231 | Detener corta cualquier espera en curso: la voz termina enseguida, no cuando vence la espera. | A2 |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -104,23 +106,23 @@ micrófono, altavoz ni Android.
 
 | # | Cómo se juzga sin tocar nada |
 |---|---|
-| 201 | Se parsea el JSON emitido y se comparan campos, nunca texto crudo. Instrucciones del delegado de 24 KB con tildes, comillas, barra invertida, tabuladores y saltos de línea: llegan iguales en bytes UTF-8. La sesión no tiene `tools`. La URL no lleva la clave; la cabecera `Authorization` sí. Un delegado distinto se elige al construir |
+| 201 | Se parsea el JSON emitido y se comparan campos, nunca texto crudo. Instrucciones del delegado de 24 KB con tildes, comillas, barra invertida, tabuladores y saltos de línea: llegan iguales en bytes UTF-8. La sesión no tiene `tools`. La URL no lleva la clave; la cabecera `Authorization` sí. Un delegado distinto se elige al construir. Las instrucciones empiezan con un espacio y acaban en salto de línea: un `trim()` en el camino también se ve |
 | 202 | `texto()` da dos mensajes: el `response.item.create` con `input_text` y el `response.create`. `resultados()` de dos llamadas da dos `function_call_output` y ninguno es `response.create`. `pedirRespuesta()` es solo `{"type":"response.create"}` |
-| 203 | Las tres copias reales de una llamada (capturadas por U el 2026-09-12) dan UN `Pide` con sus argumentos. Argumentos con número, booleano, objeto y null salen como `7`, `true`, `{"a":[1,2]}`, `null`. Argumentos ilegibles o que no son objeto dan mapa vacío; un mensaje ilegible, vacío o sin `type` da lista vacía |
+| 203 | Las tres copias reales de una llamada (capturadas por U el 2026-09-12) dan UN `Pide` con sus argumentos. Argumentos con número, booleano, objeto y null salen como `7`, `true`, `{"a":[1,2]}`, `null`. Argumentos ilegibles o que no son objeto dan mapa vacío; un mensaje ilegible, vacío o sin `type` da lista vacía. Demasiado anidado, en un hilo de pila chica para que reventar se vea rojo: argumentos de 1000 niveles dentro de un texto con comillas escapadas y «[» × 4000 dan la llamada con mapa vacío; 64 niveles se leen y 65 no; un mensaje «[» × 4000, uno de 4000 objetos y un error sin message de 1000 niveles dan lista vacía, y la voz que los recibe sigue oyendo sin volcarlos. Un error sin message sale con su texto crudo, espacios incluidos, recortado a 400 car. |
 | 204 | Delta vacío y 4800 B de ceros: ningún `Suena`. Pausa con muestras +1 y −1, muestra 256 (solo byte alto), muestra −32768 y un seno de pico 7000: `Suena` con el PCM idéntico. `audio(pcm)` lleva el base64 exacto |
 | 205 | Transcripciones reales de U; `error` con code, sin code, sin message y no objeto; `session.closed` con motivo y sin él. Todo lo leído más `session.delegation.created`, `response.completed` y `session.usage.updated`: ningún cierre de turno ni «hablaron encima», y solo `session.started` es `Abierta` |
-| 206 | 12.0 y luego 25.0 salen tal cual (acumulado); 7 son 7.0; `"12"` en texto, `usage` vacío o ausente no dan nada |
+| 206 | 12.0 y luego 25.0 salen tal cual (acumulado); 7 son 7.0; `"12"` en texto, `usage` vacío o ausente no dan nada; tampoco `NaN`, `1e999` ni `-5` |
 | 207 | Un resultado de 40 KB con tildes, emoji y comillas sale en ≤ 32 768 B y > 32 752 B, con el principio del texto y la cola con los bytes exactos. 9000 emoji: lo guardado son emoji enteros. 20 000 comillas (20 KB de texto, 40 KB serializados): se recorta aunque el texto cabría. Un texto que da un mensaje de 32 768 B exactos va entero; uno de 32 769 B, recortado |
 | 208 | Al modo aprendiz: `session.update` cuya sesión solo tiene `delegation`, con instrucciones y herramientas nuevas, y detrás el append con el prefijo escrito letra a letra en la prueba. De vuelta: la delegación recupera las instrucciones completas y el append lleva el prefijo de vuelta más la persona de la voz, sin las de operar |
-| 209 | `dictar(" voy por el peso ")` es un solo mensaje con `delegation_id` null y el contenido literal |
+| 209 | `dictar(" voy por el peso ")` es un solo mensaje con `delegation_id` null y el contenido literal; vacío, espacios o saltos y tabuladores dan lista vacía |
 | 210 | Reloj a mano: 1000, 1999 ms del último trozo no cierran; 2000 cierra y 2100 ya no. Audio de ceros entre medias no cuenta. Recién nacido, un minuto de audio no cierra nada |
 | 211 | Una llamada en curso aguanta 6000 ms; devuelta, 1999 ms no cierran y 2000 sí. Dos llamadas: hasta devolver la segunda. Una devuelta antes del `Pide` no queda en curso |
 | 212 | Pausa que cierra sin respuesta de Ü: lo siguiente del usuario no abre. Tras contestar Ü, sí. La respuesta de Ü dentro del mismo turno cuenta; el saludo previo no |
 | 213 | Voz de pico 1001 cada 100 ms sostiene 3000 ms tras la transcripción; pico 1000 no sostiene. Sonido de pico 7000 sin nada dicho no abre turno |
 | 214 | Recién nacida deja pasar la misma instancia. Sonando: ceros del mismo tamaño. Gracia: a 299 ms tras vaciarse, ceros; a 300, el trozo idéntico. `abrir()` deja pasar a los 50 ms. Tres trozos de 100 ms tragados son 300 ms |
 | 215 | `activa(forzada, aec)` sin `sinCaminoDeEco`: falso. Con AEC y sin camino de eco declarado falso: no actúa. Forzada: siempre verdadero |
-| 216 | Eco 800 aprendido; voz 6000 sostenida dispara. Golpe de un trozo y ráfaga de dos no. Frase nueva de Ü a 2600 tras silencio siembra la base y no dispara. Voz 400 sobre una base de 100 no pasa el piso. Tras disparar, voz con la cola cortada no re-dispara; con Ü sonando otra vez, sí. `rms` de una onda cuadrada ±6000 es 6000 |
-| 217 | Las tres causas con sus códigos (también `type.code` y `401`) nombran su palabra y ninguna otra. Reintentables: vacío, blancos, `response_input_buffer_full`, códigos de cierre, prosa en inglés que menciona 401 o créditos |
+| 216 | Eco 800 aprendido; voz 6000 sostenida dispara. Golpe de un trozo y ráfaga de dos no. Frase nueva de Ü a 2600 tras silencio siembra la base y no dispara. Voz 400 sobre una base de 100 no pasa el piso. Tras disparar, voz con la cola cortada no re-dispara; con Ü sonando otra vez, sí. `rms` de una onda cuadrada ±6000 es 6000. Las defensas, cada una con el caso que la muerde: tras 800 y 1800 la base es 1000 (0.8/0.2); el trozo a 250 ms justos del arranque aún siembra (base 720); una frase nueva tras 300 ms de silencio con eco 3000 sobre una base de 250 no dispara; a trozos de 120 ms, el segundo encima dispara (el sostén cuenta desde el trozo anterior) |
+| 217 | Las tres causas con sus códigos (también `type.code` y `401`) nombran su palabra y ninguna otra. Reintentables: vacío, blancos, `response_input_buffer_full`, códigos de cierre, prosa en inglés que menciona 401 o créditos. «fin 401» es fatal: la palabra va separada por espacio, no solo por punto |
 | 218 | Credencial nula, vacía o en blanco: ningún `abrir` y una frase con «falta». Dos `SinRed` y un `Ok`: 3 aperturas, esperas 1000 y 2000, un solo `session.start`. Tres `SinRed`: se dice que no hay conexión. `Rechazo(401)`: una apertura y ninguna espera; un `Rechazo(503)` tampoco se reintenta. Un `credit_balance_exhausted` antes de abrir: una apertura |
 | 219 | Antes de `session.started` el micrófono no sale, no se dice nada y el log no dice «sesión abierta»; al llegar, «Te escucho.» una vez aunque llegue dos veces. Tras un corte, «Sigo…» solo cuando la segunda conexión confirma |
 | 220 | Tres llamadas con el ejecutor retenido: la primera contestada no pide respuesta; la tercera, retirada, ni se ejecuta ni se contesta; el único `response.create` sale detrás de las dos salidas |
@@ -133,6 +135,8 @@ micrófono, altavoz ni Android.
 | 227 | Audio con voz, ceros, delta vacío, `output_text.delta` y `function_call_arguments.delta` del delegado: ni el base64 ni el texto del delegado aparecen en el log; lo que dijo Ü, una sola vez al cerrar el turno; un evento desconocido sí se vuelca |
 | 228 | Un resultado, un aviso y 117 textos: 119 items y ningún aviso; el 120 deja una línea; 15 más no dejan otra y siguen saliendo. La conexión nueva empieza en cero |
 | 229 | Compuerta activa: eco 800 y voz 6000 sostenida con Ü sonando; dispara, calla una vez, el trozo que dispara viaja idéntico y el siguiente también (reabierta, sin gracia). Sin compuerta: nunca calla y todo viaja idéntico |
+| 230 | Canal con guion: cambiar al modo aprendiz en plena sesión da `session.update` y el append, sin otro `session.start` ni otra URL. Tras un corte, el `session.start` de la reapertura lleva las instrucciones y herramientas del aprendiz; tras otro cambio y otro corte, las del último. La voz reabre siempre con su persona |
+| 231 | Un reloj cuya espera no vence sola: detener durante la espera de 1 s de un reintento de abrir, y durante la de 300 ms de una reconexión, termina la voz sin avanzar el reloj, sin reabrir y sin decir nada más. Si no termina, la prueba abre la espera y sale roja, no colgada |
 
 ---
 

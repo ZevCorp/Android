@@ -129,11 +129,13 @@ class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEG
     fun pedirRespuesta(): String = mensaje { put("type", "response.create") }
 
     /** Hacer decir a Ü una frase exacta con SU voz. `session.instructions.append` no provoca respuesta; esto sí. */
-    fun dictar(texto: String): String = mensaje {
-        put("type", "session.commentary.append")
-        put("delegation_id", JsonNull)
-        put("content", AL_DICTAR + texto.trim())
-    }
+    fun dictar(texto: String): List<String> = listOf(
+        mensaje {
+            put("type", "session.commentary.append")
+            put("delegation_id", JsonNull)
+            put("content", AL_DICTAR + texto.trim())
+        },
+    )
 
     /**
      * EL `session.update` DE LA DELEGACIÓN Y DETRÁS EL APPEND A LA VOZ. Sin el append cambiaba el que

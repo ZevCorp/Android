@@ -47,6 +47,7 @@ import kotlin.test.assertNotSame
 import kotlin.test.assertNull
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
+import kotlin.test.fail
 
 /**
  * CONTRATO 002 — LA VOZ ES GPT-LIVE (docs/specs/002-la-voz-es-gpt-live.md).
@@ -63,13 +64,13 @@ class Contrato002VozGptLive {
         val PROMESAS = mapOf(
             201 to "La apertura es un solo `session.start` a `wss://api.openai.com/v1/live/sessions` con la clave en la cabecera y no en la URL; modelo gpt-live-1, voz marin, audio PCM a 24 kHz, y las herramientas viajan solo dentro de la delegación a gpt-5.6-luna, con las instrucciones del delegado byte a byte.",
             202 to "Escribir manda el mensaje del usuario y pide respuesta; entregar resultados es un mensaje por llamada y no pide respuesta, y pedirla es un mensaje aparte.",
-            203 to "De las tres copias de una llamada solo cuenta `response.output_item.done`; sus argumentos llegan como mapa de texto y un valor no texto viaja como su JSON crudo; un JSON ilegible no revienta: en los argumentos da un mapa vacío y en el mensaje entero, ningún hecho.",
+            203 to "De las tres copias de una llamada solo cuenta `response.output_item.done`; sus argumentos llegan como mapa de texto y un valor no texto viaja como su JSON crudo; un JSON ilegible no revienta, ni uno demasiado anidado: en los argumentos da un mapa vacío y en el mensaje entero, ningún hecho.",
             204 to "El audio de salida vacío o hecho de ceros no suena; una pausa de pico 1 y una muestra con solo el byte alto sí suenan con el PCM exacto; el micrófono viaja en `session.input_audio.append` con su PCM exacto en base64.",
             205 to "Las transcripciones se traducen a lo que dijo el usuario y a lo que dijo Ü; `error` da Falla con su code literal (vacío si no trae), `session.closed` da Falla con su motivo y code vacío; ningún mensaje de GPT-Live produce CierraElTurno ni HablaronEncima; solo `session.started` es Abierta.",
-            206 to "`session.usage.updated` da la Duración acumulada solo si trae segundos numéricos.",
+            206 to "`session.usage.updated` da la Duración acumulada solo si trae segundos numéricos, finitos y no negativos.",
             207 to "Un resultado de herramienta nunca pasa de 32 768 bytes serializados: si no cabe se recorta sin partir caracteres y dice cuánto se recortó de cuánto; si cabe, viaja entero; y GPT-Live no se declara capaz de mirar, porque una captura no cabe.",
             208 to "Cambiar de modo no reabre la sesión: manda `session.update` con la delegación entera y detrás `session.instructions.append` con el prefijo literal de cambio de modo y las reglas nuevas, o con el de vuelta y la persona de la voz cuando se regresa al modo de siempre.",
-            209 to "Dictar es `session.commentary.append` con delegation_id nulo y el prefijo literal delante del texto; no abre sesión nueva ni pide `response.create`.",
+            209 to "Dictar es `session.commentary.append` con delegation_id nulo y el prefijo literal delante del texto; no abre sesión nueva ni pide `response.create`, y en blanco no manda nada.",
             210 to "El primer trozo del usuario abre turno y el segundo no; el turno se cierra una sola vez a los 2000 ms exactos del último trozo, no a los 1999, y el audio en ceros no retrasa el cierre.",
             211 to "No se cierra el turno con llamadas en curso; la devolución de la última vuelve a contar el silencio desde ese momento; y una llamada devuelta antes de oírse no queda en curso.",
             212 to "Una pausa sin respuesta de Ü sigue siendo la misma petición; cerrar sin que Ü contestara no abre una petición nueva.",
@@ -90,6 +91,8 @@ class Contrato002VozGptLive {
             227 to "El audio y las transcripciones del delegado nunca se escriben en el log.",
             228 to "Al acercarse al tope de 128 items por sesión se avisa una vez en el log, sin cortar la conversación.",
             229 to "Cuando el detector dispara, el altavoz se calla, la compuerta se reabre y el trozo viaja intacto; sin compuerta activa el detector no actúa.",
+            230 to "Cambiar de modo en plena sesión manda la delegación nueva sin reabrir, y si la sesión se corta, la reapertura ya abre en el modo vigente.",
+            231 to "Detener corta cualquier espera en curso: la voz termina enseguida, no cuando vence la espera.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -127,15 +130,18 @@ class Contrato002VozGptLive {
     /** 100 ms a 24 kHz sin ninguna muestra nula: si una sola sobreviviera a la compuerta, se ve. */
     private fun vozDeLaSala() = ByteArray(4800) { (it % 251 + 1).toByte() }
 
-    /** Unas instrucciones del tamaño de las de Ü y con todo lo que JSON escapa, terminadas en la regla que se pierde si alguien las corta. */
+    /**
+     * Unas instrucciones del tamaño de las de Ü y con todo lo que JSON escapa, terminadas en la regla que se pierde si
+     * alguien las corta. Empiezan con un espacio y acaban en salto de línea: un `trim()` en el camino también se ve.
+     */
     private fun instruccionesComoLasDeU(primeraLinea: String) = buildString {
-        append(primeraLinea).append('\n')
+        append(' ').append(primeraLinea).append('\n')
         var i = 1
         while (length < 24_000) {
             append("Regla ${i.toString().padStart(4, '0')}: «no anuncies», pulsa \"NV44\" en SAP\\GUI, ñandú, Ü y 😀;\ttermina.\n")
             i++
         }
-        append("ÚLTIMA REGLA: la que se pierde si alguien las recorta.")
+        append("ÚLTIMA REGLA: la que se pierde si alguien las recorta.\n")
     }
 
     /* ---------- Las promesas ---------- */
@@ -253,6 +259,53 @@ class Contrato002VozGptLive {
             """{"type":"session.output_audio.delta","delta":"%%%no-es-base64"}""", """{"type":"response.event","event":"texto"}""")) {
             assertEquals(emptyList<Hecho>(),p.leer(roto), promesa(203) + " · mensaje «$roto»")
         }
+
+        // DEMASIADO ANIDADO. kotlinx 1.7.1 no tiene tope de profundidad: re-serializar ~1000 niveles o parsear miles lanza
+        // StackOverflowError, que ningún catch(Exception) atrapa. Y los argumentos los escribe el delegado: basta una
+        // inyección desde la pantalla. El tope es el de U (System.Text.Json, MaxDepth 64). Se juzga en pila chica: si
+        // revienta, la promesa sale roja en vez de llevarse el runner.
+        fun <T> sinReventar(que: String, bloque: () -> T): T =
+            enPilaChica(bloque).getOrElse { fail(promesa(203) + " · $que revienta: $it", it) }
+        fun anidados(n: Int) = "[".repeat(n) + "]".repeat(n)
+        fun pideCon(argumentos: String): Llamada? =
+            sinReventar("argumentos de ${argumentos.length} car.") { p.leer(llamadaCon(argumentos)) }
+                .filterIsInstance<Hecho.Pide>().singleOrNull()?.llamadas?.singleOrNull()
+
+        val errorHondo = """{"type":"error","error":{"type":"invalid_request_error","code":"x_y","detalle":""" + "{\"a\":".repeat(998) + "1" + "}".repeat(998) + "}}"
+        for ((que, hondo) in listOf(
+            "«[» × 4000" to "[".repeat(4000),
+            "de 4000 objetos" to """{"type":"response.event","event":""" + "{\"a\":".repeat(4000) + "1" + "}".repeat(4001),
+            "error sin message de 1000 niveles" to errorHondo,
+        )) {
+            assertEquals(emptyList<Hecho>(), sinReventar("el mensaje $que") { p.leer(hondo) }, promesa(203) + " · mensaje $que")
+        }
+
+        // Argumentos legibles de 1000 niveles (2 KB): la llamada llega, sin argumentos. Van DENTRO de un texto con las
+        // comillas escapadas: medir el mensaje sin respetar textos y escapes lo daría por anidado y perdería la llamada.
+        assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon("""{"a":${anidados(999)}}"""), promesa(203) + " · argumentos de 1000 niveles")
+        assertEquals(Llamada("call_x", "map_set", emptyMap()), pideCon("[".repeat(4000)), promesa(203) + " · argumentos «[» × 4000")
+        // El borde es el de U: 64 niveles se leen, 65 no.
+        assertEquals(mapOf("a" to anidados(63)), pideCon("""{"a":${anidados(63)}}""")?.args, promesa(203) + " · 64 niveles se leen")
+        assertEquals(emptyMap<String, String>(), pideCon("""{"a":${anidados(64)}}""")?.args, promesa(203) + " · 65 niveles ya no")
+
+
+        // Un error sin message se dice con su texto CRUDO, tal cual llegó y recortado: re-serializarlo es lo que reventaba.
+        val crudo = """{ "type": "invalid_request_error",  "code": "x_y" }"""
+        assertEquals(listOf<Hecho>(Hecho.Falla(crudo, "x_y")), p.leer("""{"type":"error","error": $crudo }"""), promesa(203) + " · el error crudo, con sus espacios")
+        val largo = """{"code":"x_y","detalle":"${"é".repeat(3000)}"}"""
+        val recortado = assertIs<Hecho.Falla>(p.leer("""{"type":"error","error":$largo}""").single(), promesa(203)).que
+        assertTrue(recortado.length <= 401 && recortado.endsWith("…") && largo.startsWith(recortado.dropLast(1)), promesa(203) + " · crudo recortado: ${recortado.length} car.")
+
+        // Y en la voz: lo que no se lee tampoco se vuelca parseándolo a pelo, y la conversación sigue oyendo.
+        sinReventar("la conversación") {
+            corre {
+                val v = Voz()
+                v.guion(llega(sesionAbierta), llega("[".repeat(4000)), llega(errorHondo), llega(usuario("sigo aquí")))
+                v.conv.conversar()
+                assertEquals(1, v.conv.peticiones, promesa(203) + " · la voz siguió oyendo: ${v.log.map { it.take(120) }}")
+                assertTrue(v.log.none { "[[[[" in it || "{\"a\":{\"a\":" in it }, promesa(203) + " · el mensaje anidado no se vuelca")
+            }
+        }
     }
 
     @Test
@@ -343,6 +396,10 @@ class Contrato002VozGptLive {
             """{"type":"session.usage.updated","usage":{"seconds":null}}""",
             """{"type":"session.usage.updated","usage":{}}""",
             """{"type":"session.usage.updated","usage":12}""",
+            // NaN, un número fuera de rango (infinito) o uno negativo no son una duración: NaN envenenaba el acumulado.
+            """{"type":"session.usage.updated","usage":{"seconds":NaN}}""",
+            """{"type":"session.usage.updated","usage":{"seconds":1e999}}""",
+            """{"type":"session.usage.updated","usage":{"seconds":-5}}""",
         )) {
             assertEquals(emptyList<Hecho>(),p.leer(sinSegundos), promesa(206) + " · «$sinSegundos»")
         }
@@ -459,11 +516,17 @@ class Contrato002VozGptLive {
 
     @Test
     fun promesa209() {
-        val d = json(p.dictar(" voy por el peso "))
+        val emitidos = p.dictar(" voy por el peso ")
+        assertEquals(1, emitidos.size, promesa(209))
+        val d = json(emitidos.single())
         assertEquals(setOf("type", "delegation_id", "content"), d.keys, promesa(209))
         assertEquals("session.commentary.append", d.texto("type"), promesa(209))
         assertEquals(JsonNull, d["delegation_id"], promesa(209))
         assertEquals("Di exactamente esto, sin añadir nada ni comentarlo: voy por el peso", d.texto("content"), promesa(209))
+        // En blanco no hay nada que decir, y el prefijo solo hace improvisar a la voz. U sale igual (ConversacionEnVivo.cs:1260).
+        for (blanco in listOf("", "   ", "\n\t ")) {
+            assertEquals(emptyList<String>(), p.dictar(blanco), promesa(209) + " · «$blanco»")
+        }
     }
 
     @Test
@@ -675,6 +738,35 @@ class Contrato002VozGptLive {
         repeat(10) { piso.oye(100.0, true, paso()) }
         assertFalse(disparaEn(piso, 400.0, 10), promesa(216) + " · RMS 400 no llega al piso")
 
+        // LAS DEFENSAS, cada una con el caso que la muerde si alguien la afloja.
+        // La base es una media móvil corta: 0.8 lo aprendido y 0.2 lo nuevo. Tras 800 y 1800, 1000.
+        val media = DetectorDeInterrupcion()
+        media.oye(800.0, true, paso()); media.oye(1800.0, true, paso())
+        assertEquals(1000.0, media.lineaBase, 1e-9, promesa(216) + " · la base pesa 0.8 lo aprendido y 0.2 lo nuevo")
+
+        // La siembra incluye su borde: el trozo a 250 ms justos del arranque todavía es eco y alimenta la base.
+        val borde = DetectorDeInterrupcion()
+        val arranque = paso()
+        borde.oye(250.0, true, arranque)
+        assertFalse(borde.oye(2600.0, true, arranque + 250), promesa(216))
+        assertEquals(720.0, borde.lineaBase, 1e-9, promesa(216) + " · a 250 ms justos del arranque aún se siembra")
+        assertFalse(borde.oye(2600.0, true, arranque + 500), promesa(216) + " · y el sostén no empezó en el borde")
+        t = arranque + 500
+
+        // La siembra es de CADA frase nueva: tras 300 ms de silencio, un eco 12 veces la base aprendida no es voz encima.
+        val siembra = DetectorDeInterrupcion()
+        repeat(10) { siembra.oye(250.0, true, paso()) }
+        repeat(3) { siembra.oye(0.0, false, paso()) }
+        repeat(20) { assertFalse(siembra.oye(3000.0, true, paso()), promesa(216) + " · frase nueva de Ü con eco 3000 sobre una base de 250") }
+
+        // El sostén cuenta desde el trozo ANTERIOR al primero encima: cada trozo es lo que sonó desde el anterior. A
+        // trozos de 120 ms, dos encima son 240 ms de voz y disparan.
+        val sosten = DetectorDeInterrupcion()
+        repeat(10) { sosten.oye(800.0, true, paso()) }
+        val ultimoEco = t
+        assertFalse(sosten.oye(6000.0, true, ultimoEco + 120), promesa(216) + " · 120 ms encima")
+        assertTrue(sosten.oye(6000.0, true, ultimoEco + 240), promesa(216) + " · 240 ms encima, en dos trozos de 120, disparan")
+
         assertEquals(6000.0, rms(pcm(6000, -6000, 6000, -6000)), promesa(216))
         assertEquals(0.0, rms(ByteArray(0)), promesa(216))
         assertEquals(0.0, rms(byteArrayOf(9)), promesa(216))
@@ -684,7 +776,7 @@ class Contrato002VozGptLive {
     fun promesa217() {
         val causas = listOf(
             "crédito" to listOf("credit_balance_exhausted", "insufficient_quota", "insufficient_quota.credit_balance_exhausted"),
-            "clave" to listOf("invalid_api_key", "invalid_request_error.invalid_api_key", "401"),
+            "clave" to listOf("invalid_api_key", "invalid_request_error.invalid_api_key", "401", "fin 401"),
             "modelo" to listOf("invalid_model", "model_not_found", "invalid_request_error.model_not_found"),
         )
         for ((palabra, codigos) in causas) {
@@ -736,9 +828,13 @@ class Contrato002VozGptLive {
     class RelojAMano : Reloj {
         var ms = 0L
         val esperas = mutableListOf<Long>()
+
+        /** Con puerta, una espera no vence hasta abrirla: así se ve si alguien la corta antes. */
+        var puerta: CompletableDeferred<Unit>? = null
         override fun ahora() = ms
         override suspend fun esperar(ms: Long) {
             esperas += ms
+            puerta?.await()
             this.ms += ms
             yield()
         }
@@ -1253,5 +1349,85 @@ class Contrato002VozGptLive {
             assertEquals(List(10) { eco.toList() } + List(6) { encima.toList() }, sin.audios().map { it.toList() }, promesa(229) + " · y todo viaja intacto")
         })
         sin.conv.conversar()
+    }
+
+    @Test
+    fun promesa230() = corre {
+        val persona = "Eres Ü. Hablas corto y delegas."
+        val completas = "ERES Ü Y ESTAS SON TUS INSTRUCCIONES COMPLETAS"
+        val aprendiz = "Eres Ü, y ahora te están ENSEÑANDO: asiente corto y no hagas nada."
+        val revision = "Eres Ü, y ahora REVISAS lo hecho: solo miras."
+        val paraAprender = listOf(Utensilio("map_where_am_i", "Dice en qué pantalla está", emptyList()))
+        val paraRevisar = listOf(Utensilio("map_look", "Mira la pantalla", emptyList()))
+        val v = Voz()
+        fun aperturas() = v.enviados().filter { it.texto("type") == "session.start" }
+        fun JsonObject.delegado() = texto("session", "delegation", "responses", "instructions")
+        fun JsonObject.herramientas() = (en("session", "delegation", "responses", "tools") as? JsonArray)?.map { it.texto("name") }
+        v.guion(
+            llega(sesionAbierta),
+            hace { v.conv.cambiarModo(aprendiz, paraAprender, vuelve = false) },
+            llega(sinHechos),
+            hace {
+                assertEquals(listOf<String?>("session.start", "session.update", "session.instructions.append"), v.tipos(), promesa(230) + " · en plena sesión no se reabre")
+                assertEquals(1, v.canal.urls.size, promesa(230))
+                assertEquals(aprendiz, v.enviados()[1].delegado(), promesa(230))
+                assertEquals(listOf<String?>("map_where_am_i"), v.enviados()[1].herramientas(), promesa(230))
+            },
+            corte(),
+            llega(sesionAbierta),
+            hace { v.conv.cambiarModo(revision, paraRevisar, vuelve = false) },
+            corte(),
+            llega(sesionAbierta),
+        )
+        v.conv.conversar()
+        assertEquals(3, v.canal.urls.size, promesa(230) + " · la conexión y dos reaperturas")
+        assertEquals(3, aperturas().size, promesa(230) + " · ${v.tipos()}")
+        val (primera, segunda, tercera) = aperturas()
+        assertEquals(completas, primera.delegado(), promesa(230))
+        assertEquals(aprendiz, segunda.delegado(), promesa(230) + " · la reapertura abre en el modo vigente, no en el inicial")
+        assertEquals(listOf<String?>("map_where_am_i"), segunda.herramientas(), promesa(230) + " · con sus herramientas")
+        assertEquals(revision, tercera.delegado(), promesa(230) + " · el último modo es el que manda")
+        assertEquals(listOf<String?>("map_look"), tercera.herramientas(), promesa(230))
+        assertTrue(aperturas().all { it.texto("session", "instructions") == persona }, promesa(230) + " · la voz reabre con su persona")
+    }
+
+    @Test
+    fun promesa231() = corre {
+        /** Detiene la voz en plena espera, con una espera que no vence sola. Si la voz no termina, la abre: la prueba sale roja, no colgada. */
+        suspend fun detenerEsperando(v: Voz, que: String) {
+            val puerta = CompletableDeferred<Unit>().also { v.reloj.puerta = it }
+            coroutineScope {
+                val trabajo = launch { v.conv.conversar() }
+                var vueltas = 0
+                while (v.reloj.esperas.isEmpty() && vueltas++ < 200) yield()
+                assertEquals(1, v.reloj.esperas.size, promesa(231) + " · $que: la espera empezó")
+                v.conv.detener()
+                repeat(20) { yield() }
+                val termino = trabajo.isCompleted
+                if (!termino) {
+                    puerta.complete(Unit)
+                    trabajo.cancelAndJoin()
+                }
+                assertTrue(termino, promesa(231) + " · $que: detener la corta y la voz termina sin esperar a que venza")
+            }
+        }
+
+        val reintento = Voz()
+        reintento.canal.aperturas += Apertura.SinRed("sin ruta al host")
+        detenerEsperando(reintento, "el reintento de abrir")
+        assertEquals(listOf(1000L), reintento.reloj.esperas, promesa(231))
+        assertEquals(0L, reintento.reloj.ms, promesa(231) + " · el reloj no avanzó")
+        assertEquals(1, reintento.canal.urls.size, promesa(231) + " · ni se reabrió")
+        assertTrue(reintento.dicho.isEmpty(), promesa(231) + " · ni se dice que no hay red: ${reintento.dicho}")
+        assertFalse(reintento.conv.viva, promesa(231))
+
+        val reconexion = Voz()
+        reconexion.guion(llega(sesionAbierta), corte())
+        detenerEsperando(reconexion, "la reconexión")
+        assertEquals(listOf(300L), reconexion.reloj.esperas, promesa(231))
+        assertEquals(0L, reconexion.reloj.ms, promesa(231) + " · el reloj no avanzó")
+        assertEquals(1, reconexion.canal.urls.size, promesa(231) + " · detener no reconecta")
+        assertEquals(listOf("Te escucho."), reconexion.dicho, promesa(231))
+        assertFalse(reconexion.conv.viva, promesa(231))
     }
 }
