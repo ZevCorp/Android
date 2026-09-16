@@ -16,3 +16,22 @@ expect fun corre(block: suspend () -> Unit)
  * anida [corre] dentro y hereda su tope: `enPilaChica { corre { … } }.getOrThrow()`.
  */
 expect fun <T> enPilaChica(bloque: () -> T): Result<T>
+
+/**
+ * UN EJECUTOR QUE BLOQUEA EL HILO, no una corrutina que suspende. Es el punto ciego de todo juez escrito con
+ * `CompletableDeferred`: una herramienta que suspende suelta el hilo y deja seguir a la conversación, así que el juez la
+ * ve pasar aunque la herramienta corra en el hilo único. Una que BLOQUEA no lo suelta, y solo ella distingue las dos
+ * cosas. La usa la 254.
+ */
+expect class Traba() {
+    /** Bloquea el HILO que la llama hasta que alguien [abrir] o venzan [topeMs]. `false` = venció sin que la abrieran. */
+    fun esperaBloqueando(topeMs: Long): Boolean
+
+    fun abrir()
+}
+
+/**
+ * El despachador de entrada/salida de verdad, el mismo al que salta la lectura de pantalla en el teléfono. No existe en
+ * common (`Dispatchers.IO` es de jvm y native), así que cada target lo da con lo que ya tiene.
+ */
+expect fun despachadorDeIo(): kotlin.coroutines.CoroutineContext

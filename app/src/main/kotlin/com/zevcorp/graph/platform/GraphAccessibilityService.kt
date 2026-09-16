@@ -20,6 +20,8 @@ import graph.core.domain.Gestures
 import graph.core.domain.LearningSurface
 import graph.core.domain.Phone
 import graph.core.domain.ScreenState
+import graph.core.graph.TOPE_DE_UNA_ETIQUETA
+import graph.core.graph.etiquetaDePantalla
 import java.io.ByteArrayOutputStream
 import kotlin.coroutines.resume
 import kotlinx.coroutines.Dispatchers
@@ -201,7 +203,7 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
             n ?: return
             if (n.isClickable) clickables++
             if (n.isEditable) { fields++; if (n.isFocused) focused = labelOf(n) }
-            labelOf(n).takeIf { it.isNotBlank() && it.length <= 40 }?.let { labels += it }
+            labelOf(n).takeIf { it.isNotBlank() && it.length <= TOPE_DE_UNA_ETIQUETA }?.let { labels += it }
             for (i in 0 until n.childCount) walk(n.getChild(i))
         }
         walk(root)
@@ -215,11 +217,14 @@ class GraphAccessibilityService : AccessibilityService(), Phone, Gestures, Learn
         }
     }
 
+    // SANEADA EN ORIGEN (spec 002, promesa 257): el resumen es texto plano y une las etiquetas con « · », así que una
+    // con salto de línea partía el resumen en una sección que nadie escribió y una con el separador dentro inflaba la
+    // cuenta. Lo que ve el cerebro no cambia de sentido: un salto pasa a espacio y el separador, a guion.
     private fun labelOf(n: AccessibilityNodeInfo): String = sequenceOf(
         n.contentDescription,
         if (n.isEditable) n.hintText else n.text,
         n.viewIdResourceName?.substringAfterLast('/'),
-    ).firstOrNull { !it.isNullOrBlank() }?.toString()?.take(40) ?: ""
+    ).firstOrNull { !it.isNullOrBlank() }?.toString()?.let { etiquetaDePantalla(it) } ?: ""
 
     private suspend fun screenshot(): ByteArray? = suspendCancellableCoroutine { cont ->
         takeScreenshot(Display.DEFAULT_DISPLAY, mainExecutor, object : TakeScreenshotCallback {

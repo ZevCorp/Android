@@ -16,6 +16,7 @@ import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import graph.core.domain.Workflow
 import graph.core.domain.WorkflowStep
+import graph.core.pregunta.CompuertaDePregunta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -106,6 +107,8 @@ class ArmadoDeEjecucion(
         pausa: () -> Long = { 350 },
         aprendidas: List<LearnedTool> = emptyList(),
         workflows: Workflows? = null,
+        /** Las apps instaladas: con ellas la compuerta sabe si un nombre de app es ambiguo (spec 006, promesa 602). */
+        apps: suspend () -> List<String> = { emptyList() },
     ): Sesion<B> {
         val puerta = puerta(manos)
         val reproductor = workflows?.let {
@@ -119,9 +122,11 @@ class ArmadoDeEjecucion(
             workflows = workflows?.lista ?: emptyList(), workflowExecutor = reproductor,
         )
         val elCerebro = cerebro(mcp)
+        // La compuerta de preguntar la arma el armado, como todo lo demás: nadie en la app la construye (spec 006).
         val motor = ExecutionEngine(
             brain = { elCerebro }, phone = puerta.telefono, mcp = mcp, user = usuario, voice = voz, log = log,
             maxTurns = maxTurnos, mode = modo, stepDelay = pausa, freno = freno,
+            compuerta = CompuertaDePregunta(usuario, voz, log, apps),
         )
         return Sesion(motor, mcp, elCerebro)
     }
@@ -210,10 +215,15 @@ class ArmadoDeEjecucion(
      * «paso hecho»: lanza [Paraste] y la corrida entera termina, sin seguir con el paso siguiente (promesa 316).
      * Un fallo que no es parada se queda en el paso: `false`, y el workflow decide. No abre petición: sigue la de la
      * corrida, con su tope y su cuenta (promesa 320).
+     *
+     * EL OBJETIVO DEL PASO NO ES EL PEDIDO. Lo arma el workflow con su nombre, su descripción y la acción del paso, así que
+     * nombra lo que va a hacer: leído como pedido, un paso con una acción sensible se daba el permiso a sí mismo. Lo único
+     * que autoriza es [dijoLaPersona] —lo que la persona dictó en esta corrida—, y sin nada suyo no autoriza nada: lo
+     * sensible se pregunta o no se hace (spec 006, promesa 615).
      */
-    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine): Boolean = freno.enTarea(PASO_CONSCIENTE) {
+    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine, dijoLaPersona: String? = null): Boolean = freno.enTarea(PASO_CONSCIENTE) {
         try {
-            motor.run(objetivo, announce = false)
+            motor.run(objetivo, announce = false, dijoLaPersona = dijoLaPersona)
         } catch (ce: CancellationException) {
             throw ce
         } catch (t: Throwable) {

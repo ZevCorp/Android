@@ -38,6 +38,7 @@ import graph.core.application.ExecutionEngine
 import graph.core.application.PassiveLearning
 import graph.core.application.WorkflowRecorder
 import graph.core.domain.ExecutionMode
+import graph.core.domain.LearnedTool
 import graph.core.domain.Mcp
 import graph.core.domain.Phone
 import graph.core.domain.ThreadedBrain
@@ -316,6 +317,13 @@ class GraphApp : Application() {
     private val subconsciousExecution = false
 
     /**
+     * LAS APRENDIDAS QUE PUEDE VER UNA CORRIDA, decididas en UN SOLO SITIO. Cuando cada llamador lo resolvía por su
+     * cuenta se separaron: el catálogo de la voz pedía las herramientas con una lista vacía mientras la anticipación sí
+     * pasaba las aprendidas, así que en el teléfono la voz prometía un catálogo que no era el del cerebro (promesa 256).
+     */
+    fun aprendidasDisponibles(): List<LearnedTool> = if (subconsciousExecution) learnedTools.list() else emptyList()
+
+    /**
      * Apps con launcher, por etiqueta. Cara: una llamada al PackageManager por paquete instalado.
      * OpenAI y Gemini la piden cuando el modelo llama `list_apps`; GRAPH la pide una vez por corrida y
      * en `Dispatchers.IO`, porque `run()` arranca desde el hilo principal (promesa 15).
@@ -380,12 +388,14 @@ class GraphApp : Application() {
         val sesion = Ejecucion.arma(
             service, cerebro = { mcp -> newBrain(mcp) }, voz = voice, usuario = user, maxTurnos = maxTurns,
             modo = modeSignal, pausa = stepDelay,
-            aprendidas = if (subconsciousExecution) learnedTools.list() else emptyList(),
+            aprendidas = aprendidasDisponibles(),
             workflows = if (subconsciousExecution) ArmadoDeEjecucion.Workflows(
                 lista = workflows.list(),
                 elementos = { service.elements() }, // árbol de UI vivo: para encadenar y saltar pasos ya cumplidos
                 consciente = { wf, step, context -> consciousStep(service, wf, step, context) },
             ) else null,
+            // Con las apps instaladas la compuerta sabe si un nombre de app es ambiguo (spec 006, promesa 602).
+            apps = { withContext(Dispatchers.IO) { installedApps() } },
         )
         if (resume) sesion.cerebro.resume(conversationId)
         return sesion.motor to sesion.cerebro
@@ -410,8 +420,17 @@ class GraphApp : Application() {
             if (step.note.isNotBlank()) append(" Contexto del paso: ${step.note}.")
             if (context.isNotBlank()) append(" Datos de esta ejecución: $context.")
         }
-        return Ejecucion.pasoConsciente(goal, sesion.motor)
+        // El objetivo de arriba lo escribimos nosotros con los datos del paso: nombra la acción, pero no la pidió nadie.
+        // Lo que autoriza algo sensible es lo que dijo la persona en esta corrida (spec 006, promesa 615).
+        return Ejecucion.pasoConsciente(goal, sesion.motor, dichoPorLaPersona())
     }
+
+    /**
+     * Lo que la persona escribió o dictó en la corrida en curso, sin el andamiaje que redactamos nosotros —el
+     * `CONTEXTO INMEDIATO` de una propuesta, el objetivo que se le arma a un paso de workflow—: es lo ÚNICO que autoriza una
+     * acción sensible (spec 006, promesas 611 y 615). Sin nada suyo devuelve vacío, que no autoriza nada.
+     */
+    private fun dichoPorLaPersona(): String = synchronized(goalPrompts) { goalPrompts.joinToString("\n") }
 
     private fun buildGoal(prompts: List<String>): String =
         if (prompts.size == 1) prompts[0]
@@ -511,7 +530,9 @@ class GraphApp : Application() {
                     val holder = arrayOf("")
                     val announce = round == 0 // en reencaminados no narra el objetivo largo
                     val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
-                        holder[0] = try { engine.run(goal, announce) }
+                        // El CONTEXTO INMEDIATO viaja en el objetivo para que el cerebro lo entienda, pero no da permiso: lo
+                        // único que autoriza algo sensible es lo que dictó la persona (spec 006, promesa 611).
+                        holder[0] = try { engine.run(goal, announce, dijoLaPersona = dichoPorLaPersona()) }
                             catch (ce: CancellationException) { throw ce }
                             catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
                     }
@@ -569,7 +590,7 @@ class GraphApp : Application() {
     private suspend fun anticipate(service: GraphAccessibilityService, user: UserChannel?, summary: String) {
         val request = synchronized(goalPrompts) { goalPrompts.joinToString(" · ") }
         // Coherente con la vía activa: sin subconsciente, la anticipación solo ve el MCP base.
-        val availableLearned = if (subconsciousExecution) learnedTools.list() else emptyList()
+        val availableLearned = aprendidasDisponibles()
         val tools = Ejecucion.herramientas(service, availableLearned).joinToString(", ") { it.name }
         // Pensar la propuesta tarda (Gemini reintenta): si la paraste mientras, ni se dice ni queda pendiente (spec 003).
         val foresight = runCatching { anticipation.consider(request, summary, tools) }.getOrNull() ?: return
@@ -587,7 +608,12 @@ class GraphApp : Application() {
                 LogBus.log("run", "🤝 acción anticipada: ${foresight.task}")
                 val goal = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de " +
                     "certeza total y le conviene): ${foresight.task}. Hazla de forma directa y para."
-                runCatching { newSession(service, user, resume = false, maxTurns = 12).first.run(goal, announce = false) }
+                // El objetivo lo redactamos nosotros, no la persona: no autoriza nada sensible por sí mismo, así que lo
+                // que sea sensible se le preguntará antes de hacerlo (spec 006, promesa 611).
+                runCatching {
+                    newSession(service, user, resume = false, maxTurns = 12).first
+                        .run(goal, announce = false, dijoLaPersona = null)
+                }
                     .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }
             }
         }

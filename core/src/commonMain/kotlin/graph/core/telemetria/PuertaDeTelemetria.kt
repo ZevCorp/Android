@@ -55,6 +55,8 @@ object PuertaDeTelemetria {
         "aprendizaje", "leccion",
         // precisión (yokh/precision): ArmadoDeEjecucion, Freno, Puerta, TopeDeIntentos, CuentaDePeticion
         "freno", "puerta", "tope", "peticion",
+        // preguntar antes de ejecutar (spec 006): CompuertaDePregunta
+        "pregunta",
     )
 
     /** Nombres que salen solos: acciones del cerebro, herramientas del MCP, estados y proveedores. */
@@ -65,15 +67,25 @@ object PuertaDeTelemetria {
         "check_simit_fines", "open_maps", "open_camera", "open_settings", "share_text", "set_clipboard", "set_volume",
         "adjust_volume", "long_press", "drag_and_drop", "press_key", "take_screenshot", "list_apps", "dial", "directions",
         "ask_user", "left_click", "learned_tool",
+        // los ojos de la voz (spec 002, fase 2B2a): nombran QUÉ se miró, nunca lo que se vio
+        "donde_estoy", "que_veo", "que_puedo_hacer",
         "ok", "error", "cancelled", "running", "done", "fin", "decide", "speak", "ask", "transitorio", "true", "false", "null",
         "subconsciente", "consciente",
         "graph", "openai", "gemini", "deepgram", "GRAPH", "OPENAI", "GEMINI", "session",
+        // Por qué preguntó y en qué quedó (spec 006, promesa 608). Nunca sale ni la pregunta ni la respuesta.
+        "permiso", "cual", "dato", "autoriza", "niega",
     )
 
     /** Frases fijas que escribe el código, nunca la persona: la voz, precisión y el motor. */
     val FRASES: List<String> = listOf(
         "usuario dijo", "Ü dijo", "sesión cerrada", "nodo sin id estructural", "ya hay una tarea en curso", "no sigo",
         "sin reintento", "paraste tú",
+        // Lo que la voz contesta de una herramienta que todavía no tiene manos (spec 002, promesa 250).
+        "todavía no se ejecuta",
+        // Lo que el cliente le devuelve al cerebro de una acción que no hizo (spec 006).
+        "pregunté primero y no la hice", "dijiste que no", "no hay a quién preguntarle",
+        // El dato que sigue faltando y la respuesta que no se entendió (spec 006, promesas 612 y 614).
+        "sigue faltando el dato", "no te entendí",
     )
 
     /** Lo que va detrás de un número y lo vuelve medida: `42 caracteres`, `120 bytes`, `3 turnos`. */
@@ -81,7 +93,7 @@ object PuertaDeTelemetria {
         "caracteres", "carácter", "car.", "bytes", "KB", "MB", "ms", "segundos", "min", "minutos", "turnos", "acciones",
         "llamadas", "intentos", "reintentos", "pasos", "steps", "prompts", "tokens", "niveles", "elementos", "clics", "señales",
         "notas", "subconscientes", "conscientes", "cierres", "veces", "px", "dp", "candidatos", "herramientas", "filas",
-        "workflows", "apps", "errores",
+        "workflows", "apps", "errores", "etiquetas", "opciones",
     )
 
     /** Lo que va delante de un número y lo vuelve medida: `HTTP 503`, `intento 2/3`, `llamadas=5`. */
@@ -93,7 +105,7 @@ object PuertaDeTelemetria {
     /** «X de N caracteres»: de qué es la medida. Sin la medida detrás, la palabra cae. */
     val DESCRIPTORES: Set<String> = setOf(
         "objetivo", "pregunta", "resumen", "pedido", "campo", "nombre", "destino", "respuesta", "error", "mensaje", "frase", "texto",
-        "archivo", "cuerpo", "argumento", "interpretación", "nota", "prompt",
+        "archivo", "cuerpo", "argumento", "interpretación", "nota", "prompt", "filtro",
     )
 
     /** Segmentos de las rutas de Graph que pueden ir en un log; el resto de un segmento tiene que ser un id. */
@@ -154,6 +166,9 @@ object PuertaDeTelemetria {
         "EOFException", "InterruptedIOException", "IllegalStateException", "IllegalArgumentException", "CancellationException",
         "TimeoutCancellationException", "SerializationException", "JsonDecodingException", "NumberFormatException",
         "NullPointerException", "StackOverflowError", "OutOfMemoryError", "SecurityException",
+        // Una URL mal escrita es configuración, no red (`GraphTransport.causa`); un servidor que no habla HTTP o un TLS roto
+        // tampoco (`CanalOkHttp.tipo`); y un aviso que no llegó a inicializarse llega como `Error` (`Freno.dile`).
+        "MalformedURLException", "ProtocolException", "ExceptionInInitializerError",
     )
     private val EXCEPCION = Regex(EXCEPCIONES.joinToString("|"))
     private val VERSION = Regex("\\d{1,4}(?:\\.\\d{1,4}){0,3}(?:-(?:debug|release|beta\\d*|rc\\d*|alpha\\d*))?")
