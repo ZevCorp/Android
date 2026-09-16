@@ -19,8 +19,21 @@ import graph.core.graph.TurnScreenState
  */
 object OjosDeLaVoz {
 
+    /**
+     * LA CAUSA, UNA SOLA VEZ Y CON LAS MISMAS PALABRAS. Las tres herramientas se quedan sin nada que decir por el mismo
+     * motivo, y antes cada una lo contaba a su manera: dos nombraban el servicio y `que_puedo_hacer` callaba la causa y
+     * devolvía un catálogo vacío, que se lee como «no sé hacer nada».
+     */
+    const val SIN_SERVICIO = "el servicio de accesibilidad de Ü no está activo"
+
     /** Sin servicio de accesibilidad no hay estado que leer, y eso se dice en vez de callar. */
-    const val SIN_PANTALLA = "no puedo ver la pantalla ahora mismo: el servicio de accesibilidad de Ü no está activo"
+    const val SIN_PANTALLA = "no puedo ver la pantalla ahora mismo: $SIN_SERVICIO"
+
+    /**
+     * La lectura tardó más de lo que la conversación puede esperar. SE DICE, no se calla: mientras el delegado no
+     * recibe salida, la voz se queda muda y el usuario no sabe si sigue viva.
+     */
+    const val NO_PUDE_MIRAR = "no pude mirar la pantalla a tiempo; vuelve a pedírmelo"
 
     /** Lo que se cita de un filtro. Más largo no es una búsqueda: es un texto que alguien quiere que se repita. */
     const val TOPE_DEL_FILTRO = 60

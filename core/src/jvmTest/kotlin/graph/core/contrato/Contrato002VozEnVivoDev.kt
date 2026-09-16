@@ -1,6 +1,11 @@
 package graph.core.contrato
 
 import graph.core.contrato.Contrato002VozGptLive.Companion.promesa
+import graph.core.domain.LearnedTool
+import graph.core.domain.Mcp
+import graph.core.voz.CatalogoDeVoz
+import graph.core.voz.HerramientasDeVoz
+import graph.core.voz.Llamada
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -19,6 +24,7 @@ class Contrato002VozEnVivoDev {
 
     private companion object {
         const val VOZ = "app/src/main/kotlin/com/zevcorp/graph/voice/live/VozEnVivoDev.kt"
+        const val APP = "app/src/main/kotlin/com/zevcorp/graph/GraphApp.kt"
         const val PANTALLA = "app/src/main/kotlin/com/zevcorp/graph/ui/MainActivity.kt"
         const val BUS = "app/src/main/kotlin/com/zevcorp/graph/platform/LogBus.kt"
         const val TELEMETRIA = "app/src/main/kotlin/com/zevcorp/graph/platform/Telemetry.kt"
@@ -226,5 +232,53 @@ class Contrato002VozEnVivoDev {
             assertEquals(emptyList(), f.apariciones("enqueue").map(f::linea), promesa(246) + " · a la telemetría solo encola LogBus, no ${f.ruta}")
         }
         assertEquals(listOf("fun enqueue(tag: String, message: String) {"), telemetria.apariciones("enqueue").map(telemetria::linea), promesa(246) + " · Telemetry no se encola por otro camino")
+    }
+
+    /**
+     * LA 256 SE JUZGA IGUAL, LEYENDO LAS FUENTES, porque lo que falló no es un cálculo sino un CABLE: el catálogo de la
+     * voz pedía las acciones con `emptyList()` mientras el otro llamador pasaba las aprendidas, y las dos ramas eran
+     * correctas por separado. Lo que hay que atrapar es que se separen otra vez, y eso se ve en el código, no en un
+     * doble. El comportamiento —que una aprendida llegue hasta lo que lee el delegado— va detrás, con un `Mcp` real.
+     */
+    @Test
+    fun promesa256() {
+        val voz = fuente(VOZ)
+        val app = fuente(APP)
+
+        // UN SOLO SITIO DECIDE cuáles aprendidas ve una corrida; si hay dos, vuelven a separarse.
+        assertEquals(
+            1,
+            Regex("""\bfun\s+aprendidasDisponibles\s*\(""").findAll(app.soloCodigo).count(),
+            promesa(256) + " · aprendidasDisponibles() se declara una sola vez en GraphApp",
+        )
+        // Y lo usan los DOS: la anticipación de GraphApp y el catálogo de la voz.
+        assertTrue(
+            app.apariciones("aprendidasDisponibles").size >= 2,
+            promesa(256) + " · GraphApp declara el criterio y no lo usa: ${app.apariciones("aprendidasDisponibles").map(app::linea)}",
+        )
+        assertEquals(
+            1,
+            voz.apariciones("aprendidasDisponibles").size,
+            promesa(256) + " · la voz no pide las aprendidas al único sitio que lo decide: ${voz.apariciones("aprendidasDisponibles").map(voz::linea)}",
+        )
+        // NADIE escribe la lista vacía a mano en la llamada al catálogo: ese fue el bug.
+        for (f in todas()) {
+            assertEquals(
+                emptyList(),
+                f.lineas(Regex("""\bherramientas\s*\([^\n]*\bemptyList\b""")),
+                promesa(256) + " · ${f.ruta} pide el catálogo con una lista vacía escrita a mano",
+            )
+        }
+
+        // ── Y POR COMPORTAMIENTO: una aprendida llega hasta lo que lee el delegado, pasando por el ejecutor ──────────
+        corre {
+            val mano = Contrato003FrenoYPuerta.Mano()
+            val aprendida = LearnedTool("pedir_un_taxi", "Pide un taxi como se lo enseñaron", listOf("a"))
+            val mcp = Mcp(mano.gestos, mano.sistema, listOf(aprendida), mano.reproductor)
+            val ojos = HerramientasDeVoz(pantalla = { null }, acciones = { mcp.tools }, mirarEn = despachadorDeIo())
+            val leido = ojos.ejecutar(Llamada("call_1", CatalogoDeVoz.QUE_PUEDO_HACER, emptyMap()))
+            assertTrue(aprendida.name in leido, promesa(256) + " · la aprendida no llega a lo que lee el delegado: «$leido»")
+            assertEquals(emptyList(), mano.entradas, promesa(256) + " · enumerar el catálogo tocó el teléfono: ${mano.entradas}")
+        }
     }
 }

@@ -111,6 +111,15 @@ class ConversacionViva(
         const val TOPE_DE_ITEMS = 128
         const val AVISO_DE_ITEMS = 120
 
+        /**
+         * EL LÍMITE DE LA SESIÓN TIENE DOS MITADES Y HASTA AHORA SOLO SE CONTABA UNA. Los 128 items se vigilaban; los
+         * 32 768 B, no, y el recorte de un resultado mide cada resultado POR SEPARADO contra ese mismo número: dos
+         * resultados que caben de a uno se pasan juntos. Con las manos de la fase siguiente esto se multiplica.
+         */
+        const val TOPE_DE_BYTES = 32_768
+        /** La misma holgura que con los items (120 de 128): avisar con el 6 % por delante, sin cortar nada. */
+        const val AVISO_DE_BYTES = 30_720
+
         const val AVISO_DEL_SISTEMA = "[aviso del sistema] "
 
         /** La salida de una llamada retirada: el servidor la espera igual, y sin ella rechaza el siguiente `response.create`. */
@@ -202,6 +211,9 @@ class ConversacionViva(
 
     /** Items creados en la sesión del servidor en curso: llamadas del delegado, mensajes escritos, resultados y avisos. */
     val itemsEnSesion: Int get() = conexion?.items ?: 0
+
+    /** Los bytes UTF-8 que lleva gastados la sesión del servidor, de los [TOPE_DE_BYTES] que admite. */
+    val bytesEnSesion: Int get() = TODO("arreglo 2B2a")
 
     private var detenida = false
     private var conexion: Conexion? = null

@@ -15,6 +15,7 @@ import graph.core.voz.CatalogoDeVoz
 import graph.core.voz.ConversacionViva
 import graph.core.voz.HerramientasDeVoz
 import graph.core.voz.ModoDeCaptura
+import graph.core.voz.PersonaDeLaVoz
 import graph.core.voz.ProtocoloGptLive
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -54,29 +55,6 @@ class VozEnVivoDev(private val contexto: Context) {
 
     companion object {
         const val TAG = "voz-dev"
-
-        /**
-         * LA PERSONA CORTA, adaptada al teléfono de `U-Windows-App/voz/Realtime/ProtocoloGptLive.cs:50-56`. Corta a propósito:
-         * la voz no ve la pantalla ni tiene herramientas, y con las instrucciones de operar prometería lo que no puede hacer y
-         * contestaría de memoria en vez de delegar. Sin la regla de no anunciar, en Windows dijo «Dame un momento para
-         * revisarlo» antes de que el delegado hiciera nada.
-         */
-        const val INSTRUCCIONES_VOZ =
-            "Eres Ü, el asistente que ayuda a usar este teléfono. " +
-                "Hablas en español, con frases cortas y naturales. Tú no ves la pantalla ni la tocas: todo lo que sea mirar, " +
-                "buscar, pulsar, escribir u operar el teléfono lo delegas siempre, y después cuentas lo que salió. " +
-                "Nunca inventes lo que hay en pantalla ni lo que no ves." +
-                " NO ANUNCIES LO QUE VAS A HACER: nada de «voy a…», «vamos a…», «déjame…», «dame un momento», «un momento», «ahora lo miro». Mientras se hace el trabajo, calla." +
-                " CUANDO HABLES, HABLA EN PASADO Y DEL RESULTADO: «ya abrí la cámara», «no había ningún mensaje nuevo». Nunca en futuro."
-
-        /** El delegado ya tiene ojos, pero no manos: que mire antes de hablar y que diga que todavía no puede actuar. */
-        const val INSTRUCCIONES_DELEGADO =
-            "Eres el delegado de Ü en un teléfono Android. Tienes tres herramientas y las tres SOLO MIRAN: " +
-                "${CatalogoDeVoz.DONDE_ESTOY} dice en qué app y pantalla estás; ${CatalogoDeVoz.QUE_VEO} dice qué hay en la " +
-                "pantalla, y con «${CatalogoDeVoz.FILTRO}» si algo concreto está o no; ${CatalogoDeVoz.QUE_PUEDO_HACER} dice " +
-                "qué sabrá hacer Ü cuando pueda actuar. " +
-                "MIRA ANTES DE HABLAR de la pantalla: nunca la describas de memoria ni inventes lo que no viste. " +
-                "Todavía NO puedes tocar, escribir ni abrir nada: si te piden hacer algo, dilo en una frase corta y ofrece mirarlo."
 
         /** Lo que espera parar a que la conversación cierre sola antes de cancelarla. */
         private const val TOPE_AL_PARAR_MS = 3_000L
@@ -122,8 +100,8 @@ class VozEnVivoDev(private val contexto: Context) {
                 canal = CanalOkHttp(log = ::registrar),
                 protocolo = ProtocoloGptLive(),
                 credencial = { claveDelBuildInterno() },
-                instruccionesVoz = INSTRUCCIONES_VOZ,
-                instruccionesDelegado = INSTRUCCIONES_DELEGADO,
+                instruccionesVoz = PersonaDeLaVoz.INSTRUCCIONES_VOZ,
+                instruccionesDelegado = PersonaDeLaVoz.INSTRUCCIONES_DELEGADO,
                 utensilios = CatalogoDeVoz.UTENSILIOS,
                 ejecutar = ojos::ejecutar,
                 actuaEnPantalla = CatalogoDeVoz::actuaEnPantalla,
@@ -178,7 +156,12 @@ class VozEnVivoDev(private val contexto: Context) {
      * captura), y el catálogo, el que armaría una corrida sobre la puerta. Sin servicio de accesibilidad no hay estado
      * que leer, y la voz lo dice en vez de inventárselo.
      */
-    private val ojos = HerramientasDeVoz(pantalla = ::estadoDeLaPantalla, acciones = ::catalogoDeAcciones, log = ::registrar)
+    private val ojos = HerramientasDeVoz(
+        pantalla = ::estadoDeLaPantalla,
+        acciones = ::catalogoDeAcciones,
+        mirarEn = Dispatchers.IO,
+        log = ::registrar,
+    )
 
     private suspend fun estadoDeLaPantalla(): TurnScreenState? =
         GraphApp.instance.ui?.state(withScreenshot = false)?.let {

@@ -25,6 +25,9 @@ object CatalogoDeVoz {
     /** El argumento de [QUE_VEO]: qué buscar en la pantalla. */
     const val FILTRO = "filtro"
 
+    /** Sin servicio de accesibilidad no hay catálogo que enumerar: se dice la MISMA causa que dicen los ojos. */
+    const val SIN_CATALOGO = "no puedo saber qué sé hacer en este teléfono: ${OjosDeLaVoz.SIN_SERVICIO}"
+
     /** Lo que se contesta a lo que todavía no se puede ejecutar. Esta fase da ojos, no manos. */
     const val TODAVIA_NO =
         "todavía no puedo hacer eso: por ahora solo miro la pantalla y te cuento lo que hay. Dime qué quieres saber y lo miro."
