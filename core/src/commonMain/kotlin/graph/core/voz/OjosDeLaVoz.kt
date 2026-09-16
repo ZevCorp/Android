@@ -13,6 +13,9 @@ import graph.core.graph.TurnScreenState
  * NO SE INVENTA NADA. Si el `uiContext` no trae lo que se le pregunta —una pantalla protegida, un formato que cambió—
  * vuelve tal cual, porque la persona de la voz prohíbe justo eso: «Nunca inventes lo que hay en pantalla ni lo que no
  * ves».
+ *
+ * LO QUE LEE ES LO QUE LA PANTALLA MUESTRA, así que nada de aquí va al log: el log sale del teléfono por la telemetría
+ * (spec 005). Quien registre, que registre la MEDIDA ([etiquetas] y los largos).
  */
 object OjosDeLaVoz {
 
@@ -22,15 +25,109 @@ object OjosDeLaVoz {
     /** Lo que se cita de un filtro. Más largo no es una búsqueda: es un texto que alguien quiere que se repita. */
     const val TOPE_DEL_FILTRO = 60
 
+    /** Las líneas con que `GraphAccessibilityService.uiContext()` arma el resumen de la pantalla. */
+    private const val PAQUETE = "paquete: "
+    private const val TIPO = "tipo: "
+    private const val CUENTAS = "clickeables: "
+    private const val CAMPOS = "campos de texto: "
+    private const val ETIQUETAS = "etiquetas visibles: "
+    private const val ENFOCADO = "(enfocado: \""
+    private const val TECLADO = " · teclado abierto"
+    private const val NINGUNA = "(ninguna)"
+    private const val SEPARADOR = " · "
+
     /** Dónde está el teléfono: la app al frente, el tipo de pantalla, el teclado y el tamaño. */
-    fun dondeEstoy(estado: TurnScreenState?): String = TODO("2B2a")
+    fun dondeEstoy(estado: TurnScreenState?): String {
+        if (estado == null) return SIN_PANTALLA
+        val leido = Lectura.de(estado.uiContext)
+        val app = estado.screen.trim().ifBlank { leido?.paquete.orEmpty() }.ifBlank { "no sé qué app está al frente" }
+        val partes = mutableListOf("estás en «$app»")
+        if (leido != null) {
+            partes += leido.tipo
+            if (leido.teclado) partes += "teclado abierto"
+        }
+        partes += "pantalla de ${estado.width}×${estado.height}"
+        // Un `uiContext` que no se reconoce se cita entero: es lo único que se sabe de verdad de esa pantalla.
+        if (leido == null) partes += "la pantalla dice: ${estado.uiContext.trim()}"
+        return partes.joinToString(SEPARADOR)
+    }
 
     /**
      * Qué hay en la pantalla. Sin [filtro], las cuentas y las etiquetas visibles; con él, si eso está o no, sin mirar
-     * tildes ni mayúsculas.
+     * tildes ni mayúsculas. Lo que no se encontró NO se acompaña de la pantalla entera: se preguntó por una cosa.
      */
-    fun queVeo(estado: TurnScreenState?, filtro: String = ""): String = TODO("2B2a")
+    fun queVeo(estado: TurnScreenState?, filtro: String = ""): String {
+        if (estado == null) return SIN_PANTALLA
+        val leido = Lectura.de(estado.uiContext) ?: return estado.uiContext.trim()
+        val buscado = filtro.trim().take(TOPE_DEL_FILTRO)
+        if (buscado.isEmpty()) {
+            return buildString {
+                append("${leido.tocables} elementos se pueden tocar${SEPARADOR}${leido.campos} campos de texto")
+                if (leido.enfocado.isNotBlank()) append(" (escribiendo en «${leido.enfocado}»)")
+                append(SEPARADOR)
+                if (leido.etiquetas.isEmpty()) append("no leo ninguna etiqueta")
+                else append("${leido.etiquetas.size} etiquetas: ${leido.etiquetas.joinToString(SEPARADOR)}")
+            }
+        }
+        val aguja = comparable(buscado)
+        val encontradas = leido.etiquetas.filter { aguja in comparable(it) }
+        return if (encontradas.isEmpty()) {
+            "«$buscado»: no lo veo entre las ${leido.etiquetas.size} etiquetas de esta pantalla"
+        } else {
+            "«$buscado»: sí, lo veo: ${encontradas.joinToString(SEPARADOR)}"
+        }
+    }
 
-    /** La MEDIDA de lo que se leyó, para el log: cuántas etiquetas y cuántos caracteres. Nunca una etiqueta. */
-    fun etiquetas(estado: TurnScreenState?): Int = TODO("2B2a")
+    /** Cuántas etiquetas se leyeron. Es la MEDIDA que puede ir al log; las etiquetas, no. */
+    fun etiquetas(estado: TurnScreenState?): Int = Lectura.de(estado?.uiContext ?: "")?.etiquetas?.size ?: 0
+
+    /** Sin tildes y en minúsculas: quien habla dice «camara» y la pantalla pone «Cámara». */
+    private fun comparable(texto: String): String = buildString {
+        for (c in texto.lowercase()) {
+            append(
+                when (c) {
+                    'á', 'à', 'ä', 'â' -> 'a'
+                    'é', 'è', 'ë', 'ê' -> 'e'
+                    'í', 'ì', 'ï', 'î' -> 'i'
+                    'ó', 'ò', 'ö', 'ô' -> 'o'
+                    'ú', 'ù', 'ü', 'û' -> 'u'
+                    'ñ' -> 'n'
+                    else -> c
+                },
+            )
+        }
+    }
+
+    /** El `uiContext` entendido. `null` si no tiene la forma que arma la accesibilidad: entonces no se interpreta. */
+    private class Lectura(
+        val paquete: String,
+        val tipo: String,
+        val teclado: Boolean,
+        val tocables: Int,
+        val campos: Int,
+        val enfocado: String,
+        val etiquetas: List<String>,
+    ) {
+        companion object {
+            fun de(uiContext: String): Lectura? {
+                val lineas = uiContext.lines()
+                fun linea(prefijo: String) = lineas.firstOrNull { it.startsWith(prefijo) }?.removePrefix(prefijo)?.trim()
+                val paquete = linea(PAQUETE) ?: return null
+                val tipoCrudo = lineas.firstOrNull { it.startsWith(TIPO) }?.removePrefix(TIPO) ?: return null
+                val cuentas = linea(CUENTAS) ?: return null
+                val etiquetas = linea(ETIQUETAS) ?: return null
+                val enfocado = cuentas.substringAfter(ENFOCADO, "").substringBefore("\")", "")
+                return Lectura(
+                    paquete = paquete,
+                    tipo = tipoCrudo.removeSuffix(TECLADO).trim(),
+                    teclado = tipoCrudo.trimEnd().endsWith(TECLADO.trim()),
+                    tocables = cuentas.substringBefore(SEPARADOR).trim().toIntOrNull() ?: return null,
+                    campos = cuentas.substringAfter(CAMPOS, "").trim().takeWhile { it.isDigit() }.toIntOrNull() ?: return null,
+                    enfocado = enfocado,
+                    etiquetas = if (etiquetas.isBlank() || etiquetas == NINGUNA) emptyList()
+                    else etiquetas.split(SEPARADOR).map { it.trim() }.filter { it.isNotEmpty() },
+                )
+            }
+        }
+    }
 }

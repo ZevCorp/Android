@@ -2,10 +2,18 @@ package com.zevcorp.graph.voice.live
 
 import android.content.Context
 import com.zevcorp.graph.BuildConfig
+import com.zevcorp.graph.Ejecucion
 import com.zevcorp.graph.GraphApp
+import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
+import graph.core.domain.McpTool
+import graph.core.graph.AndroidSurface
+import graph.core.graph.TurnScreenState
+import graph.core.graph.toTurnState
 import graph.core.voz.CanalOkHttp
+import graph.core.voz.CatalogoDeVoz
 import graph.core.voz.ConversacionViva
+import graph.core.voz.HerramientasDeVoz
 import graph.core.voz.ModoDeCaptura
 import graph.core.voz.ProtocoloGptLive
 import kotlinx.coroutines.CoroutineScope
@@ -22,9 +30,13 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeoutOrNull
 
 /**
- * LA VOZ EN VIVO DE PRUEBA (docs/specs/002, fase B1b): `ConversacionViva` sobre `CanalOkHttp`, el micrófono y el altavoz del
- * teléfono, con la persona corta de la voz y el catálogo del delegado VACÍO (las herramientas llegan en la 2B2a). Es solo
- * conversación, y solo la arranca el panel de desarrollador hasta pasar el nivel 4 (promesa 246).
+ * LA VOZ EN VIVO DE PRUEBA (docs/specs/002, fases B1b y 2B2a): `ConversacionViva` sobre `CanalOkHttp`, el micrófono y el
+ * altavoz del teléfono, con la persona corta de la voz y las tres herramientas de SOLO LECTURA del delegado (dónde está,
+ * qué ve y qué podrá hacer). Solo la arranca el panel de desarrollador hasta pasar el nivel 4 (promesa 246).
+ *
+ * LOS OJOS MIRAN EL MISMO ESTADO QUE EL TURNO DE GRAPH y el catálogo sale de `Ejecucion.herramientas(…)`, que lo arma
+ * sobre la puerta única (spec 003, promesa 307): leer la pantalla pasa siempre, porque mirar no es actuar. Manos no se le
+ * dan a nadie aquí: ejecutar es la fase siguiente.
  *
  * LA CLAVE ES LA DEL BUILD INTERNO: la pref `openaiKey` o la horneada. Nunca la de la configuración remota, que baja de una
  * tabla pública.
@@ -57,13 +69,14 @@ class VozEnVivoDev(private val contexto: Context) {
                 " NO ANUNCIES LO QUE VAS A HACER: nada de «voy a…», «vamos a…», «déjame…», «dame un momento», «un momento», «ahora lo miro». Mientras se hace el trabajo, calla." +
                 " CUANDO HABLES, HABLA EN PASADO Y DEL RESULTADO: «ya abrí la cámara», «no había ningún mensaje nuevo». Nunca en futuro."
 
-        /** El delegado de la prueba no tiene manos: que lo diga, en vez de fingir que hizo algo. */
+        /** El delegado ya tiene ojos, pero no manos: que mire antes de hablar y que diga que todavía no puede actuar. */
         const val INSTRUCCIONES_DELEGADO =
-            "Eres el delegado de Ü en un teléfono Android. En esta prueba no tienes herramientas: no puedes ver ni tocar la pantalla. " +
-                "Si te piden hacer algo en el teléfono, contesta en una frase corta que todavía no puedes hacerlo. " +
-                "Nunca digas que hiciste algo ni describas lo que hay en pantalla."
-
-        const val SIN_HERRAMIENTAS = "no hay herramientas en esta prueba: no se ejecutó nada"
+            "Eres el delegado de Ü en un teléfono Android. Tienes tres herramientas y las tres SOLO MIRAN: " +
+                "${CatalogoDeVoz.DONDE_ESTOY} dice en qué app y pantalla estás; ${CatalogoDeVoz.QUE_VEO} dice qué hay en la " +
+                "pantalla, y con «${CatalogoDeVoz.FILTRO}» si algo concreto está o no; ${CatalogoDeVoz.QUE_PUEDO_HACER} dice " +
+                "qué sabrá hacer Ü cuando pueda actuar. " +
+                "MIRA ANTES DE HABLAR de la pantalla: nunca la describas de memoria ni inventes lo que no viste. " +
+                "Todavía NO puedes tocar, escribir ni abrir nada: si te piden hacer algo, dilo en una frase corta y ofrece mirarlo."
 
         /** Lo que espera parar a que la conversación cierre sola antes de cancelarla. */
         private const val TOPE_AL_PARAR_MS = 3_000L
@@ -111,8 +124,9 @@ class VozEnVivoDev(private val contexto: Context) {
                 credencial = { claveDelBuildInterno() },
                 instruccionesVoz = INSTRUCCIONES_VOZ,
                 instruccionesDelegado = INSTRUCCIONES_DELEGADO,
-                utensilios = emptyList(),
-                ejecutar = { SIN_HERRAMIENTAS },
+                utensilios = CatalogoDeVoz.UTENSILIOS,
+                ejecutar = ojos::ejecutar,
+                actuaEnPantalla = CatalogoDeVoz::actuaEnPantalla,
                 reproducir = altavoz::reproducir,
                 callar = altavoz::callar,
                 sonando = altavoz::sonando,
@@ -123,7 +137,7 @@ class VozEnVivoDev(private val contexto: Context) {
                 transcribe = { texto, esDeU -> enCurso((if (esDeU) "Ü: " else "Tú: ") + texto) },
             )
             fijar(Fase.ARRANCANDO, "Voz en vivo: abriendo la sesión…")
-            registrar(TAG, "arranca la voz en vivo de prueba: sin herramientas, AEC del sistema ${if (microfono.hayAec) "encendido" else "no disponible"}")
+            registrar(TAG, "arranca la voz en vivo de prueba: ${CatalogoDeVoz.UTENSILIOS.size} herramientas de solo lectura, AEC del sistema ${if (microfono.hayAec) "encendido" else "no disponible"}")
             val job = alcance.launch {
                 // DE A UN TROZO Y EN ORDEN: un launch por trozo los dejaba competir por entrar a la conversación.
                 val oido = launch { for (t in trozos) conv.oirMicrofono(t) }
@@ -158,6 +172,21 @@ class VozEnVivoDev(private val contexto: Context) {
             }
         }
     }
+
+    /**
+     * LOS OJOS: solo lectura. La pantalla es la MISMA que arma el turno de Graph (`ScreenState` → `toTurnState`, sin
+     * captura), y el catálogo, el que armaría una corrida sobre la puerta. Sin servicio de accesibilidad no hay estado
+     * que leer, y la voz lo dice en vez de inventárselo.
+     */
+    private val ojos = HerramientasDeVoz(pantalla = ::estadoDeLaPantalla, acciones = ::catalogoDeAcciones, log = ::registrar)
+
+    private suspend fun estadoDeLaPantalla(): TurnScreenState? =
+        GraphApp.instance.ui?.state(withScreenshot = false)?.let {
+            it.toTurnState(apps = null, surface = AndroidSurface.from(it.screen), withScreenshot = false)
+        }
+
+    private fun catalogoDeAcciones(): List<McpTool> =
+        (GraphApp.instance.ui as? GraphAccessibilityService)?.let { Ejecucion.herramientas(it, emptyList()) } ?: emptyList()
 
     private fun claveDelBuildInterno(): String? =
         GraphApp.instance.prefs.getString("openaiKey", null)?.trim()?.ifBlank { null }
