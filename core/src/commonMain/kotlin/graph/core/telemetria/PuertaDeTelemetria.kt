@@ -65,6 +65,8 @@ object PuertaDeTelemetria {
         "check_simit_fines", "open_maps", "open_camera", "open_settings", "share_text", "set_clipboard", "set_volume",
         "adjust_volume", "long_press", "drag_and_drop", "press_key", "take_screenshot", "list_apps", "dial", "directions",
         "ask_user", "left_click", "learned_tool",
+        // los ojos de la voz (spec 002, fase 2B2a): nombran QUÉ se miró, nunca lo que se vio
+        "donde_estoy", "que_veo", "que_puedo_hacer",
         "ok", "error", "cancelled", "running", "done", "fin", "decide", "speak", "ask", "transitorio", "true", "false", "null",
         "subconsciente", "consciente",
         "graph", "openai", "gemini", "deepgram", "GRAPH", "OPENAI", "GEMINI", "session",
@@ -73,7 +75,7 @@ object PuertaDeTelemetria {
     /** Frases fijas que escribe el código, nunca la persona: la voz, precisión y el motor. */
     val FRASES: List<String> = listOf(
         "usuario dijo", "Ü dijo", "sesión cerrada", "nodo sin id estructural", "ya hay una tarea en curso", "no sigo",
-        "sin reintento", "paraste tú",
+        "sin reintento", "paraste tú", "todavía no se ejecuta",
     )
 
     /** Lo que va detrás de un número y lo vuelve medida: `42 caracteres`, `120 bytes`, `3 turnos`. */
@@ -81,7 +83,7 @@ object PuertaDeTelemetria {
         "caracteres", "carácter", "car.", "bytes", "KB", "MB", "ms", "segundos", "min", "minutos", "turnos", "acciones",
         "llamadas", "intentos", "reintentos", "pasos", "steps", "prompts", "tokens", "niveles", "elementos", "clics", "señales",
         "notas", "subconscientes", "conscientes", "cierres", "veces", "px", "dp", "candidatos", "herramientas", "filas",
-        "workflows", "apps", "errores",
+        "workflows", "apps", "errores", "etiquetas",
     )
 
     /** Lo que va delante de un número y lo vuelve medida: `HTTP 503`, `intento 2/3`, `llamadas=5`. */
@@ -93,7 +95,7 @@ object PuertaDeTelemetria {
     /** «X de N caracteres»: de qué es la medida. Sin la medida detrás, la palabra cae. */
     val DESCRIPTORES: Set<String> = setOf(
         "objetivo", "pregunta", "resumen", "pedido", "campo", "nombre", "destino", "respuesta", "error", "mensaje", "frase", "texto",
-        "archivo", "cuerpo", "argumento", "interpretación", "nota", "prompt",
+        "archivo", "cuerpo", "argumento", "interpretación", "nota", "prompt", "filtro",
     )
 
     /** Segmentos de las rutas de Graph que pueden ir en un log; el resto de un segmento tiene que ser un id. */

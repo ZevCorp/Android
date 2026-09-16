@@ -1,7 +1,11 @@
 package graph.core.contrato
 
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeoutOrNull
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlin.coroutines.CoroutineContext
 import kotlin.test.fail
 
 /**
@@ -22,6 +26,17 @@ actual fun corre(block: suspend () -> Unit) = runBlocking {
  * de pila, así que con la mitad los 1000 de la 203 y los 2000 de la 413 la agotan con seguridad.
  */
 private const val PILA_CHICA_BYTES = 512L * 1024
+
+/** `CountDownLatch.await` bloquea el hilo de verdad: ninguna corrutina de ese hilo avanza mientras dure. */
+actual class Traba actual constructor() {
+    private val cerrojo = CountDownLatch(1)
+
+    actual fun esperaBloqueando(topeMs: Long): Boolean = cerrojo.await(topeMs, TimeUnit.MILLISECONDS)
+
+    actual fun abrir() = cerrojo.countDown()
+}
+
+actual fun despachadorDeIo(): CoroutineContext = Dispatchers.IO
 
 actual fun <T> enPilaChica(bloque: () -> T): Result<T> {
     var resultado: Result<T> = Result.failure(IllegalStateException("el hilo de pila chica no llegó a correr"))
