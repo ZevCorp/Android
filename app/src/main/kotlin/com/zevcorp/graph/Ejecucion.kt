@@ -71,8 +71,9 @@ object Ejecucion {
         pausa: () -> Long = { 350 },
         aprendidas: List<LearnedTool> = emptyList(),
         workflows: ArmadoDeEjecucion.Workflows? = null,
+        apps: suspend () -> List<String> = { emptyList() },
     ): ArmadoDeEjecucion.Sesion<B> =
-        armado.arma(manos(service), cerebro, voz, usuario, maxTurnos, modo, pausa, aprendidas, workflows)
+        armado.arma(manos(service), cerebro, voz, usuario, maxTurnos, modo, pausa, aprendidas, workflows, apps)
 
     /** El catálogo MCP de una corrida, sin ejecutar nada. */
     fun herramientas(service: GraphAccessibilityService, aprendidas: List<LearnedTool>): List<McpTool> =

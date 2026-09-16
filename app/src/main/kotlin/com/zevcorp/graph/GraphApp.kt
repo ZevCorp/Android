@@ -386,6 +386,8 @@ class GraphApp : Application() {
                 elementos = { service.elements() }, // árbol de UI vivo: para encadenar y saltar pasos ya cumplidos
                 consciente = { wf, step, context -> consciousStep(service, wf, step, context) },
             ) else null,
+            // Con las apps instaladas la compuerta sabe si un nombre de app es ambiguo (spec 006, promesa 602).
+            apps = { withContext(Dispatchers.IO) { installedApps() } },
         )
         if (resume) sesion.cerebro.resume(conversationId)
         return sesion.motor to sesion.cerebro
