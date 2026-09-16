@@ -18,6 +18,7 @@ import graph.core.pregunta.Vista
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -169,7 +170,7 @@ class Contrato006LoQueVe {
 
         // Y la app lo pasa de verdad: sin ese cable, el core no tiene con qué distinguirlo.
         val graphApp = fuenteDeLaApp("GraphApp.kt")
-        assertTrue(Regex("""Ejecucion\.pasoConsciente\([^)]*dichoPorLaPersona\(\)""").containsMatchIn(graphApp),
+        assertTrue(Regex("""Ejecucion\.pasoConsciente\([^)]*dijoLaPersona\)""").containsMatchIn(graphApp),
             promesa(p) + " · consciousStep no le pasa al paso lo que dijo la persona")
         val ejecucion = fuenteDeLaApp("Ejecucion.kt")
         assertTrue(Regex("""armado\.pasoConsciente\([^)]*dijoLaPersona""").containsMatchIn(ejecucion),
@@ -221,6 +222,63 @@ class Contrato006LoQueVe {
         }
     }
 
+    /**
+     * EL PERMISO VIAJA CON LA CORRIDA QUE DISPARA (promesa 619). `consciousStep` autorizaba con `dichoPorLaPersona()`, que
+     * lee los prompts de la última corrida explícita sin mirar desde cuál se disparó el workflow: una corrida autónoma —que
+     * va con «no autoriza nada»— volvía a mirar palabras que la persona dijo para otra cosa, y reabría por esa vía el
+     * agujero que cerró la 615. Se lee UNA vez, en la corrida que dispara, y de ahí viaja hasta el paso. Está inerte
+     * mientras el subconsciente siga apagado; se cierra para que no vuelva solo el día que se encienda.
+     */
+    @Test
+    fun promesa619() = corre {
+        val p = 619
+        val graphApp = fuenteDeLaApp("GraphApp.kt")
+
+        // El paso RECIBE el permiso de quien lo dispara, y no lo vuelve a calcular por su cuenta.
+        val paso = cuerpo(graphApp, Regex("""private suspend fun consciousStep\s*\("""))
+        assertTrue(Regex("""dijoLaPersona: String\?""").containsMatchIn(paso),
+            promesa(p) + " · consciousStep no recibe el permiso de su corrida: $paso")
+        assertFalse("dichoPorLaPersona" in paso,
+            promesa(p) + " · consciousStep vuelve a calcular el permiso en vez de recibirlo: $paso")
+
+        // Y quien arma la sesión se lo da al workflow: sin ese cable, el paso no tiene de dónde recibirlo.
+        val sesion = cuerpo(graphApp, Regex("""private fun newSession\s*\("""))
+        assertTrue(Regex("""dijoLaPersona: String\?""").containsMatchIn(sesion),
+            promesa(p) + " · newSession no recibe el permiso de la corrida: $sesion")
+        assertTrue(Regex("""consciousStep\([^)]*dijoLaPersona""").containsMatchIn(sesion),
+            promesa(p) + " · el workflow no le pasa al paso el permiso de la corrida: $sesion")
+
+        // El permiso se lee UNA sola vez, en la corrida de la persona: de ahí viaja al motor y al paso.
+        assertEquals(1, Regex("""=\s*dichoPorLaPersona\(\)""").findAll(graphApp).count(),
+            promesa(p) + " · el permiso se calcula en más de un sitio, o ya no se calcula en ninguno")
+
+        // Y la corrida autónoma, que no autoriza nada, tampoco le presta permiso al paso que dispare.
+        assertTrue(Regex("""newSession\([^)]*dijoLaPersona = null""").containsMatchIn(graphApp),
+            promesa(p) + " · la sesión de la acción anticipada autónoma no dice que no autoriza nada")
+    }
+
+    /**
+     * QUIEN CORRE EL MOTOR DICE QUÉ AUTORIZA (promesa 621). `run` traía `dijoLaPersona: String? = goal`: los llamadores de
+     * hoy lo pasan explícito, pero cualquier llamador futuro con un objetivo sintético se autorizaba solo, y el resguardo
+     * vivía en un comentario. Sin default, decidirlo lo pide el compilador. El del paso consciente sí tiene default, y es
+     * `null`: el lado que no autoriza nada.
+     */
+    @Test
+    fun promesa621() = corre {
+        val p = 621
+        val firma = Regex("""suspend fun run\([^)]*\)""").find(fuenteDelNucleo("Engine.kt"))?.value
+            ?: fail(promesa(p) + " · no encuentro la firma de ExecutionEngine.run")
+        assertTrue("dijoLaPersona: String?" in firma, promesa(p) + " · run ya no recibe lo que dijo la persona: $firma")
+        assertFalse(Regex("""dijoLaPersona: String\?\s*=""").containsMatchIn(firma),
+            promesa(p) + " · run vuelve a traer un default que autoriza sin que nadie lo decida: $firma")
+
+        // El paso consciente sí trae default, porque el suyo es `null`: sin nada de la persona no autoriza nada.
+        val paso = Regex("""suspend fun pasoConsciente\([^)]*\)""").find(fuenteDelNucleo("ArmadoDeEjecucion.kt"))?.value
+            ?: fail(promesa(p) + " · no encuentro la firma de ArmadoDeEjecucion.pasoConsciente")
+        assertTrue(Regex("""dijoLaPersona: String\?\s*=\s*null""").containsMatchIn(paso),
+            promesa(p) + " · el paso consciente ya no arranca sin permiso: $paso")
+    }
+
     /** Dónde la pantalla anota las dudas en el aire para poder contestarlas si se muere (promesa 613). */
     private val DUDAS = "dudasEnElAire"
 
@@ -232,16 +290,31 @@ class Contrato006LoQueVe {
         return fuente.substring(desde, if (hasta > desde) hasta else fuente.length)
     }
 
+    /** El cuerpo de la función que abre [firma], hasta su llave de cierre: la primera `}` con su misma sangría. */
+    private fun cuerpo(codigo: String, firma: Regex): String {
+        val lineas = codigo.lines()
+        val i = lineas.indexOfFirst { firma.containsMatchIn(it) }
+        if (i < 0) fail("no encuentro «${firma.pattern}»")
+        val sangria = lineas[i].takeWhile { it == ' ' }
+        val fin = (i + 1 until lineas.size).firstOrNull { lineas[it] == "$sangria}" } ?: fail("«${firma.pattern}» no cierra")
+        return lineas.subList(i, fin + 1).joinToString("\n")
+    }
+
+    private fun fuenteDeLaApp(nombre: String): String = fuente("app/src/main/kotlin", nombre)
+
+    /** Una fuente del núcleo: una firma que el compilador no puede exigir por sí sola se juzga leyéndola (promesa 621). */
+    private fun fuenteDelNucleo(nombre: String): String = fuente("core/src/commonMain/kotlin", nombre)
+
     /**
      * `:core:jvmTest` corre con el directorio de trabajo en `core/`, pero no se supone: se sube desde donde esté hasta
-     * encontrar `app/src/main/kotlin`. Si el archivo no aparece, la promesa falla: una lectura de cero archivos no da verde.
+     * encontrar [raizRelativa]. Si el archivo no aparece, la promesa falla: una lectura de cero archivos no da verde.
      */
-    private fun fuenteDeLaApp(nombre: String): String {
+    private fun fuente(raizRelativa: String, nombre: String): String {
         val desde = File("").absoluteFile
         val raiz = generateSequence(desde) { it.parentFile }
-            .map { File(it, "app/src/main/kotlin") }
+            .map { File(it, raizRelativa) }
             .firstOrNull { it.isDirectory }
-            ?: fail("no encuentro app/src/main/kotlin subiendo desde $desde")
+            ?: fail("no encuentro $raizRelativa subiendo desde $desde")
         val archivo = raiz.walkTopDown().firstOrNull { it.isFile && it.name == nombre }
             ?: fail("no encuentro $nombre en $raiz")
         return archivo.readText()
