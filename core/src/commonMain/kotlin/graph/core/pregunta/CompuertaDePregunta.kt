@@ -5,7 +5,7 @@ import graph.core.domain.GraphLog
 import graph.core.domain.ScreenState
 import graph.core.domain.UserChannel
 import graph.core.domain.Voice
-import kotlin.concurrent.Volatile
+import kotlinx.coroutines.CancellationException
 
 /**
  * LO QUE EL CLIENTE PUEDE VER AHORA: las etiquetas de la pantalla y las apps instaladas. Con esto se cuentan los candidatos
@@ -37,9 +37,18 @@ class Vista(val etiquetas: List<String> = emptyList(), val apps: List<String> = 
  *  3. **dato** — un campo que falta se pide, uno por pregunta y el más importante primero.
  * El permiso va primero porque es el que evita el daño; los otros dos son para hacerlo bien.
  *
- * NO INTERPRETA LA RESPUESTA. Lo único que lee es si [Respuesta.niega]; el texto vuelve al cerebro dentro del `results` de la
- * acción frenada y el cerebro decide el turno siguiente (promesa 605). Así no hay bucle: un asunto se pregunta UNA vez por
- * corrida, y si el cerebro insiste, la acción pasa o no según lo que la persona contestó (promesa 606).
+ * NO INTERPRETA LA RESPUESTA. Lo único que lee es en cuál de tres cae ([Respuesta.lee]); el texto vuelve al cerebro dentro
+ * del `results` de la acción frenada y el cerebro decide el turno siguiente (promesa 605). Así no hay bucle: un asunto se
+ * pregunta UNA vez por corrida, y si el cerebro insiste, la acción pasa o no según lo que la persona contestó (promesa 606).
+ * Si la respuesta se contradice a sí misma se repregunta UNA vez y no más (promesa 614).
+ *
+ * LO AUTORIZADO ES ESA ACCIÓN, CON ESE DESTINATARIO Y ESE CONTENIDO (promesa 610). La llave de lo ya contestado lleva las
+ * tres cosas: sin el contenido, un «sí» a un mensaje autorizaba el siguiente mensaje al mismo destinatario con otro texto, y
+ * un «sí» a un `share_text` —que no tiene destinatario— autorizaba cualquier compartir del resto de la corrida.
+ *
+ * Y ESE ATAJO ES SOLO DEL PERMISO (promesa 612). Para el dato y el «cuál» no hay nada que saltar: lo que vale es que el dato
+ * ESTÉ en la acción. Si el cerebro repite la acción y sigue faltando, no se ejecuta —nunca con el default silencioso— y
+ * tampoco se pregunta otra vez.
  *
  * MIENTRAS ESPERA NO HACE NADA. `revisa` no vuelve hasta que la persona contesta: la corrida queda viva y quieta, sin tope
  * ni plazo que la resuelva por su cuenta, y el alto de siempre la corta por donde corta todo lo demás (promesa 604).
@@ -61,18 +70,17 @@ class CompuertaDePregunta(
     /** Lo ya preguntado en esta corrida: el asunto y si quedó autorizado. */
     private val contestado = mutableMapOf<String, Boolean>()
 
-    @Volatile private var enElAire: PreguntaPendiente? = null
-
-    /** La pregunta que está en el aire: mientras existe, la corrida está viva y quieta (promesa 604). */
-    val pendiente: PreguntaPendiente? get() = enElAire
-
-    /** Corrida nueva: este es el pedido con el que se compara cada acción, y lo preguntado antes ya no cuenta. */
+    /**
+     * Corrida nueva: este es el pedido con el que se compara cada acción, y lo preguntado antes ya no cuenta.
+     *
+     * [pedido] es lo que la persona escribió o dictó, NO el objetivo que recibe el motor: los dos se separan a propósito,
+     * porque parte de ese objetivo la redacta el modelo y lo que el modelo escribe no autoriza nada (promesa 611).
+     */
     fun empieza(pedido: String) {
         this.pedido = pedido
         contestado.clear()
         etiquetas = emptyList()
         appsVistas = null
-        enElAire = null
     }
 
     /** La última pantalla que el motor leyó: de ahí salen las etiquetas que el cliente ve. */
@@ -86,46 +94,84 @@ class CompuertaDePregunta(
      */
     suspend fun revisa(accion: AgentAction): String? {
         val pregunta = decide(accion) ?: return null
-        contestado[pregunta.asunto]?.let { autorizado ->
-            if (autorizado) return null // ya lo autorizó: no se pregunta dos veces lo mismo
-            log.log(TAG, "⏭ ${pregunta.clase.enLog} · $DIJISTE_QUE_NO")
-            return "$DIJISTE_QUE_NO — ya te pregunté por esto en esta corrida y dijiste que no"
+        yaPreguntado(pregunta)?.let { return it.dejaPasar() }
+        val canal = usuario ?: return sinCanal(pregunta)
+
+        // La pregunta, y hasta UNA repregunta si la respuesta se contradice. Sin plazo: quien corta es el alto (promesa 604).
+        var dicho = ""
+        var lectura = Respuesta.Lectura.AMBIGUA
+        var vuelta = 0
+        while (lectura == Respuesta.Lectura.AMBIGUA && vuelta < VUELTAS_MAXIMAS) {
+            vuelta++
+            log.log(
+                TAG,
+                "❓ ${pregunta.clase.enLog} · pregunta de ${pregunta.texto.length} caracteres" +
+                    if (pregunta.opciones.isEmpty()) "" else " · ${pregunta.opciones.size} opciones",
+            )
+            dicho = try {
+                voz?.speak(pregunta.texto)
+                canal.ask(pregunta.texto)
+            } catch (ce: CancellationException) {
+                throw ce // el alto, o la corrida entera: no es cosa de la compuerta (promesa 604)
+            } catch (_: Exception) {
+                // El canal se fue con la pantalla. No se ejecuta lo sensible, pero la corrida sigue: colgarla sería peor.
+                return sinCanal(pregunta)
+            }
+            lectura = Respuesta.lee(dicho)
+            if (lectura == Respuesta.Lectura.AMBIGUA) log.log(TAG, "↻ ${pregunta.clase.enLog} · $NO_TE_ENTENDI")
         }
-        val canal = usuario
-        if (canal == null) {
-            // Sin a quién preguntarle, lo sensible NO se hace: «usa tu mejor criterio» no es un permiso (promesa 607).
-            log.log(TAG, "❓ ${pregunta.clase.enLog} · $SIN_CANAL")
-            contestado[pregunta.asunto] = false
-            return "$SIN_CANAL — no la hice: no tengo cómo preguntarte «${pregunta.texto}»"
-        }
-        log.log(
-            TAG,
-            "❓ ${pregunta.clase.enLog} · pregunta de ${pregunta.texto.length} caracteres" +
-                if (pregunta.opciones.isEmpty()) "" else " · ${pregunta.opciones.size} opciones",
-        )
-        enElAire = PreguntaPendiente(pregunta, accion)
-        val dicho = try {
-            voz?.speak(pregunta.texto)
-            canal.ask(pregunta.texto)
-        } finally {
-            enElAire = null
-        }
-        val autoriza = !Respuesta.niega(dicho)
+
+        val autoriza = lectura == Respuesta.Lectura.AUTORIZA
         contestado[pregunta.asunto] = autoriza
         log.log(TAG, "✔ respuesta de ${dicho.length} caracteres · ${if (autoriza) "autoriza" else "niega"}")
         val detalle = if (dicho.isBlank()) "no contestaste" else "contestaste «$dicho»"
         return "$PREGUNTE — te pregunté «${pregunta.texto}» y $detalle"
     }
 
+    /**
+     * Lo que se hace con un asunto ya preguntado en esta corrida, o `null` si es la primera vez. Un PERMISO contestado que sí
+     * deja pasar la acción (promesa 606); para el DATO y el «cuál» no hay atajo: si el dato sigue faltando, la acción no se
+     * hace y tampoco se vuelve a preguntar (promesa 612).
+     */
+    private fun yaPreguntado(pregunta: Pregunta): Decision? {
+        val antes = contestado[pregunta.asunto] ?: return null
+        if (pregunta.clase != Pregunta.Clase.PERMISO) {
+            log.log(TAG, "⏭ ${pregunta.clase.enLog} · $SIGUE_FALTANDO")
+            return Decision("$SIGUE_FALTANDO — ya te pregunté «${pregunta.texto}» y la acción sigue sin ese dato")
+        }
+        if (antes) return Decision(null) // ya lo autorizó: no se pregunta dos veces lo mismo
+        log.log(TAG, "⏭ ${pregunta.clase.enLog} · $DIJISTE_QUE_NO")
+        return Decision("$DIJISTE_QUE_NO — ya te pregunté por esto en esta corrida y dijiste que no")
+    }
+
+    /** Lo ya decidido: el resultado que vuelve al cerebro, o `null` para que la acción pase. */
+    private class Decision(val resultado: String?) {
+        fun dejaPasar() = resultado
+    }
+
+    /**
+     * Sin a quién preguntarle —no hay canal, o el que había se fue con la pantalla— lo sensible NO se hace: «usa tu mejor
+     * criterio» no es un permiso (promesas 607 y 613). La corrida sigue y el cerebro se entera por el resultado.
+     */
+    private fun sinCanal(pregunta: Pregunta): String {
+        log.log(TAG, "❓ ${pregunta.clase.enLog} · $SIN_CANAL")
+        contestado[pregunta.asunto] = false
+        return "$SIN_CANAL — no la hice: no tengo cómo preguntarte «${pregunta.texto}»"
+    }
+
     /* ---------- Las tres decisiones ---------- */
 
     private suspend fun decide(accion: AgentAction): Pregunta? = permiso(accion) ?: cual(accion) ?: dato(accion)
 
-    /** Lo sensible que el pedido no autorizó. */
+    /**
+     * Lo sensible que el pedido no autorizó. El asunto —la llave de lo ya contestado— lleva la clase, el destinatario Y el
+     * contenido: lo autorizado es ESA acción, no cualquier otra parecida (promesa 610). Nunca sale al log.
+     */
     private fun permiso(accion: AgentAction): Pregunta? {
         val sensible = AccionSensible.de(accion) ?: return null
         if (AccionSensible.loPidio(pedido, sensible)) return null
-        return Pregunta(Pregunta.Clase.PERMISO, "permiso:${sensible.clase}:${plano(sensible.destino).trim()}", texto(sensible))
+        val asunto = "permiso:${sensible.clase}:${plano(sensible.destino).trim()}:${plano(sensible.contenido).trim()}"
+        return Pregunta(Pregunta.Clase.PERMISO, asunto, texto(sensible))
     }
 
     /** Un nombre que coincide con dos o más de los que el cliente vio. */
@@ -196,6 +242,16 @@ class CompuertaDePregunta(
         const val PREGUNTE = "pregunté primero y no la hice"
         const val DIJISTE_QUE_NO = "dijiste que no"
         const val SIN_CANAL = "no hay a quién preguntarle"
+        const val SIGUE_FALTANDO = "sigue faltando el dato"
+
+        /** Lo que se anota cuando la respuesta dice que sí y que no a la vez, antes de repreguntar (promesa 614). */
+        const val NO_TE_ENTENDI = "no te entendí"
+
+        /**
+         * Cuántas veces se pregunta lo mismo cuando la respuesta se contradice: la pregunta y UNA repregunta. No es un
+         * plazo —nada se resuelve solo por pasar el tiempo (promesa 604)—: es el tope de un ida y vuelta que si no, no acaba.
+         */
+        const val VUELTAS_MAXIMAS = 2
 
         /** Cuántas opciones se le ofrecen a la persona: más que esto ya no se lee, se adivina. */
         const val OPCIONES_MAXIMAS = 6

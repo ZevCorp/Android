@@ -5,8 +5,11 @@ import graph.core.domain.AgentAction
 /** Un texto sin tildes ni mayúsculas: así se comparan el pedido, un destinatario y una etiqueta. */
 internal fun plano(texto: String): String = texto.lowercase().map { SIN_TILDE[it] ?: it }.joinToString("")
 
+/** Las palabras de un texto, en plano y EN ORDEN: hay quien necesita saber cuál abre (ver [Respuesta]). */
+internal fun palabrasEnOrden(texto: String): List<String> = PALABRA.findAll(plano(texto)).map { it.value }.toList()
+
 /** Las palabras de un texto, en plano: lo que se busca como palabra entera, nunca como trozo. */
-internal fun palabras(texto: String): Set<String> = PALABRA.findAll(plano(texto)).map { it.value }.toSet()
+internal fun palabras(texto: String): Set<String> = palabrasEnOrden(texto).toSet()
 
 private val PALABRA = Regex("""[\p{L}\p{N}]+""")
 private val SIN_TILDE = mapOf('á' to 'a', 'é' to 'e', 'í' to 'i', 'ó' to 'o', 'ú' to 'u', 'ü' to 'u', 'ñ' to 'n')
@@ -44,18 +47,70 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
         }
 
         /**
-         * ¿El pedido de la persona pidió ESTA acción, con este destinatario y este contenido? Las tres cosas:
+         * ¿El pedido de la persona pidió ESTA acción, con este destinatario y este contenido? Las tres cosas, y ninguna se
+         * da por buena por no poder mirarla (promesa 609):
          *  - nombra la acción: una palabra de [VERBOS] de esa clase está en el pedido;
-         *  - nombra al destinatario: alguna palabra suya de letras está en el pedido. Un destinatario SIN letras —el número
-         *    que el cerebro resolvió de los contactos— no se puede cruzar con el pedido, así que no frena por sí solo;
-         *  - el contenido viene del pedido: alguna palabra propia suya está en el pedido.
+         *  - el destinatario se corresponde: ver [correspondeElDestino];
+         *  - el contenido se corresponde: ver [correspondeElContenido].
+         *
+         * LA AUSENCIA DE EVIDENCIA NO ES UN PERMISO. Antes, una comprobación sin nada que cruzar devolvía `true` «porque no
+         * había nada que comparar», y como un teléfono no tiene letras y una llamada no tiene contenido, las dos que debían
+         * frenar quedaban vacías: bastaba nombrar el verbo. Un control lo reprodujo con seis frases ordinarias («llama a
+         * mamá» llamaba a otro número; «busca la marca de este producto» llamaba, porque «marca» es verbo de llamada). Lo
+         * que no se puede comparar **frena**.
          */
         fun loPidio(pedido: String, sensible: AccionSensible): Boolean {
             val dichas = palabras(pedido)
             if (VERBOS.getValue(sensible.clase).none { it in dichas }) return false
-            if (!nombra(dichas, sensible.destino, LARGO_DE_NOMBRE)) return false
-            return nombra(dichas, sensible.contenido, LARGO_DE_PALABRA, RELLENO)
+            if (!correspondeElDestino(pedido, dichas, sensible.destino)) return false
+            return correspondeElContenido(dichas, sensible.contenido)
         }
+
+        /**
+         * ¿El destinatario de la ACCIÓN es el que nombra el pedido? Con letras («Ana», «jefe@…») se cruza por palabra. Sin
+         * letras —el número que el cerebro resolvió de los contactos— se cruza COMO NÚMERO contra los del pedido, sin
+         * separadores ni prefijo de país. Si el pedido no trae ninguno, no hay con qué compararlo y **no autoriza**.
+         *
+         * Un destinatario vacío no es un destinatario que no cruza: es un dato que falta, y lo pide la pregunta de dato
+         * (promesa 603). Por eso pasa de largo por aquí.
+         */
+        private fun correspondeElDestino(pedido: String, dichas: Set<String>, destino: String): Boolean {
+            if (destino.isBlank()) return true
+            val propias = palabras(destino).filter { it.length >= LARGO_DE_NOMBRE && it.any(Char::isLetter) }
+            if (propias.isNotEmpty()) return propias.any { it in dichas }
+            val suyo = soloCifras(destino)
+            if (suyo.length < CIFRAS_DE_TELEFONO) return false
+            return telefonosDe(pedido).any { it.takeLast(CIFRAS_DE_TELEFONO) == suyo.takeLast(CIFRAS_DE_TELEFONO) }
+        }
+
+        /**
+         * ¿El contenido de la ACCIÓN sale del pedido? Alguna palabra propia suya —larga y fuera del [RELLENO]— tiene que
+         * estar en el pedido. Un contenido sin ninguna palabra propia que cruzar («Ya voy», «Ok gracias») **no autoriza**:
+         * que sea corto no lo vuelve algo que la persona pidió.
+         *
+         * Una acción sin contenido, como una llamada, no tiene nada que cruzar aquí: la frena su destinatario.
+         */
+        private fun correspondeElContenido(dichas: Set<String>, contenido: String): Boolean {
+            if (contenido.isBlank()) return true
+            val propias = palabras(contenido).filter { it.length >= LARGO_DE_PALABRA && it.any(Char::isLetter) && it !in RELLENO }
+            return propias.any { it in dichas }
+        }
+
+        /** Las cifras de un texto, sin separadores ni signos: «+57 310-445-9821» → «573104459821». */
+        private fun soloCifras(texto: String) = texto.filter { it.isDigit() }
+
+        /** Los números del pedido, cada uno con sus separadores: «mándale al 310 445 9821 que…» → «3104459821». */
+        private fun telefonosDe(pedido: String): List<String> =
+            TELEFONO.findAll(pedido).map { soloCifras(it.value) }.filter { it.length >= CIFRAS_DE_TELEFONO }.toList()
+
+        /** Un número escrito con separadores: cifras y lo que puede ir entre ellas, empezando y acabando en cifra. */
+        private val TELEFONO = Regex("""\d[\d\s().\-]*\d""")
+
+        /**
+         * Por cuántas cifras del final se reconocen dos escrituras del mismo teléfono. Siete es el número local de Colombia
+         * sin indicativo: con menos, dos números distintos coincidirían por casualidad.
+         */
+        private const val CIFRAS_DE_TELEFONO = 7
 
         /** El nombre más corto que se cruza con el pedido: «Ana», «jefe». Menos que esto son partículas. */
         private const val LARGO_DE_NOMBRE = 3
@@ -71,12 +126,6 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
                 if (clase != null) return AccionSensible(clase, etiqueta)
             }
             return null
-        }
-
-        /** ¿El pedido nombra [texto]? Sin palabras propias que cruzar, no frena: no hay nada que comparar. */
-        private fun nombra(dichas: Set<String>, texto: String, largo: Int, relleno: Set<String> = emptySet()): Boolean {
-            val propias = palabras(texto).filter { it.length >= largo && it.any(Char::isLetter) && it !in relleno }
-            return propias.isEmpty() || propias.any { it in dichas }
         }
 
         private fun Map<String, String>.dato(clave: String) = this[clave]?.trim().orEmpty()

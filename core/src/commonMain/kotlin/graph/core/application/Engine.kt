@@ -57,11 +57,16 @@ class ExecutionEngine(
      * Ejecuta un objetivo hasta que el modelo devuelve el control con texto. Devuelve ese resumen.
      * `announce=false` para objetivos internos (reencaminado / acción anticipada): no narra el texto
      * del objetivo (que puede ser largo) ni el "¡Listo!" final.
+     *
+     * [dijoLaPersona] es lo que la persona escribió o dictó, que NO siempre es el [goal]: una acción anticipada autónoma y
+     * el «CONTEXTO INMEDIATO» de una propuesta los redacta el modelo. Solo esto autoriza lo sensible (spec 006, promesa
+     * 611); `null` cuando no hay nada suyo. El default es el objetivo porque la mayoría de las corridas son el pedido tal
+     * cual, pero quien arma un objetivo sintético tiene que decirlo: si no, el modelo se autoriza a sí mismo.
      */
-    suspend fun run(goal: String, announce: Boolean = true): String {
+    suspend fun run(goal: String, announce: Boolean = true, dijoLaPersona: String? = goal): String {
         val b = brain()
         b.begin(goal)
-        compuerta?.empieza(goal) // lo que la persona pidió es con lo que se compara cada acción (spec 006)
+        compuerta?.empieza(dijoLaPersona.orEmpty()) // solo lo que dijo la persona autoriza (spec 006, promesas 601 y 611)
         if (announce) voice.narrate("¡Vamos! $goal")
         log.log("run", "▶ objetivo de ${goal.length} caracteres")
         val started = TimeSource.Monotonic.markNow()

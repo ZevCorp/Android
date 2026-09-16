@@ -508,12 +508,16 @@ class GraphApp : Application() {
                 while (true) {
                     val (goalBase, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
                     val goal = if (pendingContext != null) "$goalBase\n\n$pendingContext" else goalBase
+                    // Lo que la persona dictó, sin el andamiaje que escribimos nosotros: es lo ÚNICO que autoriza una acción
+                    // sensible (spec 006, promesa 611). El CONTEXTO INMEDIATO viaja en el objetivo para que el cerebro lo
+                    // entienda, pero no da permiso: si no, una propuesta que ella rechazó seguiría autorizando la acción.
+                    val dichoPorLaPersona = synchronized(goalPrompts) { goalPrompts.joinToString("\n") }
                     bubble?.showExecutionMic(true)
                     val (engine, brain) = newSession(service, user, resume = true)
                     val holder = arrayOf("")
                     val announce = round == 0 // en reencaminados no narra el objetivo largo
                     val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
-                        holder[0] = try { engine.run(goal, announce) }
+                        holder[0] = try { engine.run(goal, announce, dijoLaPersona = dichoPorLaPersona) }
                             catch (ce: CancellationException) { throw ce }
                             catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
                     }
@@ -589,7 +593,12 @@ class GraphApp : Application() {
                 LogBus.log("run", "🤝 acción anticipada: ${foresight.task}")
                 val goal = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de " +
                     "certeza total y le conviene): ${foresight.task}. Hazla de forma directa y para."
-                runCatching { newSession(service, user, resume = false, maxTurns = 12).first.run(goal, announce = false) }
+                // El objetivo lo redactamos nosotros, no la persona: no autoriza nada sensible por sí mismo, así que lo
+                // que sea sensible se le preguntará antes de hacerlo (spec 006, promesa 611).
+                runCatching {
+                    newSession(service, user, resume = false, maxTurns = 12).first
+                        .run(goal, announce = false, dijoLaPersona = null)
+                }
                     .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }
             }
         }

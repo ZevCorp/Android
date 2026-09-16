@@ -80,6 +80,8 @@ object PuertaDeTelemetria {
         "sin reintento", "paraste tú",
         // Lo que el cliente le devuelve al cerebro de una acción que no hizo (spec 006).
         "pregunté primero y no la hice", "dijiste que no", "no hay a quién preguntarle",
+        // El dato que sigue faltando y la respuesta que no se entendió (spec 006, promesas 612 y 614).
+        "sigue faltando el dato", "no te entendí",
     )
 
     /** Lo que va detrás de un número y lo vuelve medida: `42 caracteres`, `120 bytes`, `3 turnos`. */
