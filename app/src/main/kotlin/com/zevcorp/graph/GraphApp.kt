@@ -372,7 +372,17 @@ class GraphApp : Application() {
      * Todo se arma en [Ejecucion], sobre la puerta (spec 003): el motor, el MCP y el runner de workflows. Aquí
      * no se construye ningún ejecutor ni se entrega el servicio crudo (promesa 307).
      */
-    private fun newSession(service: GraphAccessibilityService, user: UserChannel?, resume: Boolean, maxTurns: Int = 40): Pair<ExecutionEngine, ThreadedBrain> {
+    private fun newSession(
+        service: GraphAccessibilityService,
+        user: UserChannel?,
+        resume: Boolean,
+        maxTurns: Int = 40,
+        /**
+         * Lo que la persona dijo en ESTA corrida, o `null` si no hay nada suyo. Viaja hasta el paso consciente de un
+         * workflow: el permiso es el de la corrida que lo dispara, no el de la última que hubo (spec 006, promesa 619).
+         */
+        dijoLaPersona: String?,
+    ): Pair<ExecutionEngine, ThreadedBrain> {
         // Subconsciente OFF: el Mcp no expone herramientas aprendidas ni workflows; solo el MCP base
         // (gestos + sistema). El aprendizaje los sigue grabando y consolidando, pero no se ejecutan.
         // Subconsciente ON: el runner de workflows saca los steps subconscientes por MCP (clic por árbol de
@@ -384,7 +394,7 @@ class GraphApp : Application() {
             workflows = if (subconsciousExecution) ArmadoDeEjecucion.Workflows(
                 lista = workflows.list(),
                 elementos = { service.elements() }, // árbol de UI vivo: para encadenar y saltar pasos ya cumplidos
-                consciente = { wf, step, context -> consciousStep(service, wf, step, context) },
+                consciente = { wf, step, context -> consciousStep(service, wf, step, context, dijoLaPersona) },
             ) else null,
             // Con las apps instaladas la compuerta sabe si un nombre de app es ambiguo (spec 006, promesa 602).
             apps = { withContext(Dispatchers.IO) { installedApps() } },
@@ -398,8 +408,17 @@ class GraphApp : Application() {
      * ya viene posicionada por los steps anteriores; el motor mira, hace el paso y devuelve el control
      * al runner (que sigue con el siguiente step, subconsciente o consciente). Si lo paras dentro, el runner
      * no sigue: la corrida entera termina (spec 003, promesa 316).
+     *
+     * EL PERMISO LLEGA DE LA CORRIDA QUE DISPARÓ EL WORKFLOW, no se vuelve a calcular aquí (spec 006, promesa 619): un paso
+     * disparado desde una corrida autónoma —que no autoriza nada— miraba, si no, palabras que la persona dijo para otra cosa.
      */
-    private suspend fun consciousStep(service: GraphAccessibilityService, workflow: Workflow, step: WorkflowStep, context: String): Boolean {
+    private suspend fun consciousStep(
+        service: GraphAccessibilityService,
+        workflow: Workflow,
+        step: WorkflowStep,
+        context: String,
+        dijoLaPersona: String?,
+    ): Boolean {
         // Sin workflows en esta sesión: un step no puede relanzar workflows (evita la recursión).
         val sesion = Ejecucion.arma(
             service, cerebro = { mcp -> newBrain(mcp) }, voz = voice, maxTurnos = 8,
@@ -413,8 +432,8 @@ class GraphApp : Application() {
             if (context.isNotBlank()) append(" Datos de esta ejecución: $context.")
         }
         // El objetivo de arriba lo escribimos nosotros con los datos del paso: nombra la acción, pero no la pidió nadie.
-        // Lo que autoriza algo sensible es lo que dijo la persona en esta corrida (spec 006, promesa 615).
-        return Ejecucion.pasoConsciente(goal, sesion.motor, dichoPorLaPersona())
+        // Lo que autoriza algo sensible es lo que dijo la persona en la corrida que lo disparó (spec 006, promesas 615 y 619).
+        return Ejecucion.pasoConsciente(goal, sesion.motor, dijoLaPersona)
     }
 
     /**
@@ -518,13 +537,16 @@ class GraphApp : Application() {
                     val (goalBase, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
                     val goal = if (pendingContext != null) "$goalBase\n\n$pendingContext" else goalBase
                     bubble?.showExecutionMic(true)
-                    val (engine, brain) = newSession(service, user, resume = true)
+                    // El permiso de esta corrida se lee UNA vez y viaja: al motor y, si dispara un workflow, a su paso
+                    // consciente (spec 006, promesas 611 y 619).
+                    val dijoLaPersona = dichoPorLaPersona()
+                    val (engine, brain) = newSession(service, user, resume = true, dijoLaPersona = dijoLaPersona)
                     val holder = arrayOf("")
                     val announce = round == 0 // en reencaminados no narra el objetivo largo
                     val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
                         // El CONTEXTO INMEDIATO viaja en el objetivo para que el cerebro lo entienda, pero no da permiso: lo
                         // único que autoriza algo sensible es lo que dictó la persona (spec 006, promesa 611).
-                        holder[0] = try { engine.run(goal, announce, dijoLaPersona = dichoPorLaPersona()) }
+                        holder[0] = try { engine.run(goal, announce, dijoLaPersona = dijoLaPersona) }
                             catch (ce: CancellationException) { throw ce }
                             catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
                     }
@@ -603,7 +625,7 @@ class GraphApp : Application() {
                 // El objetivo lo redactamos nosotros, no la persona: no autoriza nada sensible por sí mismo, así que lo
                 // que sea sensible se le preguntará antes de hacerlo (spec 006, promesa 611).
                 runCatching {
-                    newSession(service, user, resume = false, maxTurns = 12).first
+                    newSession(service, user, resume = false, maxTurns = 12, dijoLaPersona = null).first
                         .run(goal, announce = false, dijoLaPersona = null)
                 }
                     .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }

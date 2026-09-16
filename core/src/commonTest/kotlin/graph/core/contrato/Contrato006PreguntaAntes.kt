@@ -425,7 +425,7 @@ class Contrato006PreguntaAntes {
                 { cerebro }, Voz(), usuario = canal, maxTurnos = 1, pausa = { 0 },
             )
             var salida: Result<String>? = null
-            val trabajo = launch { salida = runCatching { armado.correr(MIRA) { sesion.motor.run(MIRA) } } }
+            val trabajo = launch { salida = runCatching { armado.correr(MIRA) { sesion.motor.run(MIRA, dijoLaPersona = MIRA) } } }
             // Con tope: una compuerta que no pregunta deja la prueba colgada, y colgada no dice qué falló.
             assertEquals(true, withTimeoutOrNull(2_000) { while (canal.preguntas.isEmpty()) yield(); true },
                 promesa(p) + " · no preguntó antes de ejecutar la acción sensible")

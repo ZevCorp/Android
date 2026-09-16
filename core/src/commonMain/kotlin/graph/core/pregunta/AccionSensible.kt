@@ -110,33 +110,28 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
          *
          * Un destinatario vacío no es un destinatario que no cruza: es un dato que falta, y lo pide la pregunta de dato
          * (promesa 603). Por eso pasa de largo por aquí.
+         *
+         * Y UN DESTINO CORTO NO SE AUTORIZA POR COINCIDIR (promesa 618). Con menos de 7 cifras no hay forma de saber si el
+         * número que trae el pedido es un destinatario: «cobré 89000 pesos, mándale un mensaje a mi mamá» con un `send_sms`
+         * al código corto «89000» coincidía en el largo y en el valor, y el monto autorizaba un mensaje a un código de
+         * banco. La igualdad exacta puede seguir sirviendo para descartar; para autorizar, nunca.
          */
         private fun correspondeElDestino(pedido: String, dichas: Set<String>, destino: String): Boolean {
             if (destino.isBlank()) return true
             val propias = palabras(destino).filter { it.length >= LARGO_DE_NOMBRE && it.any(Char::isLetter) }
             if (propias.isNotEmpty()) return propias.any { it in dichas }
             val suyo = soloCifras(destino)
-            if (suyo.length < CIFRAS_DE_DESTINO) return false
-            val posibles = numerosDe(pedido).filter { puedeSerDestino(it, suyo) }.distinctBy { comoSeCruza(it) }
+            if (suyo.length < CIFRAS_DE_TELEFONO) return false // lo corto se pregunta: un monto no dice a quién va (618)
+            val posibles = numerosDe(pedido).distinctBy { comoSeCruza(it) }
             val unico = posibles.singleOrNull() ?: return false
             return comoSeCruza(unico) == comoSeCruza(suyo)
         }
 
         /**
-         * Cómo se cruzan dos escrituras de un mismo destino: con 7 cifras o más, por las últimas 7, así el prefijo de país y
-         * los separadores no lo vuelven otro; con menos, por igualdad exacta. Antes un destino corto ni se comparaba —se
-         * exigían 7 cifras—, así que un código que el propio pedido traía preguntaba siempre.
+         * Cómo se cruzan dos escrituras de un mismo destino: por las últimas 7 cifras, así el prefijo de país y los
+         * separadores no lo vuelven otro. Nada más corto llega hasta aquí: un destino de menos de 7 cifras no autoriza.
          */
-        private fun comoSeCruza(numero: String) =
-            if (numero.length >= CIFRAS_DE_TELEFONO) numero.takeLast(CIFRAS_DE_TELEFONO) else numero
-
-        /**
-         * ¿Este número del pedido podría ser el destinatario de una acción que va a [suyo]? Un teléfono siempre; uno corto
-         * solo si tiene exactamente sus cifras. Lo que no puede ser un destino —«a las 8», «el bus 45», o una ristra más
-         * larga que un teléfono— no cuenta como destinatario, y así no vuelve ambiguo un pedido que no lo es.
-         */
-        private fun puedeSerDestino(delPedido: String, suyo: String) =
-            delPedido.length <= CIFRAS_MAXIMAS && (delPedido.length >= CIFRAS_DE_TELEFONO || delPedido.length == suyo.length)
+        private fun comoSeCruza(numero: String) = numero.takeLast(CIFRAS_DE_TELEFONO)
 
         /**
          * ¿El contenido de la ACCIÓN sale del pedido? Alguna palabra propia suya —larga y fuera del [RELLENO]— tiene que
@@ -154,21 +149,34 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
         /** Las cifras de un texto, sin separadores ni signos: «+57 310-445-9821» → «573104459821». */
         private fun soloCifras(texto: String) = texto.filter { it.isDigit() }
 
-        /** Los números del pedido, cada uno sin sus separadores: «mándale al 310 445 9821 que…» → «3104459821». */
+        /**
+         * Los destinatarios POSIBLES del pedido, cada uno sin sus separadores: «mándale al 310 445 9821 que…» →
+         * «3104459821». Lo que no puede ser un destino no cuenta, y así no vuelve ambiguo un pedido que no lo es: una
+         * [FECHA] (promesa 620), un número más corto que un teléfono («a las 8», «el bus 45», un código) y una ristra más
+         * larga que un teléfono, que son dos números pegados.
+         */
         private fun numerosDe(pedido: String): List<String> =
-            TELEFONO.findAll(pedido).map { soloCifras(it.value) }.filter { it.length >= CIFRAS_DE_DESTINO }.toList()
+            TELEFONO.findAll(pedido)
+                .filterNot { FECHA.matches(it.value) }
+                .map { soloCifras(it.value) }
+                .filter { it.length in CIFRAS_DE_TELEFONO..CIFRAS_MAXIMAS }
+                .toList()
 
         /** Un número escrito con separadores: cifras y lo que puede ir entre ellas, empezando y acabando en cifra. */
         private val TELEFONO = Regex("""\d[\d\s().\-]*\d""")
+
+        /**
+         * Una fecha escrita con guiones («2026-03-15», «15-03-2026»). El guion también separa un teléfono, así que sin esto
+         * la fecha se fundía en una ristra de 8 cifras y un pedido con fecha y un teléfono inequívoco quedaba «ambiguo» y
+         * preguntaba de más (promesa 620). Con barras no hace falta: [TELEFONO] no las junta.
+         */
+        private val FECHA = Regex("""\d{1,4}-\d{1,2}-\d{1,4}""")
 
         /**
          * Por cuántas cifras del final se reconocen dos escrituras del mismo teléfono. Siete es el número local de Colombia
          * sin indicativo: con menos, dos números distintos coincidirían por casualidad.
          */
         private const val CIFRAS_DE_TELEFONO = 7
-
-        /** El destino más corto que se compara: un código de tres cifras. Con menos es una cantidad, no un destinatario. */
-        private const val CIFRAS_DE_DESTINO = 3
 
         /** El destino más largo que existe (E.164). Una ristra más larga son dos números pegados, y no es un destinatario. */
         private const val CIFRAS_MAXIMAS = 15

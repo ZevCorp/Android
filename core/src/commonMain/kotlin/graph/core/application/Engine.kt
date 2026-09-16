@@ -60,10 +60,11 @@ class ExecutionEngine(
      *
      * [dijoLaPersona] es lo que la persona escribió o dictó, que NO siempre es el [goal]: una acción anticipada autónoma y
      * el «CONTEXTO INMEDIATO» de una propuesta los redacta el modelo. Solo esto autoriza lo sensible (spec 006, promesa
-     * 611); `null` cuando no hay nada suyo. El default es el objetivo porque la mayoría de las corridas son el pedido tal
-     * cual, pero quien arma un objetivo sintético tiene que decirlo: si no, el modelo se autoriza a sí mismo.
+     * 611); `null` cuando no hay nada suyo. NO TIENE DEFAULT, y es a propósito (promesa 621): el default era el objetivo, y
+     * así un llamador con un objetivo sintético se autorizaba a sí mismo con solo olvidarse. Quien corre el motor dice qué
+     * autoriza, y eso lo pide el compilador en vez de un comentario.
      */
-    suspend fun run(goal: String, announce: Boolean = true, dijoLaPersona: String? = goal): String {
+    suspend fun run(goal: String, announce: Boolean = true, dijoLaPersona: String?): String {
         val b = brain()
         b.begin(goal)
         compuerta?.empieza(dijoLaPersona.orEmpty()) // solo lo que dijo la persona autoriza (spec 006, promesas 601 y 611)
