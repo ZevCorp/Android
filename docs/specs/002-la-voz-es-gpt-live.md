@@ -108,6 +108,13 @@ si cambia uno, cambia el otro en el mismo commit.
 | 244 | La cola del altavoz guarda como mucho 30 segundos y al llenarse descarta lo más viejo; suena solo si tiene bytes, nunca por volumen, y callar la vacía en el acto. | B1b |
 | 245 | A la telemetría remota de la voz solo llega la medida: el largo de cada frase y el cierre del turno; ninguna frase, argumento ni texto del delegado sale del teléfono. | B1b |
 | 246 | La voz en vivo solo se arranca desde el panel de desarrollador y toma su clave del build interno, nunca de la configuración remota. | B1b |
+| 247 | Dónde estoy: la voz contesta con la app al frente, el tipo de pantalla y su tamaño, leídos del mismo estado que ya arma el turno de Graph y sin pedir captura; si no hay pantalla que leer lo dice y no se la inventa. | 2B2a |
+| 248 | Qué veo: las etiquetas visibles, cuántos elementos se pueden tocar y el campo enfocado salen del `uiContext` que ya viaja a Graph; un filtro de hasta 60 caracteres contesta si algo está en pantalla sin mirar tildes ni mayúsculas, y lo que la pantalla no deja leer se dice tal cual. | 2B2a |
+| 249 | Qué puedo hacer: el catálogo de capacidades se deriva del catálogo real de acciones, así que una acción nueva aparece sin tocar la voz; va agrupado por vía y cabe en un resultado aunque una descripción sea enorme. | 2B2a |
+| 250 | Las tres herramientas de la voz solo leen: no reciben manos, así que ninguna toca la pantalla ni abre nada, y cualquier otra llamada del delegado se contesta «todavía no» sin ejecutar nada. | 2B2a |
+| 251 | La sesión abre con las tres herramientas dentro de la delegación y ninguna en la voz; declararlas no gasta items, así que la conversación empieza en cero de los 128, y la apertura entera cabe de sobra en los 32 768 bytes de la sesión. | 2B2a |
+| 252 | Leer no congela la charla: las tres son de control, así que una lectura retenida no frena a las que vienen detrás, ni el micrófono, ni el cierre del turno. | 2B2a |
+| 253 | Del teléfono solo sale la medida de lo que se mira —cuántas etiquetas y cuántos caracteres—: ni una etiqueta, ni el filtro, ni lo que la pantalla muestra llegan al log local, y lo que llega a la telemetría remota pasa por el filtro de la voz y por la puerta sin una palabra de la pantalla. | 2B2a |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -176,6 +183,13 @@ salida que no llama a `acabar()`— da rojo con su nombre en vez de dejar el con
 | 244 | Recién nacida y con un trozo vacío no suena. 31 segundos cuyas muestras dicen qué segundo son: quedan 1 440 000 B, se cuentan 48 000 descartados, lo primero que sale es el segundo 1 y lo último el 30. Un trozo de 35 s sobre uno de 1 s: se queda el final del grande (sale primero su segundo 5) y se cuentan 6 s. 100 ms de ceros en cola suenan, y la compuerta los ve sonando. `sacar` da muestras enteras (4799 pedidos son 4798), en orden a través de trozos y sin rellenar. Callar deja la cola sin nada que sacar, y lo que llega después suena solo |
 | 245 | Una conversación entera con el canal con guion: el usuario dice su clave con tildes y un emoji, el delegado pide una herramienta con argumentos y escribe texto, llega un evento desconocido con un secreto y Ü contesta. El log local lo trae todo; pasado por el filtro, ni una palabra de eso: salen `usuario dijo: 37 caracteres` y `Ü dijo: 32 caracteres` (el emoji cuenta uno), del evento desconocido solo su tipo, y cada línea sin contenido —el cierre de la escucha y de la sesión incluidos— pasa igual. A mano: el `toString` de `Llamada`, `Resultado`, `Pide`, `DiceU` y `DiceElUsuario`, un JSON del canal y un «dijo:» a mitad de línea no sacan su contenido; fuera de los tags `voz-` no se toca nada |
 | 246 | Fuentes de `app` sin comentarios: el botón «Voz en vivo (prueba)» y toda aparición de `VozEnVivoDev` —calificada, en un `typealias` o en un import con `as`— están dentro de `if (mode == MODE_DEV) { … }`, salvo el import simple; `MODE_DEV` es «dev» y `mode` solo sale de la preferencia. Ningún otro archivo nombra a `VozEnVivoDev` ni a `ConversacionViva`, y en el suyo la conversación vive dentro de la clase. En `VozEnVivoDev.kt` no aparece «remote»; la credencial es `claveDelBuildInterno()`, una expresión que solo nombra `prefs.getString("openaiKey", …)` y `BuildConfig.DEFAULT_OPENAI_KEY`. `LogBus` nombra una vez a `Telemetry` y a `enqueue`, en `TelemetriaDeVoz.paraRemoto(tag, message)?.let { Telemetry.enqueue(tag, it) }`, sin reasignar `tag` ni `message`; nadie más en `app` encola ni declara otro `TelemetriaDeVoz`. Y parar no depende de la pantalla: `detener()` se llama una vez, dentro de `alcance.launch { … }`, con `alcance` propio de la voz |
+| 247 | Un `TurnScreenState` armado como el del turno (paquete·título, el `uiContext` de la accesibilidad, 1080×2400): la respuesta nombra la app, el tipo de pantalla, el teclado y el tamaño, y nunca pide `screenshot`. Sin estado que leer sale la frase de que no puede ver; un `uiContext` de «sin contenido accesible» sale tal cual |
+| 248 | El `uiContext` de una pantalla con 12 tocables, 2 campos, uno enfocado y 28 etiquetas: salen las etiquetas y las cuentas. Filtros «enviar», «ENVIAR» y «camara» sobre «Cámara»: sí, con lo que encontró; «guardar», que no está: no, y lo dice. Un filtro de 300 caracteres se recorta a 60. Un `uiContext` con otro formato no se inventa: vuelve tal cual |
+| 249 | Un `Mcp` de verdad sobre manos falsas: cada nombre de `tools` aparece en el texto, agrupado por vía. Se añade una herramienta aprendida y aparece sin tocar la voz. Con la descripción de 1 500 caracteres de `check_simit_fines` y 40 herramientas de relleno, el mensaje que viaja sigue por debajo del tope de 32 768 B |
+| 250 | El ejecutor se construye sin teléfono, gestos ni sistema: no hay con qué tocar. `pulsar`, `escribir`, `launch_app`, `go_home` y un nombre inventado se contestan «todavía no», y el catálogo real que se le pasó no se llama ni una vez |
+| 251 | La apertura con el catálogo, parseada: sus `tools` son las tres, la sesión no lleva `tools` fuera de la delegación, `itemsEnSesion` es 0 con la sesión ya confirmada, y los bytes UTF-8 del `session.start` se cuentan contra los 32 768 de la sesión |
+| 252 | Una lectura retenida y detrás otra llamada y un trozo de micrófono: la segunda se contesta y el audio viaja con la primera aún retenida; al soltarla salen su salida y un único `response.create`, y el turno cierra |
+| 253 | Una pantalla con etiquetas sembradas («Zorbax», «Qwyk» y un teléfono) y un filtro secreto: ninguna línea del log trae un trozo de ellos, solo cuentas y largos; y cada línea pasada por `TelemetriaDeVoz.paraRemoto` y por `PuertaDeTelemetria` conserva su medida sin una palabra de la pantalla |
 
 ---
 
@@ -257,6 +271,33 @@ corrida a mano en el teléfono como nivel 4.
 
 Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer …`) en un `Map`, y `Llamada` y
 `Hecho.Falla` son data classes cuyo `toString` incluye los argumentos y el mensaje. **Nunca se loguean enteros.**
+
+### Fase 2B2a — ojos y catálogo para el delegado (esta corrida)
+
+El delegado abría **sin herramientas** y lo decía en su propio prompt. Esta fase le da tres, todas de **solo lectura**:
+dónde está, qué ve y qué podrá hacer. Ejecutar es la fase siguiente; aquí no hay manos que dar.
+
+Lo puro en `core/src/commonMain/kotlin/graph/core/voz/`, y en `app` solo el cable:
+
+- `OjosDeLaVoz.kt` — `donde_estoy` y `que_veo` sobre el **mismo `TurnScreenState`** que arma el turno de Graph
+  (`screen`, `uiContext`, tamaño): no hay una segunda lectura de la pantalla que pueda decir otra cosa, y `screenshot`
+  no se pide nunca (`mira = false`). Lo que no encaja con el formato del `uiContext` vuelve tal cual: inventar lo que
+  hay en pantalla es justo lo que la persona de la voz prohíbe.
+- `CatalogoDeVoz.kt` — las tres `Utensilio` que van en la delegación, y el texto de capacidades **derivado del catálogo
+  real de acciones** (`Mcp.tools`, el mismo que ve el cerebro), agrupado por vía y acotado: una acción nueva aparece
+  sola, sin una lista a mano que se desincronice. Ninguna de las tres actúa en la pantalla, así que son de control y
+  corren en el acto (promesa 234): una lectura lenta no deja mudo al delegado.
+- `HerramientasDeVoz.kt` — el ejecutor que la conversación llama. **No recibe manos**: solo el estado de pantalla y el
+  catálogo. Lo que pediría ejecutar se contesta «todavía no», sin tocar nada.
+- `app/…/voice/live/VozEnVivoDev.kt` — le pasa a la conversación el catálogo, el ejecutor y `actuaEnPantalla`; el estado
+  sale del `Phone` que ya expone la app y el catálogo, de `Ejecucion.herramientas(…)`, que lo arma sobre la puerta
+  (spec 003, promesa 307). Leer la pantalla pasa siempre por la puerta: mirar no es actuar.
+
+Al log de la voz solo van medidas —cuántas etiquetas, cuántos caracteres—: una etiqueta es lo que la pantalla muestra, y
+el log acaba en la telemetría remota (spec 005). Por eso `donde_estoy`, `que_veo` y `que_puedo_hacer` se suman a la lista
+cerrada de `PuertaDeTelemetria` con su promesa, y `etiquetas` pasa a ser sustantivo de medida.
+
+Pone verdes: **247-253**.
 
 ---
 
