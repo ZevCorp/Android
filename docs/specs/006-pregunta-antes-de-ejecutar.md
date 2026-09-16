@@ -1,6 +1,7 @@
 # Plan de implementación: pregunta antes de ejecutar — el cliente frena lo que no le pediste y pide el contexto que le falta
 
-Estado: **fases E1 y E2 implementadas** (2026-09-16; promesas 601-608) · Nace de un pedido del Capitán (2026-09-16): «me
+Estado: **fases E1 y E2 implementadas** (2026-09-16; promesas 601-608 verdes, contrato de 128 promesas; cada una se vio ROJA
+con un sabotaje real — 13 sabotajes, uno por fila de la tabla de abajo) · Nace de un pedido del Capitán (2026-09-16): «me
 gustaría que si no sabe qué hacer me pregunte, que pueda tener claro algo antes de ejecutar, que pida contexto para hacer
 las tareas bien» · Rama: `yokh/pregunta-antes`
 
@@ -143,7 +144,7 @@ la arma él, y ningún archivo de la app la construye.
 
 | # | Cómo se juzga sin tocar nada |
 |---|---|
-| 601 | Con el armado de verdad y el pedido «abre el chat de Zorbax»: `send_sms`, `send_email`, `call`, `share_text` y una aprendida que toca «Enviar» → ninguna llega al teléfono, cada una deja una pregunta de clase permiso y el resultado empieza con «pregunté primero y no la hice». Con el pedido «mándale a Ana que llego tarde» y `send_sms` a un número con «Llego tarde» → llega al teléfono y no se pregunta nada; el mismo pedido con `send_email` a «jefe@…», con otro contenido, o con `call` → pregunta. `dial` no pregunta nunca, y un `scroll`, un `tap` y `go_home` tampoco |
+| 601 | Con el armado de verdad y el pedido «mira el chat de Zorbax»: `send_sms`, `send_email`, `call`, `share_text` y una aprendida que toca «Enviar» → ninguna llega al teléfono, cada una deja una pregunta de clase permiso y el resultado empieza con «pregunté primero y no la hice». Con el pedido «mándale a Ana que llego tarde» y `send_sms` a un número con «Llego tarde» → llega al teléfono y no se pregunta nada; el mismo pedido con `send_email` a «jefe@…», con otro contenido, o con `call` → pregunta. `dial` no pregunta nunca, y un `scroll`, un `tap` y `go_home` tampoco |
 | 602 | El catálogo de apps («Bancolombia», «Banco de Bogotá», «Nequi») con `launch_app app=Banco` → una pregunta de clase cuál con exactamente esas dos, en ese orden, y ninguna inventada; con `app=Nequi` no pregunta; con `app=Bancolombia` (igual a un candidato) tampoco. Una aprendida con `taps=Juan` y `uiContext` con «Juan Pérez · Juan Carlos · Archivar» → pregunta con esos dos; con `taps=Archivar` no. Y las fuentes de la app: `GraphAccessibilityService` escribe «etiquetas visibles: » y une con « · », que es lo que el cliente parsea (`Vista.ETIQUETAS`) |
 | 603 | `set_alarm` sin `hour` → pregunta por la hora y **no** llegan las 8:00 al teléfono; con `hour=7` pasa. `create_event` sin `start` ni `title` → una sola pregunta, la del cuándo; con `start` puesto y sin `title`, la del título. `set_timer`, `send_sms`, `web_search`, `directions`, `open_url` y `launch_app` sin su campo → una pregunta cada uno, con el campo que falta |
 | 604 | Un canal que se queda esperando (`CompletableDeferred`): con el armado de verdad, un turno de dos acciones y `maxTurns=1`, mientras espera nada llega al teléfono, el cerebro dio un solo turno y la corrida no termina (300 ms reales después sigue viva y con la pregunta pendiente). Después, `armado.parar("píldora")` con la gracia del test → la corrida termina en `Paraste`, el teléfono sigue sin recibir nada y la respuesta que llega tarde no ejecuta nada |
@@ -160,10 +161,10 @@ la arma él, y ningún archivo de la app la construye.
 | 601 | el pedido autoriza con solo nombrar la acción (no se mira el destinatario) | roja: el correo al jefe no pregunta |
 | 602 | la pregunta de «cuál» ofrece los candidatos que no vio (lista fija) | roja: las opciones no son las que vio |
 | 602 | dos candidatos ya no son ambigüedad (basta uno) | roja: `launch_app app=Banco` no pregunta |
-| 603 | los campos que faltan se preguntan todos de una | roja: `create_event` deja dos preguntas |
+| 603 | el dato que falta se pide por el final de la lista, no por el más importante | roja: `create_event` pregunta por el título y no por el cuándo |
 | 603 | la hora que falta vuelve a caer en el default | roja: la alarma de las 8 llega al teléfono |
 | 604 | la espera de la respuesta se acota con un plazo que sigue sin respuesta | roja: la corrida termina sola y actúa |
-| 605 | la respuesta va por `inform` en vez de por el `results` de la acción | roja: el turno 2 no la ve en sus `results` |
+| 605 | el resultado de la acción frenada no lleva lo que la persona contestó | roja: el turno 2 no ve la respuesta en sus `results` |
 | 606 | el registro de lo ya preguntado se vacía en cada turno | roja: la misma acción pregunta dos veces |
 | 606 | una negación cuenta como autorización | roja: «no» ejecuta la acción |
 | 607 | sin canal, la acción sensible se ejecuta «con tu mejor criterio» | roja: el `send_sms` llega al teléfono |
