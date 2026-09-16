@@ -1,11 +1,17 @@
 package graph.core.contrato
 
 import graph.core.contrato.Contrato006PreguntaAntes.Canal
+import graph.core.contrato.Contrato006PreguntaAntes.Companion.CORREO_DE_ANA
+import graph.core.contrato.Contrato006PreguntaAntes.Companion.LLEGO_TARDE
+import graph.core.contrato.Contrato006PreguntaAntes.Companion.MANDA
+import graph.core.contrato.Contrato006PreguntaAntes.Companion.MIRA
+import graph.core.contrato.Contrato006PreguntaAntes.Companion.NUMERO
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.corrida
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.pantallaCon
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.promesa
 import graph.core.domain.AgentAction
 import graph.core.domain.BrainTurn
+import graph.core.pregunta.CompuertaDePregunta
 import graph.core.pregunta.Vista
 import java.io.File
 import kotlin.test.Test
@@ -87,6 +93,110 @@ class Contrato006LoQueVe {
             promesa(p) + " · el cliente no lee las etiquetas del formato de la app",
         )
         assertEquals(emptyList(), Vista.etiquetasDe("sin contenido accesible (pantalla vacía o protegida)"), promesa(p) + " · sin etiquetas no se inventa ninguna")
+    }
+
+    /**
+     * QUIÉN ESCRIBIÓ EL PEDIDO (promesa 611). El objetivo que llega al motor puede llevar texto que redactó el modelo —la
+     * acción anticipada autónoma y el `CONTEXTO INMEDIATO` de una propuesta—, y la compuerta lo leía como si fuera el
+     * permiso de la persona. Se juzga con las dos cosas: el comportamiento, y que la app marque de verdad el origen.
+     */
+    @Test
+    fun promesa611() = corre {
+        val p = 611
+        val fin = BrainTurn(done = true, text = "fin")
+        val accion = AgentAction.Mcp("send_email", mapOf("to" to CORREO_DE_ANA, "body" to LLEGO_TARDE))
+
+        // Lo que la persona dictó autoriza: es el caso de siempre, y tiene que seguir pasando sin preguntar.
+        val suyo = corrida(MANDA, BrainTurn(actions = listOf(accion)), fin)
+        assertEquals(listOf("sendEmail"), suyo.entradas, promesa(p) + " · no hizo lo que la persona le pidió")
+        assertEquals(emptyList(), suyo.preguntas, promesa(p) + " · preguntó por lo que la persona sí pidió")
+
+        // La acción anticipada autónoma: el objetivo lo redacta el modelo (`GraphApp.anticipate`) y no autoriza nada.
+        val autonoma = corrida(
+            MANDA,
+            BrainTurn(actions = listOf(accion)),
+            fin,
+            objetivo = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de certeza total y le " +
+                "conviene): $MANDA. Hazla de forma directa y para.",
+            dijoLaPersona = null,
+        )
+        assertEquals(emptyList(), autonoma.entradas, promesa(p) + " · el objetivo que escribió el modelo se autorizó a sí mismo")
+        assertEquals(1, autonoma.preguntas.size, promesa(p) + " · no preguntó por lo que nadie le pidió: ${autonoma.preguntas}")
+
+        // Peor: la propuesta que la persona RECHAZÓ seguía autorizando, porque el contexto pendiente lleva la frase.
+        val rechazada = corrida(
+            "no, déjalo",
+            BrainTurn(actions = listOf(accion)),
+            fin,
+            objetivo = "no, déjalo\n\nCONTEXTO INMEDIATO: hace un momento le PROPUSISTE por voz al usuario: " +
+                "«¿Le mando el mensaje a Ana?» (la tarea que harías, en la app Mensajes: «$MANDA»).",
+            dijoLaPersona = "no, déjalo",
+        )
+        assertEquals(emptyList(), rechazada.entradas, promesa(p) + " · una propuesta rechazada autorizó la acción")
+        assertEquals(1, rechazada.preguntas.size, promesa(p) + " · no preguntó: ${rechazada.preguntas}")
+
+        // Y la app marca el origen en sus DOS llamadas al motor: sin eso, el core no tiene con qué distinguirlo.
+        val graphApp = fuenteDeLaApp("GraphApp.kt")
+        assertEquals(2, Regex("""\.run\(goal[^)]*dijoLaPersona""").findAll(graphApp).count(),
+            promesa(p) + " · GraphApp no marca el origen del pedido en sus dos llamadas a run")
+        assertTrue("dijoLaPersona = null" in graphApp,
+            promesa(p) + " · la acción anticipada autónoma no dice que no la pidió nadie")
+    }
+
+    /**
+     * UNA DUDA NO PUEDE TRABAR LA APP (promesa 613). El diálogo de la pantalla era `setCancelable(false)` y vivía atado al
+     * Activity: girar el teléfono con la duda puesta dejaba la corrida viva para siempre y todo lo demás contestando «ya hay
+     * una tarea en curso». Se juzga el comportamiento del núcleo y, por fuente, que la pantalla deje cerrarla y la suelte.
+     */
+    @Test
+    fun promesa613() = corre {
+        val p = 613
+        val fin = BrainTurn(done = true, text = "fin")
+        val sensible = AgentAction.Mcp("send_sms", mapOf("number" to NUMERO, "message" to LLEGO_TARDE))
+
+        // El canal se fue con la pantalla: lo sensible no se hace, y la corrida TERMINA en vez de quedarse colgada.
+        val sinPantalla = corrida(
+            MIRA,
+            BrainTurn(actions = listOf(sensible, AgentAction.Tap(1, 1))),
+            fin,
+            canal = Canal(revienta = true),
+        )
+        assertEquals(listOf("tap"), sinPantalla.entradas, promesa(p) + " · mandó el mensaje con la duda sin canal")
+        assertTrue(sinPantalla.salida.isSuccess, promesa(p) + " · la corrida reventó o quedó colgada: ${sinPantalla.salida}")
+        assertEquals(2, sinPantalla.cerebro.recibidos.size, promesa(p) + " · no pidió el turno siguiente")
+        val resultado = sinPantalla.resultados(1).first()
+        assertTrue(resultado.startsWith(CompuertaDePregunta.SIN_CANAL), promesa(p) + " · el cerebro no se enteró: $resultado")
+
+        // Cerrar la duda es contestar «»: cuenta como no, y lo sensible no se ejecuta.
+        val cerrada = corrida(MIRA, BrainTurn(actions = listOf(sensible)), fin, canal = Canal(""))
+        assertEquals(emptyList(), cerrada.entradas, promesa(p) + " · cerrar la duda dejó pasar la acción")
+        assertEquals(1, cerrada.preguntas.size, promesa(p) + " · ${cerrada.preguntas}")
+
+        // Y la pantalla de la app: la duda se puede cerrar, cerrarla contesta «», y la pantalla que muere la suelta.
+        val ask = bloqueDeAsk(fuenteDeLaApp("MainActivity.kt"))
+        assertTrue("setCancelable(false)" !in ask, promesa(p) + " · la duda vuelve a ser imposible de cerrar")
+        assertTrue("setOnCancelListener" in ask, promesa(p) + " · cerrar la duda no contesta nada: la corrida se queda esperando")
+        assertTrue(DUDAS in ask, promesa(p) + " · la duda no queda anotada, así que nadie puede soltarla si la pantalla muere")
+        val pantalla = fuenteDeLaApp("MainActivity.kt")
+        assertTrue(Regex("""onDestroy\(\)[\s\S]{0,600}""" + DUDAS).containsMatchIn(pantalla),
+            promesa(p) + " · la pantalla que muere deja la duda en el aire y la corrida colgada")
+
+        // Ningún plazo la resuelve por su cuenta: eso lo prohíbe la 604, y vale para las dos vías de preguntar.
+        for (nombre in listOf("MainActivity.kt", "FloatingBubble.kt")) {
+            val bloque = bloqueDeAsk(fuenteDeLaApp(nombre))
+            assertTrue("withTimeout" !in bloque, promesa(p) + " · «$nombre» resuelve la duda con un plazo (prohibido por la 604)")
+        }
+    }
+
+    /** Dónde la pantalla anota las dudas en el aire para poder contestarlas si se muere (promesa 613). */
+    private val DUDAS = "dudasEnElAire"
+
+    /** El `ask` de un canal de la app, hasta el separador de sección siguiente: se juzga ESE bloque, no el archivo entero. */
+    private fun bloqueDeAsk(fuente: String): String {
+        val desde = fuente.indexOf("override suspend fun ask(")
+        if (desde < 0) fail("no encuentro el «ask» del canal en la fuente")
+        val hasta = fuente.indexOf("\n    /* ----------", desde)
+        return fuente.substring(desde, if (hasta > desde) hasta else fuente.length)
     }
 
     /**

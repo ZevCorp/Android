@@ -50,6 +50,12 @@ class Contrato006PreguntaAntes {
             606 to "No se pregunta dos veces lo mismo en la misma corrida: contestado que sí, la misma acción pasa sin preguntar; contestado que no, o sin contestar, no se ejecuta ni se vuelve a preguntar.",
             607 to "Sin canal para preguntar, una acción sensible no se ejecuta: el cerebro se entera por el resultado y la corrida sigue.",
             608 to "De una pregunta del cliente solo sale la medida: su clase y los largos. Ni el texto de la pregunta, ni la respuesta, ni el destinatario ni las opciones salen al log, y lo que sale pasa entero la puerta de la telemetría.",
+            609 to "Un pedido autoriza una acción sensible solo si el destinatario y el contenido de la acción se corresponden con los del pedido: un destinatario que no aparece en el pedido, o que no hay forma de comparar, no autoriza; un teléfono se compara sin separadores ni prefijo de país.",
+            610 to "La autorización vale para esa acción con ese destinatario Y ese contenido: un segundo mensaje al mismo destinatario con otro texto vuelve a preguntar, y un «sí» a un compartir no autoriza el compartir siguiente.",
+            611 to "Solo autoriza el texto que escribió o dictó la persona: lo que redactó el modelo —una acción anticipada autónoma, o el contexto de una propuesta que la persona rechazó— no autoriza nada, y lo sensible se pregunta igual.",
+            612 to "«Ya contestado» solo salta el permiso: un dato que sigue faltando y un nombre que sigue siendo ambiguo no se dan por resueltos —la acción no se ejecuta ni cae en el default de las 8— y tampoco se preguntan en bucle.",
+            613 to "Una duda sin respuesta no traba la app: la persona puede cerrarla y cerrarla cuenta como «no», y si el canal desaparece la corrida termina sin ejecutar lo sensible, sin plazo que decida por su cuenta.",
+            614 to "Una respuesta ambigua no se asume: se vuelve a preguntar una vez y, si sigue ambigua, no se ejecuta. Una negación cuenta cuando abre la respuesta, no en cualquier posición, y una respuesta vacía sigue siendo un no.",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
@@ -64,6 +70,24 @@ class Contrato006PreguntaAntes {
         const val LLEGO_TARDE = "Llego tarde"
         const val KINVARA = "Kinvara al mediodía"
         const val CORREO = "qwyk@buzon.co"
+
+        /* Lo que trajo la E3, tras el control: un destinatario que SÍ se cruza con el pedido, el mismo número escrito de
+           otra forma, y una respuesta que dice que sí y que no a la vez. */
+
+        /** El correo de quien el pedido nombra: «ana» está en el pedido, así que este destinatario sí se corresponde (609). */
+        const val CORREO_DE_ANA = "ana@parlante.co"
+
+        /** El pedido que trae el número: sin un número en el pedido, el de la acción no tiene con qué cruzarse (609). */
+        const val MANDA_AL_NUMERO = "mándale al 310 445 9821 que llego tarde"
+
+        /** El mismo [NUMERO] como lo escribe un contacto: separadores y prefijo de país no lo vuelven otro (609). */
+        const val NUMERO_CON_PREFIJO = "+57 310-445-9821"
+
+        /** Otro texto para compartir: el «sí» del primero no lo autoriza (610). */
+        const val OTRO_TEXTO = "Wexel a las seis"
+
+        /** Dice que no y que sí en la misma frase: no se asume ninguna de las dos, se vuelve a preguntar (614). */
+        const val AMBIGUA = "claro, no hay problema, mándalo"
 
         /** Cómo la pantalla lista lo que se ve (`GraphAccessibilityService.uiContext`). */
         fun pantallaCon(vararg etiquetas: String) =
@@ -90,6 +114,10 @@ class Contrato006PreguntaAntes {
             conCanal: Boolean = true,
             apps: List<String> = emptyList(),
             pantalla: String = "",
+            /** El objetivo que recibe el motor. Por defecto es el pedido; se separan para juzgar quién lo escribió (611). */
+            objetivo: String = pedido,
+            /** Lo que la persona escribió o dictó. `null` = nada suyo: el objetivo lo redactó entero el modelo (611). */
+            dijoLaPersona: String? = pedido,
         ): Escena {
             val diario = Diario()
             val mano = Mano()
@@ -105,7 +133,7 @@ class Contrato006PreguntaAntes {
                 aprendidas = listOf(LearnedTool("contactos", "abre un contacto", listOf("Zorbax Qwyk"))),
                 apps = { apps },
             )
-            val salida = runCatching { armado.correr(pedido) { sesion.motor.run(pedido) } }
+            val salida = runCatching { armado.correr(objetivo) { sesion.motor.run(objetivo, dijoLaPersona = dijoLaPersona) } }
             return Escena(mano, canal, cerebro, diario, salida)
         }
     }
@@ -122,12 +150,16 @@ class Contrato006PreguntaAntes {
         }
     }
 
-    /** El canal que YA existe (`UserChannel`), falso: anota cada pregunta y contesta lo que le pusieron, en orden. */
-    class Canal(vararg respuestas: String) : UserChannel {
+    /**
+     * El canal que YA existe (`UserChannel`), falso: anota cada pregunta y contesta lo que le pusieron, en orden. Con
+     * [revienta] se va al preguntar, como la pantalla que muere con la duda puesta (promesa 613).
+     */
+    class Canal(vararg respuestas: String, private val revienta: Boolean = false) : UserChannel {
         private val respuestas = respuestas.toList()
         val preguntas = mutableListOf<String>()
         override suspend fun ask(question: String): String {
             preguntas += question
+            if (revienta) throw IllegalStateException("la pantalla se fue con la duda puesta")
             return respuestas.getOrElse(preguntas.size - 1) { respuestas.lastOrNull() ?: "" }
         }
     }
@@ -157,6 +189,13 @@ class Contrato006PreguntaAntes {
     private fun sms(numero: String = NUMERO, texto: String = LLEGO_TARDE) =
         AgentAction.Mcp("send_sms", mapOf("number" to numero, "message" to texto))
 
+    private fun correo(a: String = CORREO, texto: String = LLEGO_TARDE) =
+        AgentAction.Mcp("send_email", mapOf("to" to a, "body" to texto))
+
+    private fun llamada(numero: String = NUMERO) = AgentAction.Mcp("call", mapOf("number" to numero))
+
+    private fun comparte(texto: String = KINVARA) = AgentAction.Mcp("share_text", mapOf("text" to texto))
+
     private fun fin() = BrainTurn(done = true, text = "fin")
 
     /* ---------- Las promesas ---------- */
@@ -185,9 +224,10 @@ class Contrato006PreguntaAntes {
         assertEquals(5, frenada.resultados(1).count { it.startsWith(CompuertaDePregunta.PREGUNTE) },
             promesa(p) + " · el cerebro no se enteró: ${frenada.resultados(1)}")
 
-        // Lo que el pedido SÍ pidió, con ese destinatario y ese contenido: se hace, y no se pregunta nada.
-        val pedida = corrida(MANDA, BrainTurn(actions = listOf(sms())), fin())
-        assertEquals(listOf("sendSms"), pedida.entradas, promesa(p) + " · no hizo lo que le pidieron: ${pedida.diario.lineas}")
+        // Lo que el pedido SÍ pidió, con ese destinatario y ese contenido: se hace, y no se pregunta nada. El destinatario
+        // tiene que cruzarse con el pedido —«ana» está en él—: un número que el pedido no nombra ya no basta (promesa 609).
+        val pedida = corrida(MANDA, BrainTurn(actions = listOf(correo(CORREO_DE_ANA))), fin())
+        assertEquals(listOf("sendEmail"), pedida.entradas, promesa(p) + " · no hizo lo que le pidieron: ${pedida.diario.lineas}")
         assertEquals(emptyList(), pedida.preguntas, promesa(p) + " · preguntó por lo que ya le habían pedido")
 
         // El mismo pedido no autoriza otro destinatario, ni otro contenido, ni otra clase de acción.
@@ -403,6 +443,134 @@ class Contrato006PreguntaAntes {
         assertEquals(1, escena.preguntasDeClase("permiso"), promesa(p) + " · ${escena.diario.lineas}")
         assertEquals(1, escena.preguntasDeClase("cual"), promesa(p) + " · ${escena.diario.lineas}")
         assertEquals(1, escena.preguntasDeClase("dato"), promesa(p) + " · ${escena.diario.lineas}")
+    }
+
+    @Test
+    fun promesa609() = corre {
+        val p = 609
+        // Los seis casos que el control reprodujo contra la tabla real: los seis ejecutaban sin preguntar.
+        for ((que, pedido, accion) in listOf(
+            Triple("leer mensajes no autoriza mandar uno", "léeme los mensajes de Zorbax", sms(texto = "Ya voy")),
+            Triple("revisar el correo no autoriza mandar un SMS", "revisa mi correo", sms(texto = "Ok gracias")),
+            Triple("llamar a mamá no autoriza llamar a otro número", "llama a mamá", llamada(OTRO_NUMERO)),
+            Triple("«marca» no autoriza una llamada", "busca la marca de este producto", llamada(OTRO_NUMERO)),
+            Triple("el número de otro no es el destinatario pedido", MANDA, sms(numero = OTRO_NUMERO)),
+            Triple("el correo del jefe no es Ana", MANDA, correo("jefe@empresa.com")),
+        )) {
+            val escena = corrida(pedido, BrainTurn(actions = listOf(accion)), fin())
+            assertEquals(emptyList(), escena.entradas, promesa(p) + " · $que: salió del teléfono sin preguntar")
+            assertEquals(1, escena.preguntas.size, promesa(p) + " · $que: no preguntó · ${escena.preguntas}")
+            assertEquals(1, escena.preguntasDeClase("permiso"), promesa(p) + " · $que · ${escena.diario.lineas}")
+        }
+
+        // Lo que sí se corresponde pasa: un destinatario con letras que el pedido nombra…
+        val conNombre = corrida(MANDA, BrainTurn(actions = listOf(correo(CORREO_DE_ANA))), fin())
+        assertEquals(listOf("sendEmail"), conNombre.entradas, promesa(p) + " · no mandó lo que el pedido sí pedía")
+        assertEquals(emptyList(), conNombre.preguntas, promesa(p) + " · preguntó por el destinatario que el pedido nombra")
+
+        // …y un teléfono, que se compara como número: ni los separadores ni el prefijo de país lo vuelven otro.
+        val conNumero = corrida(MANDA_AL_NUMERO, BrainTurn(actions = listOf(sms(numero = NUMERO_CON_PREFIJO))), fin())
+        assertEquals(listOf("sendSms"), conNumero.entradas, promesa(p) + " · el mismo número escrito distinto no autorizó: ${conNumero.preguntas}")
+        assertEquals(emptyList(), conNumero.preguntas, promesa(p) + " · preguntó por el número que el propio pedido trae")
+
+        // Y el número del pedido autoriza el SUYO, no cualquiera.
+        val otro = corrida(MANDA_AL_NUMERO, BrainTurn(actions = listOf(sms(numero = OTRO_NUMERO))), fin())
+        assertEquals(emptyList(), otro.entradas, promesa(p) + " · un número del pedido autorizó otro distinto")
+        assertEquals(1, otro.preguntas.size, promesa(p) + " · ${otro.preguntas}")
+    }
+
+    @Test
+    fun promesa610() = corre {
+        val p = 610
+        // Turno 1 pregunta y la persona autoriza; turno 2 repite la MISMA acción y pasa (promesas 605 y 606); turno 3 va al
+        // mismo destinatario con OTRO texto, y ese «sí» no era de ese texto: vuelve a preguntar.
+        val mensajes = corrida(
+            MIRA,
+            BrainTurn(actions = listOf(sms())),
+            BrainTurn(actions = listOf(sms())),
+            BrainTurn(actions = listOf(sms(texto = KINVARA))),
+            fin(),
+            canal = Canal("sí, mándaselo", "no"),
+        )
+        assertEquals(listOf("sendSms"), mensajes.entradas, promesa(p) + " · el segundo texto salió con el permiso del primero")
+        assertEquals(2, mensajes.preguntas.size, promesa(p) + " · no preguntó por el texto nuevo: ${mensajes.preguntas}")
+
+        // Y compartir, que no tiene destinatario: sin el contenido en la llave, su llave quedaba vacía y un «sí»
+        // autorizaba cualquier compartir del resto de la corrida.
+        val compartir = corrida(
+            MIRA,
+            BrainTurn(actions = listOf(comparte(KINVARA))),
+            BrainTurn(actions = listOf(comparte(KINVARA))),
+            BrainTurn(actions = listOf(comparte(OTRO_TEXTO))),
+            fin(),
+            canal = Canal("sí, compártelo", "no"),
+        )
+        assertEquals(listOf("shareText"), compartir.entradas, promesa(p) + " · el segundo compartir salió sin permiso propio")
+        assertEquals(2, compartir.preguntas.size, promesa(p) + " · no preguntó por el segundo: ${compartir.preguntas}")
+    }
+
+    @Test
+    fun promesa612() = corre {
+        val p = 612
+        // El dato que sigue faltando no se da por resuelto: ni cae en el default de las 8, ni se pregunta en bucle.
+        val alarma = corrida(
+            "pon una alarma",
+            BrainTurn(actions = listOf(AgentAction.Mcp("set_alarm", emptyMap()))),
+            BrainTurn(actions = listOf(AgentAction.Mcp("set_alarm", emptyMap()))),
+            fin(),
+            canal = Canal("a las nueve"),
+        )
+        assertEquals(emptyList(), alarma.entradas, promesa(p) + " · la alarma de las 8 llegó al teléfono")
+        assertEquals(1, alarma.preguntas.size, promesa(p) + " · preguntó lo mismo en bucle: ${alarma.preguntas}")
+        val segundo = assertSingle(alarma.resultados(2), promesa(p) + " · el turno 2 no dejó resultado")
+        assertTrue(segundo.startsWith(CompuertaDePregunta.SIGUE_FALTANDO),
+            promesa(p) + " · el cerebro no supo que el dato sigue faltando: $segundo")
+
+        // Un nombre que sigue siendo ambiguo tampoco se da por resuelto: no abre ninguna de las dos.
+        val banco = corrida(
+            "abre el banco",
+            BrainTurn(actions = listOf(AgentAction.Mcp("launch_app", mapOf("app" to "Banco")))),
+            BrainTurn(actions = listOf(AgentAction.Mcp("launch_app", mapOf("app" to "Banco")))),
+            fin(),
+            canal = Canal("el primero"),
+            apps = listOf("Banco Zorbax", "Banco Qwyk"),
+        )
+        assertEquals(emptyList(), banco.entradas, promesa(p) + " · abrió una app sin saber cuál")
+        assertEquals(1, banco.preguntas.size, promesa(p) + " · preguntó lo mismo en bucle: ${banco.preguntas}")
+
+        // Lo ÚNICO que el atajo salta es el permiso: contestado que sí, la misma acción pasa sin preguntar.
+        val permiso = corrida(MIRA, BrainTurn(actions = listOf(sms())), BrainTurn(actions = listOf(sms())), fin(), canal = Canal("sí, mándaselo"))
+        assertEquals(listOf("sendSms"), permiso.entradas, promesa(p) + " · lo autorizado no se hizo")
+        assertEquals(1, permiso.preguntas.size, promesa(p) + " · volvió a preguntar un permiso ya contestado")
+    }
+
+    @Test
+    fun promesa614() = corre {
+        val p = 614
+        // Dos turnos con la misma acción: el primero pregunta, el segundo la repite y pasa si quedó autorizada (605, 606).
+        val dosTurnos = arrayOf(BrainTurn(actions = listOf(sms())), BrainTurn(actions = listOf(sms())))
+
+        // Ambigua —niega y afirma a la vez—: se pregunta otra vez en vez de asumir, y aclarado que sí, se hace.
+        val aclarada = corrida(MIRA, *dosTurnos, fin(), canal = Canal(AMBIGUA, "dale"))
+        assertEquals(2, aclarada.preguntas.size, promesa(p) + " · no repreguntó ante una respuesta ambigua: ${aclarada.preguntas}")
+        assertEquals(listOf("sendSms"), aclarada.entradas, promesa(p) + " · aclarado que sí, no lo hizo")
+
+        // Si la segunda sigue ambigua, no se ejecuta, y no se pregunta una tercera vez: el lado seguro, sin bucle.
+        val confusa = corrida(MIRA, *dosTurnos, fin(), canal = Canal(AMBIGUA))
+        assertEquals(2, confusa.preguntas.size, promesa(p) + " · preguntó de más: ${confusa.preguntas}")
+        assertEquals(emptyList(), confusa.entradas, promesa(p) + " · ejecutó con una respuesta que no se entendió")
+
+        // Una negación que ABRE la respuesta es un no, a la primera. Y lo vacío sigue siendo un no.
+        for (respuesta in listOf("no, déjalo", "")) {
+            val negada = corrida(MIRA, *dosTurnos, fin(), canal = Canal(respuesta))
+            assertEquals(1, negada.preguntas.size, promesa(p) + " · «$respuesta» repreguntó: ${negada.preguntas}")
+            assertEquals(emptyList(), negada.entradas, promesa(p) + " · «$respuesta» dejó pasar la acción")
+        }
+
+        // Y un sí claro sigue siendo un sí, a la primera: ni se repregunta ni se deja de hacer.
+        val clara = corrida(MIRA, *dosTurnos, fin(), canal = Canal("sí, mándaselo"))
+        assertEquals(1, clara.preguntas.size, promesa(p) + " · repreguntó un sí claro: ${clara.preguntas}")
+        assertEquals(listOf("sendSms"), clara.entradas, promesa(p) + " · no hizo lo autorizado")
     }
 
     /* ---------- Lo que ayuda a juzgar ---------- */
