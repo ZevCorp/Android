@@ -394,6 +394,8 @@ class GraphApp : Application() {
                 elementos = { service.elements() }, // árbol de UI vivo: para encadenar y saltar pasos ya cumplidos
                 consciente = { wf, step, context -> consciousStep(service, wf, step, context) },
             ) else null,
+            // Con las apps instaladas la compuerta sabe si un nombre de app es ambiguo (spec 006, promesa 602).
+            apps = { withContext(Dispatchers.IO) { installedApps() } },
         )
         if (resume) sesion.cerebro.resume(conversationId)
         return sesion.motor to sesion.cerebro
@@ -418,8 +420,17 @@ class GraphApp : Application() {
             if (step.note.isNotBlank()) append(" Contexto del paso: ${step.note}.")
             if (context.isNotBlank()) append(" Datos de esta ejecución: $context.")
         }
-        return Ejecucion.pasoConsciente(goal, sesion.motor)
+        // El objetivo de arriba lo escribimos nosotros con los datos del paso: nombra la acción, pero no la pidió nadie.
+        // Lo que autoriza algo sensible es lo que dijo la persona en esta corrida (spec 006, promesa 615).
+        return Ejecucion.pasoConsciente(goal, sesion.motor, dichoPorLaPersona())
     }
+
+    /**
+     * Lo que la persona escribió o dictó en la corrida en curso, sin el andamiaje que redactamos nosotros —el
+     * `CONTEXTO INMEDIATO` de una propuesta, el objetivo que se le arma a un paso de workflow—: es lo ÚNICO que autoriza una
+     * acción sensible (spec 006, promesas 611 y 615). Sin nada suyo devuelve vacío, que no autoriza nada.
+     */
+    private fun dichoPorLaPersona(): String = synchronized(goalPrompts) { goalPrompts.joinToString("\n") }
 
     private fun buildGoal(prompts: List<String>): String =
         if (prompts.size == 1) prompts[0]
@@ -519,7 +530,9 @@ class GraphApp : Application() {
                     val holder = arrayOf("")
                     val announce = round == 0 // en reencaminados no narra el objetivo largo
                     val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
-                        holder[0] = try { engine.run(goal, announce) }
+                        // El CONTEXTO INMEDIATO viaja en el objetivo para que el cerebro lo entienda, pero no da permiso: lo
+                        // único que autoriza algo sensible es lo que dictó la persona (spec 006, promesa 611).
+                        holder[0] = try { engine.run(goal, announce, dijoLaPersona = dichoPorLaPersona()) }
                             catch (ce: CancellationException) { throw ce }
                             catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
                     }
@@ -595,7 +608,12 @@ class GraphApp : Application() {
                 LogBus.log("run", "🤝 acción anticipada: ${foresight.task}")
                 val goal = "ACCIÓN PREVENTIVA AUTÓNOMA (el usuario no la pidió explícito pero es de " +
                     "certeza total y le conviene): ${foresight.task}. Hazla de forma directa y para."
-                runCatching { newSession(service, user, resume = false, maxTurns = 12).first.run(goal, announce = false) }
+                // El objetivo lo redactamos nosotros, no la persona: no autoriza nada sensible por sí mismo, así que lo
+                // que sea sensible se le preguntará antes de hacerlo (spec 006, promesa 611).
+                runCatching {
+                    newSession(service, user, resume = false, maxTurns = 12).first
+                        .run(goal, announce = false, dijoLaPersona = null)
+                }
                     .onFailure { LogBus.log("run", "acción anticipada falló: ${it.message}") }
             }
         }

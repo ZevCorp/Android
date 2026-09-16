@@ -55,6 +55,8 @@ object PuertaDeTelemetria {
         "aprendizaje", "leccion",
         // precisión (yokh/precision): ArmadoDeEjecucion, Freno, Puerta, TopeDeIntentos, CuentaDePeticion
         "freno", "puerta", "tope", "peticion",
+        // preguntar antes de ejecutar (spec 006): CompuertaDePregunta
+        "pregunta",
     )
 
     /** Nombres que salen solos: acciones del cerebro, herramientas del MCP, estados y proveedores. */
@@ -70,12 +72,20 @@ object PuertaDeTelemetria {
         "ok", "error", "cancelled", "running", "done", "fin", "decide", "speak", "ask", "transitorio", "true", "false", "null",
         "subconsciente", "consciente",
         "graph", "openai", "gemini", "deepgram", "GRAPH", "OPENAI", "GEMINI", "session",
+        // Por qué preguntó y en qué quedó (spec 006, promesa 608). Nunca sale ni la pregunta ni la respuesta.
+        "permiso", "cual", "dato", "autoriza", "niega",
     )
 
     /** Frases fijas que escribe el código, nunca la persona: la voz, precisión y el motor. */
     val FRASES: List<String> = listOf(
         "usuario dijo", "Ü dijo", "sesión cerrada", "nodo sin id estructural", "ya hay una tarea en curso", "no sigo",
-        "sin reintento", "paraste tú", "todavía no se ejecuta",
+        "sin reintento", "paraste tú",
+        // Lo que la voz contesta de una herramienta que todavía no tiene manos (spec 002, promesa 250).
+        "todavía no se ejecuta",
+        // Lo que el cliente le devuelve al cerebro de una acción que no hizo (spec 006).
+        "pregunté primero y no la hice", "dijiste que no", "no hay a quién preguntarle",
+        // El dato que sigue faltando y la respuesta que no se entendió (spec 006, promesas 612 y 614).
+        "sigue faltando el dato", "no te entendí",
     )
 
     /** Lo que va detrás de un número y lo vuelve medida: `42 caracteres`, `120 bytes`, `3 turnos`. */
@@ -83,7 +93,7 @@ object PuertaDeTelemetria {
         "caracteres", "carácter", "car.", "bytes", "KB", "MB", "ms", "segundos", "min", "minutos", "turnos", "acciones",
         "llamadas", "intentos", "reintentos", "pasos", "steps", "prompts", "tokens", "niveles", "elementos", "clics", "señales",
         "notas", "subconscientes", "conscientes", "cierres", "veces", "px", "dp", "candidatos", "herramientas", "filas",
-        "workflows", "apps", "errores", "etiquetas",
+        "workflows", "apps", "errores", "etiquetas", "opciones",
     )
 
     /** Lo que va delante de un número y lo vuelve medida: `HTTP 503`, `intento 2/3`, `llamadas=5`. */

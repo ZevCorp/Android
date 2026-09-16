@@ -73,6 +73,13 @@ class MainActivity : Activity(), UserChannel {
      */
     private val alOcultar = mutableListOf<() -> Unit>()
 
+    /**
+     * Las dudas del asistente que están en el aire, cada una con cómo contestarla. Si esta pantalla muere con una puesta
+     * (girar el teléfono, por ejemplo), se contestan con «» —que no autoriza nada— para que la corrida termine en vez de
+     * quedarse esperando una respuesta que ya no puede llegar (spec 006, promesa 613).
+     */
+    private val dudasEnElAire = mutableListOf<(String) -> Unit>()
+
     /* Actualizaciones */
     private var updStatus: TextView? = null
     private var updButton: Button? = null
@@ -1547,6 +1554,8 @@ class MainActivity : Activity(), UserChannel {
         super.onDestroy()
         recognizer?.destroy(); recognizer = null
         alOcultar.forEach { it() }; alOcultar.clear()
+        // La duda se va con la pantalla: se contesta «» (no autoriza) para no dejar la corrida colgada (promesa 613).
+        dudasEnElAire.toList().forEach { it("") }; dudasEnElAire.clear()
     }
 
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
@@ -1559,27 +1568,45 @@ class MainActivity : Activity(), UserChannel {
 
     /* ---------- UserChannel: dudas del asistente → texto o voz ---------- */
 
+    /**
+     * UNA DUDA NO PUEDE TRABAR LA APP (spec 006, promesa 613). Antes el diálogo era `setCancelable(false)` y vivía atado a
+     * este Activity: girar el teléfono con la duda puesta lo destruía, nadie reanudaba la espera, y la corrida quedaba viva
+     * para siempre — con todo lo demás contestando «ya hay una tarea en curso».
+     *
+     * Ahora la duda se puede cerrar y **cerrarla cuenta como «no»**: una respuesta vacía no autoriza nada, que es el lado
+     * seguro. Y si la pantalla muere con la duda puesta, [onDestroy] la contesta igual, así la corrida termina sin ejecutar
+     * lo sensible en vez de colgarse. Ningún plazo la resuelve sola: eso lo prohíbe la promesa 604.
+     */
     override suspend fun ask(question: String): String = suspendCancellableCoroutine { cont ->
         runOnUiThread {
             startActivity(Intent(this, MainActivity::class.java)
                 .addFlags(Intent.FLAG_ACTIVITY_REORDER_TO_FRONT or Intent.FLAG_ACTIVITY_SINGLE_TOP))
             val input = EditText(this).apply { hint = "Tu respuesta…" }
-            AlertDialog.Builder(this)
+            lateinit var dialog: AlertDialog
+            // Contesta UNA vez, venga de donde venga: el botón, la voz, cerrarla o la pantalla que se muere.
+            lateinit var responde: (String) -> Unit
+            responde = { texto ->
+                dudasEnElAire -= responde
+                runCatching { dialog.dismiss() }
+                if (cont.isActive) cont.resume(texto)
+            }
+            dudasEnElAire += responde
+            dialog = AlertDialog.Builder(this)
                 .setTitle("El asistente tiene una duda")
                 .setMessage(question)
                 .setView(input)
-                .setCancelable(false)
-                .setPositiveButton("Responder") { _, _ ->
-                    moveTaskToBack(true)
-                    if (cont.isActive) cont.resume(input.text.toString())
-                }
+                .setCancelable(true) // cerrarla es un «no», no una app trabada (promesa 613)
+                .setPositiveButton("Responder") { _, _ -> moveTaskToBack(true); responde(input.text.toString()) }
                 .setNegativeButton("Responder con voz") { _, _ ->
-                    voiceCallback = { text -> moveTaskToBack(true); if (cont.isActive) cont.resume(text) }
+                    voiceCallback = { text -> moveTaskToBack(true); responde(text) }
                     startActivityForResult(
                         Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                             .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM), 2)
                 }
-                .show()
+                .setOnCancelListener { responde("") } // no contestar es no autorizar
+                .create()
+            dialog.show()
+            cont.invokeOnCancellation { runOnUiThread { runCatching { dialog.dismiss() } } }
         }
     }
 
