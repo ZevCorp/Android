@@ -412,8 +412,17 @@ class GraphApp : Application() {
             if (step.note.isNotBlank()) append(" Contexto del paso: ${step.note}.")
             if (context.isNotBlank()) append(" Datos de esta ejecución: $context.")
         }
-        return Ejecucion.pasoConsciente(goal, sesion.motor)
+        // El objetivo de arriba lo escribimos nosotros con los datos del paso: nombra la acción, pero no la pidió nadie.
+        // Lo que autoriza algo sensible es lo que dijo la persona en esta corrida (spec 006, promesa 615).
+        return Ejecucion.pasoConsciente(goal, sesion.motor, dichoPorLaPersona())
     }
+
+    /**
+     * Lo que la persona escribió o dictó en la corrida en curso, sin el andamiaje que redactamos nosotros —el
+     * `CONTEXTO INMEDIATO` de una propuesta, el objetivo que se le arma a un paso de workflow—: es lo ÚNICO que autoriza una
+     * acción sensible (spec 006, promesas 611 y 615). Sin nada suyo devuelve vacío, que no autoriza nada.
+     */
+    private fun dichoPorLaPersona(): String = synchronized(goalPrompts) { goalPrompts.joinToString("\n") }
 
     private fun buildGoal(prompts: List<String>): String =
         if (prompts.size == 1) prompts[0]
@@ -508,16 +517,14 @@ class GraphApp : Application() {
                 while (true) {
                     val (goalBase, builtCount) = synchronized(goalPrompts) { buildGoal(goalPrompts.toList()) to goalPrompts.size }
                     val goal = if (pendingContext != null) "$goalBase\n\n$pendingContext" else goalBase
-                    // Lo que la persona dictó, sin el andamiaje que escribimos nosotros: es lo ÚNICO que autoriza una acción
-                    // sensible (spec 006, promesa 611). El CONTEXTO INMEDIATO viaja en el objetivo para que el cerebro lo
-                    // entienda, pero no da permiso: si no, una propuesta que ella rechazó seguiría autorizando la acción.
-                    val dichoPorLaPersona = synchronized(goalPrompts) { goalPrompts.joinToString("\n") }
                     bubble?.showExecutionMic(true)
                     val (engine, brain) = newSession(service, user, resume = true)
                     val holder = arrayOf("")
                     val announce = round == 0 // en reencaminados no narra el objetivo largo
                     val child = CoroutineScope(kotlin.coroutines.coroutineContext).launch {
-                        holder[0] = try { engine.run(goal, announce, dijoLaPersona = dichoPorLaPersona) }
+                        // El CONTEXTO INMEDIATO viaja en el objetivo para que el cerebro lo entienda, pero no da permiso: lo
+                        // único que autoriza algo sensible es lo que dictó la persona (spec 006, promesa 611).
+                        holder[0] = try { engine.run(goal, announce, dijoLaPersona = dichoPorLaPersona()) }
                             catch (ce: CancellationException) { throw ce }
                             catch (t: Throwable) { LogBus.log("run", "motor: ${t.message}"); "Tuve un problema con eso." }
                     }

@@ -11,6 +11,37 @@ internal fun palabrasEnOrden(texto: String): List<String> = PALABRA.findAll(plan
 /** Las palabras de un texto, en plano: lo que se busca como palabra entera, nunca como trozo. */
 internal fun palabras(texto: String): Set<String> = palabrasEnOrden(texto).toSet()
 
+/**
+ * UNA HUELLA ACOTADA de un texto: su largo y un hash de 64 bits del texto en plano y con los espacios normalizados. Con
+ * ella se arma la llave de lo ya contestado (docs/specs/006, promesa 617): un correo largo, o un compartir con el texto de
+ * toda la pantalla, no tienen por qué vivir enteros en memoria mientras dura la corrida.
+ *
+ * SIGUE DISTINGUIENDO DOS CONTENIDOS DISTINTOS, que es lo que promete la 610. Lo único que deja de distinguir es el
+ * espaciado: el mismo texto escrito con dos espacios o con un salto de línea es el mismo texto, y no se pregunta dos veces
+ * por él.
+ *
+ * NO ES UN SELLO PARA EL LOG, y al log no sale (promesa 608): un hash corto sin sal se revierte por fuerza bruta. Para
+ * nombrar un dato en una línea que sale del teléfono está [graph.core.precision.Sello], con su sal por proceso.
+ */
+fun huella(texto: String): String {
+    val limpio = plano(texto).replace(ESPACIOS, " ").trim()
+    var h = FNV_BASE
+    for (byte in limpio.encodeToByteArray()) {
+        h = h xor (byte.toLong() and 0xFF)
+        h *= FNV_PRIMO
+    }
+    return "${limpio.length}#" + CharArray(16) { i -> HEX[((h ushr ((15 - i) * 4)) and 0xF).toInt()] }.concatToString()
+}
+
+/** Espacios, tabuladores y saltos de línea seguidos: escribir un texto más suelto no lo vuelve otro texto. */
+private val ESPACIOS = Regex("""\s+""")
+
+/* FNV-1a de 64 bits. Dos textos distintos con la misma huella son una casualidad de una entre 2^64, y no hay nada que
+   revertir mientras la huella no salga del proceso, que es la regla de arriba. */
+private const val FNV_BASE = -3750763034362895579L // 0xcbf29ce484222325
+private const val FNV_PRIMO = 0x100000001b3L
+private const val HEX = "0123456789abcdef"
+
 private val PALABRA = Regex("""[\p{L}\p{N}]+""")
 private val SIN_TILDE = mapOf('á' to 'a', 'é' to 'e', 'í' to 'i', 'ó' to 'o', 'ú' to 'u', 'ü' to 'u', 'ñ' to 'n')
 
@@ -68,8 +99,14 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
 
         /**
          * ¿El destinatario de la ACCIÓN es el que nombra el pedido? Con letras («Ana», «jefe@…») se cruza por palabra. Sin
-         * letras —el número que el cerebro resolvió de los contactos— se cruza COMO NÚMERO contra los del pedido, sin
-         * separadores ni prefijo de país. Si el pedido no trae ninguno, no hay con qué compararlo y **no autoriza**.
+         * letras —el número que el cerebro resolvió de los contactos— se cruza COMO NÚMERO, sin separadores ni prefijo de
+         * país. Si el pedido no trae ninguno, no hay con qué compararlo y **no autoriza**.
+         *
+         * Y SE CRUZA CON EL DESTINATARIO DE ESA ACCIÓN, NO CON CUALQUIER NÚMERO DEL TEXTO (promesa 616). Antes bastaba con
+         * que el número apareciera en alguna parte: con «llama a mi jefe al 300 111 2222 y mándale un mensaje a mi hermana
+         * al 300 333 4444», si el cerebro cruzaba los números, el equivocado también estaba en el pedido y la comprobación
+         * autorizaba igual. Ahora el pedido tiene que traer UN SOLO destinatario posible —dos escrituras del mismo número
+         * son uno—; con dos no hay forma de decidir cuál va con esta acción, así que se pregunta.
          *
          * Un destinatario vacío no es un destinatario que no cruza: es un dato que falta, y lo pide la pregunta de dato
          * (promesa 603). Por eso pasa de largo por aquí.
@@ -79,9 +116,27 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
             val propias = palabras(destino).filter { it.length >= LARGO_DE_NOMBRE && it.any(Char::isLetter) }
             if (propias.isNotEmpty()) return propias.any { it in dichas }
             val suyo = soloCifras(destino)
-            if (suyo.length < CIFRAS_DE_TELEFONO) return false
-            return telefonosDe(pedido).any { it.takeLast(CIFRAS_DE_TELEFONO) == suyo.takeLast(CIFRAS_DE_TELEFONO) }
+            if (suyo.length < CIFRAS_DE_DESTINO) return false
+            val posibles = numerosDe(pedido).filter { puedeSerDestino(it, suyo) }.distinctBy { comoSeCruza(it) }
+            val unico = posibles.singleOrNull() ?: return false
+            return comoSeCruza(unico) == comoSeCruza(suyo)
         }
+
+        /**
+         * Cómo se cruzan dos escrituras de un mismo destino: con 7 cifras o más, por las últimas 7, así el prefijo de país y
+         * los separadores no lo vuelven otro; con menos, por igualdad exacta. Antes un destino corto ni se comparaba —se
+         * exigían 7 cifras—, así que un código que el propio pedido traía preguntaba siempre.
+         */
+        private fun comoSeCruza(numero: String) =
+            if (numero.length >= CIFRAS_DE_TELEFONO) numero.takeLast(CIFRAS_DE_TELEFONO) else numero
+
+        /**
+         * ¿Este número del pedido podría ser el destinatario de una acción que va a [suyo]? Un teléfono siempre; uno corto
+         * solo si tiene exactamente sus cifras. Lo que no puede ser un destino —«a las 8», «el bus 45», o una ristra más
+         * larga que un teléfono— no cuenta como destinatario, y así no vuelve ambiguo un pedido que no lo es.
+         */
+        private fun puedeSerDestino(delPedido: String, suyo: String) =
+            delPedido.length <= CIFRAS_MAXIMAS && (delPedido.length >= CIFRAS_DE_TELEFONO || delPedido.length == suyo.length)
 
         /**
          * ¿El contenido de la ACCIÓN sale del pedido? Alguna palabra propia suya —larga y fuera del [RELLENO]— tiene que
@@ -99,9 +154,9 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
         /** Las cifras de un texto, sin separadores ni signos: «+57 310-445-9821» → «573104459821». */
         private fun soloCifras(texto: String) = texto.filter { it.isDigit() }
 
-        /** Los números del pedido, cada uno con sus separadores: «mándale al 310 445 9821 que…» → «3104459821». */
-        private fun telefonosDe(pedido: String): List<String> =
-            TELEFONO.findAll(pedido).map { soloCifras(it.value) }.filter { it.length >= CIFRAS_DE_TELEFONO }.toList()
+        /** Los números del pedido, cada uno sin sus separadores: «mándale al 310 445 9821 que…» → «3104459821». */
+        private fun numerosDe(pedido: String): List<String> =
+            TELEFONO.findAll(pedido).map { soloCifras(it.value) }.filter { it.length >= CIFRAS_DE_DESTINO }.toList()
 
         /** Un número escrito con separadores: cifras y lo que puede ir entre ellas, empezando y acabando en cifra. */
         private val TELEFONO = Regex("""\d[\d\s().\-]*\d""")
@@ -111,6 +166,12 @@ class AccionSensible(val clase: Clase, val destino: String = "", val contenido: 
          * sin indicativo: con menos, dos números distintos coincidirían por casualidad.
          */
         private const val CIFRAS_DE_TELEFONO = 7
+
+        /** El destino más corto que se compara: un código de tres cifras. Con menos es una cantidad, no un destinatario. */
+        private const val CIFRAS_DE_DESTINO = 3
+
+        /** El destino más largo que existe (E.164). Una ristra más larga son dos números pegados, y no es un destinatario. */
+        private const val CIFRAS_MAXIMAS = 15
 
         /** El nombre más corto que se cruza con el pedido: «Ana», «jefe». Menos que esto son partículas. */
         private const val LARGO_DE_NOMBRE = 3

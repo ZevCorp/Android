@@ -215,10 +215,15 @@ class ArmadoDeEjecucion(
      * «paso hecho»: lanza [Paraste] y la corrida entera termina, sin seguir con el paso siguiente (promesa 316).
      * Un fallo que no es parada se queda en el paso: `false`, y el workflow decide. No abre petición: sigue la de la
      * corrida, con su tope y su cuenta (promesa 320).
+     *
+     * EL OBJETIVO DEL PASO NO ES EL PEDIDO. Lo arma el workflow con su nombre, su descripción y la acción del paso, así que
+     * nombra lo que va a hacer: leído como pedido, un paso con una acción sensible se daba el permiso a sí mismo. Lo único
+     * que autoriza es [dijoLaPersona] —lo que la persona dictó en esta corrida—, y sin nada suyo no autoriza nada: lo
+     * sensible se pregunta o no se hace (spec 006, promesa 615).
      */
-    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine): Boolean = freno.enTarea(PASO_CONSCIENTE) {
+    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine, dijoLaPersona: String? = null): Boolean = freno.enTarea(PASO_CONSCIENTE) {
         try {
-            motor.run(objetivo, announce = false)
+            motor.run(objetivo, announce = false, dijoLaPersona = dijoLaPersona)
         } catch (ce: CancellationException) {
             throw ce
         } catch (t: Throwable) {

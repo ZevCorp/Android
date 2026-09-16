@@ -44,7 +44,8 @@ class Vista(val etiquetas: List<String> = emptyList(), val apps: List<String> = 
  *
  * LO AUTORIZADO ES ESA ACCIÓN, CON ESE DESTINATARIO Y ESE CONTENIDO (promesa 610). La llave de lo ya contestado lleva las
  * tres cosas: sin el contenido, un «sí» a un mensaje autorizaba el siguiente mensaje al mismo destinatario con otro texto, y
- * un «sí» a un `share_text` —que no tiene destinatario— autorizaba cualquier compartir del resto de la corrida.
+ * un «sí» a un `share_text` —que no tiene destinatario— autorizaba cualquier compartir del resto de la corrida. Pero las
+ * lleva como [huella], no como texto: la llave es acotada aunque el contenido sea una pantalla entera (promesa 617).
  *
  * Y ESE ATAJO ES SOLO DEL PERMISO (promesa 612). Para el dato y el «cuál» no hay nada que saltar: lo que vale es que el dato
  * ESTÉ en la acción. Si el cerebro repite la acción y sigue faltando, no se ejecuta —nunca con el default silencioso— y
@@ -165,12 +166,14 @@ class CompuertaDePregunta(
 
     /**
      * Lo sensible que el pedido no autorizó. El asunto —la llave de lo ya contestado— lleva la clase, el destinatario Y el
-     * contenido: lo autorizado es ESA acción, no cualquier otra parecida (promesa 610). Nunca sale al log.
+     * contenido: lo autorizado es ESA acción, no cualquier otra parecida (promesa 610). De los dos textos se queda una
+     * [huella] acotada y no el texto, así que un correo largo no vive entero en memoria durante la corrida y el mismo
+     * contenido con otro espaciado no se vuelve a preguntar (promesa 617). Nunca sale al log.
      */
     private fun permiso(accion: AgentAction): Pregunta? {
         val sensible = AccionSensible.de(accion) ?: return null
         if (AccionSensible.loPidio(pedido, sensible)) return null
-        val asunto = "permiso:${sensible.clase}:${plano(sensible.destino).trim()}:${plano(sensible.contenido).trim()}"
+        val asunto = "permiso:${sensible.clase}:${huella(sensible.destino)}:${huella(sensible.contenido)}"
         return Pregunta(Pregunta.Clase.PERMISO, asunto, texto(sensible))
     }
 
