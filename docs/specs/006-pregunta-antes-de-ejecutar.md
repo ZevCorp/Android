@@ -1,9 +1,11 @@
 # Plan de implementación: pregunta antes de ejecutar — el cliente frena lo que no le pediste y pide el contexto que le falta
 
-Estado: **fases E1, E2 y E3 implementadas** (2026-09-16; promesas 601-614 verdes, contrato de 134 promesas; cada una se vio
-ROJA con un sabotaje real — 19 sabotajes, uno por fila de la tabla de abajo). La **E3 nace de un control que dio NO
+Estado: **fases E1, E2, E3 y E4 implementadas** (2026-09-16; promesas 601-617 verdes, contrato de 137 promesas; cada una se
+vio ROJA con un sabotaje real — 25 sabotajes, uno por fila de la tabla de abajo). La **E3 nace de un control que dio NO
 APROBADO**: la compuerta de la E1 se saltaba con frases ordinarias, porque «no hay nada que comparar» valía como permiso
-(ver «Lo que el control encontró») · Nace de un pedido del Capitán (2026-09-16): «me
+(ver «Lo que el control encontró»); la **E4 cierra los tres amarillos del control que revisó esa E3**: el paso consciente de
+un workflow se autorizaba a sí mismo, un número del pedido autorizaba aunque fuera de otro destinatario, y la llave de lo ya
+contestado guardaba el contenido entero · Nace de un pedido del Capitán (2026-09-16): «me
 gustaría que si no sabe qué hacer me pregunte, que pueda tener claro algo antes de ejecutar, que pida contexto para hacer
 las tareas bien» · Rama: `yokh/pregunta-antes`
 
@@ -57,8 +59,8 @@ del mapa `PROMESAS` del test que la juzga; si cambia uno, cambia el otro en el m
 
 | Archivo | Promesas |
 |---|---|
-| `core/src/commonTest/kotlin/graph/core/contrato/Contrato006PreguntaAntes.kt` | 601, 603-610, 612, 614 |
-| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato006LoQueVe.kt` (lee las fuentes de la app: solo jvm lee disco) | 602, 611, 613 |
+| `core/src/commonTest/kotlin/graph/core/contrato/Contrato006PreguntaAntes.kt` | 601, 603-610, 612, 614, 616, 617 |
+| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato006LoQueVe.kt` (lee las fuentes de la app: solo jvm lee disco) | 602, 611, 613, 615 |
 
 | # | Promesa | Fase |
 |---|---|---|
@@ -76,6 +78,9 @@ del mapa `PROMESAS` del test que la juzga; si cambia uno, cambia el otro en el m
 | 612 | «Ya contestado» solo salta el permiso: un dato que sigue faltando y un nombre que sigue siendo ambiguo no se dan por resueltos —la acción no se ejecuta ni cae en el default de las 8— y tampoco se preguntan en bucle. | E3 |
 | 613 | Una duda sin respuesta no traba la app: la persona puede cerrarla y cerrarla cuenta como «no», y si el canal desaparece la corrida termina sin ejecutar lo sensible, sin plazo que decida por su cuenta. | E3 |
 | 614 | Una respuesta ambigua no se asume: se vuelve a preguntar una vez y, si sigue ambigua, no se ejecuta. Una negación cuenta cuando abre la respuesta, no en cualquier posición, y una respuesta vacía sigue siendo un no. | E3 |
+| 615 | Un paso consciente de un workflow no se autoriza a sí mismo: el objetivo que arma el workflow no es lo que dijo la persona, así que una acción sensible que ese objetivo nombra se pregunta igual. | E4 |
+| 616 | Un número del pedido autoriza solo si es el destinatario de esa acción: con más de un destinatario posible en el pedido no se adivina cuál va con cuál y se pregunta; un destino corto se compara por igualdad exacta en vez de darse por incomparable. | E4 |
+| 617 | La llave de lo ya contestado no guarda el contenido: es una huella acotada que distingue dos contenidos distintos, no cambia porque cambie el espaciado y no sale al log. | E4 |
 
 **La que cierra el asunto es la 604.** Las otras siete deciden *cuándo* preguntar; la 604 es la que hace que preguntar sea
 seguro: una corrida que espera no actúa, no paga turnos, no se «destraba» sola con un plazo — y se para con el mismo freno de
@@ -109,9 +114,14 @@ cruzar con el pedido, no está autorizado y se pregunta (promesa 609).
   `llama`, `márcale`, `borra`, `paga`, `comparte`…);
 - **el destinatario se corresponde** — el destinatario de la ACCIÓN tiene que aparecer en el pedido de forma reconocible.
   Con letras («Ana», «jefe@…»), alguna palabra suya de 3 o más está en el pedido. Sin letras —el número que el cerebro
-  resolvió de los contactos— se compara **como número** con los números del pedido: se quitan separadores y prefijo de país
-  y se cruzan las últimas 7 cifras. Si el pedido no trae ningún número, **no hay con qué comparar y no autoriza**. Un
-  destinatario vacío no es un destinatario que no cruza: es un dato que falta, y lo pide la pregunta de dato;
+  resolvió de los contactos— se compara **como número**, sin separadores ni prefijo de país, y **con el destinatario de esa
+  acción, no con cualquier número del texto** (promesa 616): el pedido tiene que traer **un solo** destinatario posible, que
+  es con el que se cruza. Con dos, no hay forma de saber cuál va con esta acción —«llama a mi jefe al 300 111 2222 y mándale
+  un mensaje a mi hermana al 300 333 4444»: si el cerebro los cruza, el número equivocado también está en el texto—, así que
+  se pregunta. Dos escrituras del mismo número son un mismo destinatario. Con 7 cifras o más se cruzan las últimas 7; un
+  destino corto (de 3 a 6 cifras, un código) se cruza por **igualdad exacta**, que antes no se comparaba nunca. Si el pedido
+  no trae ninguno, **no hay con qué comparar y no autoriza**. Un destinatario vacío no es un destinatario que no cruza: es un
+  dato que falta, y lo pide la pregunta de dato;
 - **el contenido se corresponde** — alguna palabra de 4 o más del contenido, fuera de una lista corta de palabras de
   relleno, está en el pedido. Un contenido sin ninguna palabra propia que cruzar (`«Ya voy»`, `«Ok gracias»`) **tampoco
   autoriza**: no dice que la persona lo haya pedido, solo que es corto.
@@ -128,6 +138,13 @@ viajan al motor como parte del `goal`, pero **no** como pedido: el motor recibe 
 persona no se autoriza nada. Si no, bastaba con que el modelo escribiera «mándale a Ana un mensaje» en su propio objetivo
 para autorizarse a sí mismo — y peor: una propuesta que la persona **rechazó** seguía autorizando, porque el contexto
 pendiente todavía llevaba la frase.
+
+**Y un paso consciente tampoco escribe su propio permiso (promesa 615).** El objetivo de un paso lo arma el workflow con el
+nombre del workflow, su descripción y la acción del paso (`GraphApp.consciousStep`), así que nombra la acción que va a
+hacer: leído como pedido, se autorizaba a sí mismo. `ArmadoDeEjecucion.pasoConsciente` recibe aparte lo que dijo la persona
+—los prompts de la corrida en curso, y nada si no hay— y es eso lo único que la compuerta compara. Hoy el defecto está
+inerte porque el subconsciente está apagado (`subconsciousExecution = false`); se cierra ahora para que no vuelva solo el
+día que se encienda.
 
 **2. Cuál.** Con un nombre que el cliente puede resolver mirando —una app en `launch_app`/`open_app`, una etiqueta en los
 `taps` de una aprendida— se cuentan los candidatos de lo que **vio**: las apps instaladas o las etiquetas de `uiContext`. Dos
@@ -168,6 +185,12 @@ tres cosas. Cambiar el texto vuelve a preguntar: un «sí» a «avísale a Ana q
 «transfiéreme la plata». Y `share_text`, que no tiene destinatario, se distingue por su contenido: sin eso, un «sí»
 autorizaba cualquier compartir del resto de la corrida.
 
+**Pero la llave no guarda el contenido (promesa 617).** De cada parte se queda una **huella acotada** —el largo y un hash de
+64 bits del texto en plano y con los espacios normalizados—, así que un correo largo o un compartir con el texto de toda la
+pantalla no viven enteros en memoria durante la corrida. La huella sigue distinguiendo dos contenidos distintos, que es lo
+que promete la 610; el mismo contenido con otro espaciado deja de volver a preguntar, porque es el mismo contenido; y no
+sale al log, como no sale nada del contenido (promesa 608).
+
 **«Ya contestado» solo salta el permiso (promesa 612).** Para la pregunta de **dato** y la de **cuál** lo que vale es que el
 dato ESTÉ en la acción: si el cerebro repite `set_alarm` sin hora, la segunda vez se vuelve a pedir y, si sigue faltando, la
 acción **no se ejecuta** — nunca cae en el default de las 8, que es justo lo que promete la 603. Igual con un nombre que
@@ -199,6 +222,9 @@ la arma él, y ningún archivo de la app la construye.
 | 612 | `set_alarm` sin `hour` en dos turnos seguidos: pregunta UNA vez, la alarma de las 8 **no** llega al teléfono en ninguno de los dos, y el segundo vuelve al cerebro diciendo que el dato sigue faltando. Un `launch_app app=Banco` que sigue ambiguo en el turno 2, igual: no abre ninguna. Y un permiso contestado que sí sigue pasando sin preguntar, que es lo único que el atajo debe saltar |
 | 613 | El canal cuyo `ask` lanza (la pantalla murió): lo sensible no llega al teléfono, el resultado lo dice, la corrida **termina** y pide su turno siguiente. El canal que contesta «» (la persona cerró la duda): cuenta como no. Y las fuentes de la app: `MainActivity.ask` no usa `setCancelable(false)`, contesta «» al cerrarse y al destruirse la pantalla, y ni ella ni `FloatingBubble` tienen plazo que conteste solo |
 | 614 | Siempre con dos turnos de la misma acción, que es como una acción autorizada llega a hacerse (605): «claro, no hay problema, mándalo» → se pregunta una segunda vez y, contestado «dale», el turno siguiente la hace; contestada otra ambigüedad, no la hace y no se pregunta una tercera. «no, déjalo» y «» → niegan a la primera, sin repreguntar. «sí, mándaselo» → autoriza a la primera |
+| 615 | Un paso consciente con el armado de verdad, dentro de su corrida, y con el objetivo que le arma un workflow («Estás EN MEDIO del workflow "avisos"… Ejecuta SOLO este paso y termina: mándale a Ana que llego tarde»): el `send_email` a «ana@…» con «Llego tarde» no sale del teléfono y deja una pregunta, aunque el objetivo lo nombre todo. El mismo paso con `dijoLaPersona` = el pedido de la persona sí se hace. Y las fuentes de la app: `GraphApp.consciousStep` le pasa lo que dijo la persona y `Ejecucion` lo reenvía al armado |
+| 616 | «llama a mi jefe al 3001112222 y mándale un mensaje a mi hermana al 3003334444» + `send_sms` al número de la hermana con un contenido que sí sale del pedido → pregunta: con dos destinatarios posibles no se sabe cuál va con la acción. Con un solo número en el pedido sigue pasando sin preguntar (el de la 609). «mándale un mensaje al 3838 que llego tarde» + `send_sms` a «3838» → se hace sin preguntar; el mismo pedido con `send_sms` a «9090» → pregunta |
+| 617 | La huella de un contenido de 76.000 caracteres mide menos de 40; dos contenidos distintos (y dos largos distintos) no la comparten; ningún trozo de 4 caracteres del contenido aparece en ella. Y con el armado de verdad: autorizado un `share_text`, el mismo texto con otro espaciado en el turno siguiente se hace sin volver a preguntar, y la huella no aparece en ninguna línea del log |
 
 ### Sabotajes (cada uno pone roja su promesa)
 
@@ -224,6 +250,11 @@ la arma él, y ningún archivo de la app la construye.
 | 612 | el atajo de «ya contestado» vuelve a ir antes de distinguir la clase | roja: la alarma de las 8 llega al teléfono en el segundo turno |
 | 613 | un canal que revienta tumba la corrida en vez de dejarla seguir sin ejecutar | roja: la corrida no pide el turno siguiente |
 | 614 | una negación en cualquier posición vuelve a contar como negación | roja: «claro, no hay problema, mándalo» no ejecuta y no repregunta |
+| 615 | el paso consciente vuelve a correr su motor sin decir qué dijo la persona (el default: el objetivo del paso) | roja: el paso manda el correo que nadie pidió |
+| 616 | el número de la acción vuelve a autorizarse por estar en cualquier parte del pedido | roja: el pedido con dos destinatarios manda el mensaje sin preguntar |
+| 616 | un destino de menos de 7 cifras vuelve a darse por incomparable | roja: el código corto que el propio pedido trae pregunta |
+| 617 | la llave de lo ya contestado vuelve a llevar el contenido tal cual | roja: el mismo contenido con otro espaciado vuelve a preguntar |
+| 617 | la huella devuelve el texto entero | roja: mide lo que mida el contenido y lleva sus trozos |
 
 ---
 
@@ -291,6 +322,18 @@ Pone verdes: **608**.
 
 Pone verdes: **609-614**.
 
+### Fase E4 — los tres amarillos del control de la E3 (esta corrida)
+
+- `core/…/precision/ArmadoDeEjecucion.kt` — `pasoConsciente(objetivo, motor, dijoLaPersona)`: el objetivo que arma el
+  workflow ya no vale como pedido, y sin nada de la persona no autoriza nada.
+- `app/…/Ejecucion.kt` y `app/…/GraphApp.kt` — el paso consciente recibe lo que la persona dictó en la corrida en curso.
+- `core/…/pregunta/AccionSensible.kt` — un número autoriza solo si es el destinatario de esa acción: con más de un
+  destinatario posible en el pedido se pregunta, y un destino corto se compara por igualdad exacta. Y la `huella` acotada,
+  que es de donde sale la llave de lo ya contestado.
+- `core/…/pregunta/CompuertaDePregunta.kt` — la llave lleva las huellas del destinatario y del contenido, no sus textos.
+
+Pone verdes: **615-617**.
+
 ---
 
 ## Diferencias deliberadas con Windows
@@ -332,13 +375,20 @@ una acción puede volver con «pregunté primero y no la hice» y que la respues
   cliente no resuelve contactos, así que no tiene forma de saber si ese número es el de Ana. Es preguntar de más en el caso
   más común de todos, y es a propósito: el control demostró que la alternativa —dar por bueno lo que no se puede
   comparar— deja pasar un SMS al número equivocado con el texto correcto. Si algún día el cliente resuelve contactos, esto
-  se revisa con su promesa.
+  se revisa con su promesa. Y cuando el pedido trae **dos** números, se pregunta siempre (promesa 616): preguntar de más en
+  un pedido con dos destinatarios es más barato que mandarle a uno lo del otro.
 - Las listas de palabras son cerradas y en español: un pedido en otro idioma («text Ana that I'm late») no autoriza, así que
   el cliente pregunta. Preguntar de más es el lado seguro del error.
 - El registro de lo ya preguntado vive en la corrida del motor: un **reencaminado** (la persona habla otra vez) arma una
   sesión nueva y puede volver a preguntar lo mismo. Es deliberado: el pedido cambió.
-- Un **paso consciente** de un workflow corre con un objetivo sintético que suele nombrar la acción del paso, así que se
-  autoriza a sí mismo. Hoy no se nota (`subconsciousExecution = false`), y cuando se encienda hay que decidirlo aparte.
+- Un **paso consciente** de un workflow corre con un objetivo sintético que suele nombrar la acción del paso, y ya no vale
+  como permiso (promesa 615): lo que autoriza es lo que la persona dictó en esa corrida. Si el paso viene de un workflow que
+  la persona no lanzó por voz ni por texto, no hay nada suyo y lo sensible se pregunta. Sigue sin notarse mientras el
+  subconsciente esté apagado (`subconsciousExecution = false`).
+- **Los nombres no se cuentan como destinatarios.** La regla de «un solo destinatario posible» (promesa 616) es de los
+  números, que se pueden contar; en un pedido no hay forma de saber qué palabras son nombres de destinatario, así que
+  «dile a Ana que le avise a Pedro» sigue cruzando por nombre. Es el mismo límite de siempre: el cliente no resuelve
+  contactos.
 - La ambigüedad se mide sobre lo que `uiContext` muestra: hasta 28 etiquetas y **sin repetidas**, así que dos elementos con
   la misma etiqueta exacta no se ven como dos. Se ven los parecidos, que es el caso que rompe.
 - **La pregunta se dice en voz alta, y ese canal lleva contenido.** `CompuertaDePregunta` habla por `Voice.speak` antes de
