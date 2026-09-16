@@ -16,6 +16,7 @@ import graph.core.domain.UserChannel
 import graph.core.domain.Voice
 import graph.core.domain.Workflow
 import graph.core.domain.WorkflowStep
+import graph.core.pregunta.CompuertaDePregunta
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -106,6 +107,8 @@ class ArmadoDeEjecucion(
         pausa: () -> Long = { 350 },
         aprendidas: List<LearnedTool> = emptyList(),
         workflows: Workflows? = null,
+        /** Las apps instaladas: con ellas la compuerta sabe si un nombre de app es ambiguo (spec 006, promesa 602). */
+        apps: suspend () -> List<String> = { emptyList() },
     ): Sesion<B> {
         val puerta = puerta(manos)
         val reproductor = workflows?.let {
@@ -119,9 +122,11 @@ class ArmadoDeEjecucion(
             workflows = workflows?.lista ?: emptyList(), workflowExecutor = reproductor,
         )
         val elCerebro = cerebro(mcp)
+        // La compuerta de preguntar la arma el armado, como todo lo demás: nadie en la app la construye (spec 006).
         val motor = ExecutionEngine(
             brain = { elCerebro }, phone = puerta.telefono, mcp = mcp, user = usuario, voice = voz, log = log,
             maxTurns = maxTurnos, mode = modo, stepDelay = pausa, freno = freno,
+            compuerta = CompuertaDePregunta(usuario, voz, log, apps),
         )
         return Sesion(motor, mcp, elCerebro)
     }
