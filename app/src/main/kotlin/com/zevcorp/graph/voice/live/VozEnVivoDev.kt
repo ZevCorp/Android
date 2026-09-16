@@ -168,8 +168,14 @@ class VozEnVivoDev(private val contexto: Context) {
             it.toTurnState(apps = null, surface = AndroidSurface.from(it.screen), withScreenshot = false)
         }
 
-    private fun catalogoDeAcciones(): List<McpTool> =
-        (GraphApp.instance.ui as? GraphAccessibilityService)?.let { Ejecucion.herramientas(it, emptyList()) } ?: emptyList()
+    /**
+     * `null` Y NO UNA LISTA VACÍA cuando no hay servicio: no saber el catálogo no es lo mismo que no saber hacer nada.
+     * Y las aprendidas salen del único sitio que decide cuáles ve una corrida, el mismo que usa la anticipación.
+     */
+    private fun catalogoDeAcciones(): List<McpTool>? =
+        (GraphApp.instance.ui as? GraphAccessibilityService)?.let {
+            Ejecucion.herramientas(it, GraphApp.instance.aprendidasDisponibles())
+        }
 
     private fun claveDelBuildInterno(): String? =
         GraphApp.instance.prefs.getString("openaiKey", null)?.trim()?.ifBlank { null }

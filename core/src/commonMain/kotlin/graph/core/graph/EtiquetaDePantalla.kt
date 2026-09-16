@@ -16,4 +16,8 @@ const val SEPARADOR_DE_ETIQUETAS = " · "
  * NO CAMBIA LO QUE VE EL CEREBRO: el mismo texto alimenta el turno de Graph. Un salto de línea pasa a espacio y el
  * separador, a guion; ambos se leen igual. Un `·` sin espacios alrededor no se toca, porque no parte nada.
  */
-fun etiquetaDePantalla(texto: String, tope: Int = TOPE_DE_UNA_ETIQUETA): String = TODO("arreglo 2B2a")
+fun etiquetaDePantalla(texto: String, tope: Int = TOPE_DE_UNA_ETIQUETA): String =
+    ESPACIOS.replace(texto, " ").replace(SEPARADOR_DE_ETIQUETAS, " - ").trim().take(tope).trim()
+
+/** Cualquier racha de blancos —salto de línea, tabulador o varios espacios— es UN espacio. */
+private val ESPACIOS = Regex("\\s+")

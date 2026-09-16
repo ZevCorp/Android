@@ -2,6 +2,9 @@ package graph.core.voz
 
 import graph.core.domain.McpTool
 import graph.core.graph.TurnScreenState
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.async
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlin.coroutines.CoroutineContext
 
 /**
@@ -47,34 +50,53 @@ class HerramientasDeVoz(
 
     /** Ejecuta lo que pidió el delegado. Solo lee: lo que no se sabe hacer se contesta, no se intenta. */
     suspend fun ejecutar(llamada: Llamada): String = when (llamada.nombre) {
-        CatalogoDeVoz.DONDE_ESTOY -> {
+        CatalogoDeVoz.DONDE_ESTOY -> mirando(CatalogoDeVoz.DONDE_ESTOY) {
             val respuesta = OjosDeLaVoz.dondeEstoy(pantalla())
-            log(TAG, "${CatalogoDeVoz.DONDE_ESTOY} · respuesta de ${respuesta.length} caracteres")
-            respuesta
+            respuesta to "respuesta de ${respuesta.length} caracteres"
         }
 
         CatalogoDeVoz.QUE_VEO -> {
-            val estado = pantalla()
             val filtro = llamada.args[CatalogoDeVoz.FILTRO].orEmpty().trim()
-            val respuesta = OjosDeLaVoz.queVeo(estado, filtro)
-            log(
-                TAG,
-                "${CatalogoDeVoz.QUE_VEO} · filtro de ${filtro.length} caracteres · ${OjosDeLaVoz.etiquetas(estado)} etiquetas" +
-                    " · respuesta de ${respuesta.length} caracteres",
-            )
-            respuesta
+            mirando(CatalogoDeVoz.QUE_VEO) {
+                val estado = pantalla()
+                val respuesta = OjosDeLaVoz.queVeo(estado, filtro)
+                respuesta to "filtro de ${filtro.length} caracteres · ${OjosDeLaVoz.etiquetas(estado)} etiquetas" +
+                    " · respuesta de ${respuesta.length} caracteres"
+            }
         }
 
-        CatalogoDeVoz.QUE_PUEDO_HACER -> {
-            val catalogo = acciones().orEmpty()
-            val respuesta = CatalogoDeVoz.capacidades(catalogo)
-            log(TAG, "${CatalogoDeVoz.QUE_PUEDO_HACER} · ${catalogo.size} herramientas · respuesta de ${respuesta.length} caracteres")
-            respuesta
+        CatalogoDeVoz.QUE_PUEDO_HACER -> mirando(CatalogoDeVoz.QUE_PUEDO_HACER) {
+            // `null` NO es una lista vacía: sin servicio no se sabe el catálogo, y un catálogo vacío se lee como que Ü
+            // no sabe hacer nada. Se dice la misma causa que dicen los ojos.
+            val catalogo = acciones()
+            val respuesta = if (catalogo == null) CatalogoDeVoz.SIN_CATALOGO else CatalogoDeVoz.capacidades(catalogo)
+            respuesta to "${catalogo?.size ?: 0} herramientas · respuesta de ${respuesta.length} caracteres"
         }
 
         else -> {
             log(TAG, "todavía no se ejecuta · nombre de ${llamada.nombre.length} caracteres")
             CatalogoDeVoz.TODAVIA_NO
         }
+    }
+
+    /**
+     * MIRA FUERA DEL HILO DE LA CONVERSACIÓN Y CON TOPE. [bloque] devuelve la respuesta y la MEDIDA que se loguea (al
+     * log solo van medidas: lo que la pantalla muestra es del usuario, y el log acaba en la telemetría remota).
+     *
+     * NO ALCANZA CON `withTimeoutOrNull` A SECAS: una corrutina que BLOQUEA el hilo no se puede cancelar, así que el
+     * tope solo vence si lo que se espera es una suspensión. Por eso la mirada corre en su propia corrutina y lo que
+     * lleva el tope es el `await`. Y su alcance NO es hijo de este: con `coroutineScope` habría que esperar a la que
+     * quedó bloqueada, que es justo el cuelgue del que se huye. La que vence sigue su curso y su salida se tira.
+     */
+    private suspend fun mirando(que: String, bloque: suspend () -> Pair<String, String>): String {
+        val mirada = CoroutineScope(mirarEn).async { bloque() }
+        val visto = withTimeoutOrNull(topeDeLaMirada) { mirada.await() }
+        if (visto == null) {
+            mirada.cancel()
+            log(TAG, "$que · tope de $topeDeLaMirada ms")
+            return OjosDeLaVoz.NO_PUDE_MIRAR
+        }
+        log(TAG, "$que · ${visto.second}")
+        return visto.first
     }
 }

@@ -123,13 +123,19 @@ object OjosDeLaVoz {
     ) {
         companion object {
             fun de(uiContext: String): Lectura? {
-                val lineas = uiContext.lines()
+                // LAS ETIQUETAS SON LA ÚLTIMA SECCIÓN Y SE LEEN HASTA EL FINAL, no hasta el fin de la línea. Se sanean
+                // en origen (`etiquetaDePantalla`), pero una que llegara con un salto de línea partía el resumen en una
+                // sección que nadie escribió: se perdían las de detrás y se contestaba «no lo veo» de algo que estaba.
+                if (ETIQUETAS !in uiContext) return null
+                val cabecera = uiContext.substringBefore(ETIQUETAS)
+                val etiquetas = uiContext.substringAfter(ETIQUETAS)
+                val lineas = cabecera.lines()
                 fun linea(prefijo: String) = lineas.firstOrNull { it.startsWith(prefijo) }?.removePrefix(prefijo)?.trim()
                 val paquete = linea(PAQUETE) ?: return null
                 val tipoCrudo = lineas.firstOrNull { it.startsWith(TIPO) }?.removePrefix(TIPO) ?: return null
                 val cuentas = linea(CUENTAS) ?: return null
-                val etiquetas = linea(ETIQUETAS) ?: return null
-                val enfocado = cuentas.substringAfter(ENFOCADO, "").substringBefore("\")", "")
+                // El enfocado lo cierra la ÚLTIMA comilla-paréntesis de la cabecera: su propio texto puede traer una.
+                val enfocado = if (ENFOCADO in cabecera) cabecera.substringAfter(ENFOCADO).substringBeforeLast("\")") else ""
                 return Lectura(
                     paquete = paquete,
                     tipo = tipoCrudo.removeSuffix(TECLADO).trim(),
@@ -137,7 +143,7 @@ object OjosDeLaVoz {
                     tocables = cuentas.substringBefore(SEPARADOR).trim().toIntOrNull() ?: return null,
                     campos = cuentas.substringAfter(CAMPOS, "").trim().takeWhile { it.isDigit() }.toIntOrNull() ?: return null,
                     enfocado = enfocado,
-                    etiquetas = if (etiquetas.isBlank() || etiquetas == NINGUNA) emptyList()
+                    etiquetas = if (etiquetas.isBlank() || etiquetas.trim() == NINGUNA) emptyList()
                     else etiquetas.split(SEPARADOR).map { it.trim() }.filter { it.isNotEmpty() },
                 )
             }

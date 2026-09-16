@@ -44,6 +44,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -2480,6 +2481,19 @@ class Contrato002VozGptLive {
      */
     private val topeDeLaTraba = 5_000L
 
+    /**
+     * Cede hasta que [condicion] se cumpla, con tope. Lo que corre en OTRO despachador vuelve dispachado a este hilo,
+     * así que no basta con los `yield` del canal: hay que dejar correr el reloj de verdad. Acotado, para que lo que no
+     * llega salga rojo con su nombre en vez de colgar el contrato.
+     */
+    private suspend fun esperaA(que: String, condicion: () -> Boolean) {
+        repeat(2_000) {
+            if (condicion()) return
+            delay(1)
+        }
+        fail("$que · no llegó en 2 s")
+    }
+
     @Test
     fun promesa254() = corre {
         val mano = Contrato003FrenoYPuerta.Mano()
@@ -2504,16 +2518,21 @@ class Contrato002VozGptLive {
             llega(sinHechos),
             hace {
                 // TODO ESTO OCURRE CON LA LECTURA TRABADA, y este paso corre en el hilo de la conversación.
+                // La otra llamada también vuelve por su despachador, así que se le da tiempo a llegar, acotado: si
+                // hiciera cola detrás de la trabada no llegaría nunca, y eso es lo que se está juzgando.
+                esperaA(promesa(254) + " · la otra llamada hizo cola detrás de la lectura trabada") { v.salidas().isNotEmpty() }
                 assertEquals(1, v.audios().size, promesa(254) + " · el micrófono se quedó esperando a la lectura")
                 assertEquals(
                     listOf<String?>("call_catalogo"),
                     v.salidas().map { it.texto("item", "call_id") },
-                    promesa(254) + " · la otra llamada hizo cola detrás de la lectura trabada",
+                    promesa(254) + " · se contestó otra cosa con la lectura todavía trabada",
                 )
                 assertEquals(0, v.cuenta("response.create"), promesa(254) + " · con una lectura sin contestar no se pide respuesta")
                 traba.abrir()
             },
             llega(sinHechos),
+            // Soltada, su salida también vuelve por su despachador: se espera a que llegue antes de cerrar el turno.
+            hace { esperaA(promesa(254) + " · la lectura trabada no se contestó al soltarla") { v.salidas().size == 2 } },
             hace { v.reloj.ms += 2000 },
             llega(sinHechos),
         )

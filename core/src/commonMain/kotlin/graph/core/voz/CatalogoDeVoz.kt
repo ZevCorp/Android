@@ -35,10 +35,13 @@ object CatalogoDeVoz {
     /** Lo que cabe de la descripción de una acción: la primera frase basta para saber qué hace. */
     const val TOPE_DE_LA_DESCRIPCION = 140
 
-    /** Lo que cabe el catálogo entero. Muy por debajo del tope de un resultado, que además lo recortaría. */
-    const val TOPE_DEL_CATALOGO = 12_000
-
-    private const val COLA = "…[y más acciones]"
+    /**
+     * LO QUE CABE EL CATÁLOGO ENTERO, EN BYTES Y CON MARGEN. Antes eran 12 000 de los 32 768 que admite la sesión: una
+     * sola respuesta podía gastarse más de un tercio del presupuesto, y el recorte de un resultado no lo veía porque
+     * mide cada resultado por separado. Con 4 000 caben cuatro respuestas enteras y sigue sobrando sitio para hablar
+     * (el catálogo real de hoy ocupa ~1 833). Se mide en bytes porque así cuenta el servidor, y una «á» son dos.
+     */
+    const val TOPE_DEL_CATALOGO = 4_000
 
     /** Las tres que viajan en la delegación del `session.start`. */
     val UTENSILIOS: List<Utensilio> = listOf(
@@ -73,7 +76,9 @@ object CatalogoDeVoz {
             }
             append("\nAhora mismo solo puedo mirar: $DONDE_ESTOY, $QUE_VEO, $QUE_PUEDO_HACER.")
         }
-        return if (texto.length <= TOPE_DEL_CATALOGO) texto else texto.take(TOPE_DEL_CATALOGO - COLA.length) + COLA
+        // El mismo recorte que el de un resultado (promesa 207), con el tope de aquí: no parte caracteres y dice cuánto
+        // se mandó de cuánto, que es lo único que no deja al delegado creyendo que el catálogo se acaba ahí.
+        return recortado(texto, TOPE_DEL_CATALOGO) { it }
     }
 
     /** La primera frase de una descripción, acotada: hay descripciones de 1 500 caracteres en el catálogo real. */
