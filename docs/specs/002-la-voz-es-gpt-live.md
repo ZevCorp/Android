@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · **fase 2B2a implementada** (2026-09-16; promesas 247-253 verdes: el delegado ya sabe dónde está, qué ve y qué podrá hacer; cada promesa se vio ROJA con un sabotaje real, abajo; la corrida en el teléfono, nivel 4, pendiente) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -191,6 +191,21 @@ salida que no llama a `acabar()`— da rojo con su nombre en vez de dejar el con
 | 252 | Una lectura retenida y detrás otra llamada y un trozo de micrófono: la segunda se contesta y el audio viaja con la primera aún retenida; al soltarla salen su salida y un único `response.create`, y el turno cierra |
 | 253 | Una pantalla con etiquetas sembradas («Zorbax», «Qwyk» y un teléfono) y un filtro secreto: ninguna línea del log trae un trozo de ellos, solo cuentas y largos; y cada línea pasada por `TelemetriaDeVoz.paraRemoto` y por `PuertaDeTelemetria` conserva su medida sin una palabra de la pantalla |
 
+
+### Sabotajes de la fase 2B2a (cada uno pone roja su promesa)
+
+Aplicados sobre `fb4e9cc`, uno a uno y revertidos con `git checkout -- core/src app/src`.
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| S247 | dónde estoy deja de decir el tamaño de la pantalla | 247 |
+| S248 | el filtro vuelve a comparar con tildes y mayúsculas | 248 |
+| S249 | el catálogo se escribe a mano: solo las tres primeras acciones | 249 |
+| S250 | lo que no se sabe hacer se contesta como si se hubiera hecho | 250 |
+| S251 | la delegación declara además una herramienta que actuaría | 251 (y 250) |
+| S252 | las lecturas se declaran actuando en la pantalla y hacen cola | 252 (y 250) |
+| S253 | el log escribe el filtro que buscó la persona | 253 |
+
 ---
 
 ## Las fases
@@ -296,6 +311,12 @@ Lo puro en `core/src/commonMain/kotlin/graph/core/voz/`, y en `app` solo el cabl
 Al log de la voz solo van medidas —cuántas etiquetas, cuántos caracteres—: una etiqueta es lo que la pantalla muestra, y
 el log acaba en la telemetría remota (spec 005). Por eso `donde_estoy`, `que_veo` y `que_puedo_hacer` se suman a la lista
 cerrada de `PuertaDeTelemetria` con su promesa, y `etiquetas` pasa a ser sustantivo de medida.
+
+**Medido en la propia prueba (promesa 251), no supuesto:** la apertura con el catálogo ocupa **1 198 B** de los 32 768 que
+el servidor admite por sesión, y declara **3 herramientas**. Declararlas **no gasta items**: la conversación empieza en 0 de
+los 128, porque las herramientas viajan dentro del `session.start` y no son historial. Lo que el servidor cuenta de verdad
+como item solo se sabrá en el nivel 4; por eso el catálogo se agrupa en `que_puedo_hacer` en vez de declarar una
+herramienta por acción, que habría metido las ~25 del catálogo real en cada apertura.
 
 Pone verdes: **247-253**.
 
