@@ -6,7 +6,9 @@ import graph.core.contrato.Contrato006PreguntaAntes.Companion.LLEGO_TARDE
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.MANDA
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.MIRA
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.NUMERO
+import graph.core.contrato.Contrato006PreguntaAntes.Companion.PASO_DEL_WORKFLOW
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.corrida
+import graph.core.contrato.Contrato006PreguntaAntes.Companion.paso
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.pantallaCon
 import graph.core.contrato.Contrato006PreguntaAntes.Companion.promesa
 import graph.core.domain.AgentAction
@@ -141,6 +143,37 @@ class Contrato006LoQueVe {
             promesa(p) + " · GraphApp no marca el origen del pedido en sus dos llamadas a run")
         assertTrue("dijoLaPersona = null" in graphApp,
             promesa(p) + " · la acción anticipada autónoma no dice que no la pidió nadie")
+    }
+
+    /**
+     * UN PASO CONSCIENTE NO SE AUTORIZA A SÍ MISMO (promesa 615). El objetivo de un paso lo arma el workflow con el nombre,
+     * la descripción y la acción del paso (`GraphApp.consciousStep`), así que nombra la acción sensible que va a hacer: leído
+     * como pedido, se daba el permiso a sí mismo. Es el mismo defecto que la 611 cerró en las otras dos vías de correr, y hoy
+     * está inerte solo porque el subconsciente está apagado. Se juzga con el comportamiento y con el cable de la app.
+     */
+    @Test
+    fun promesa615() = corre {
+        val p = 615
+        val fin = BrainTurn(done = true, text = "fin")
+        val accion = AgentAction.Mcp("send_email", mapOf("to" to CORREO_DE_ANA, "body" to LLEGO_TARDE))
+
+        // El objetivo del paso nombra la acción, el destinatario y el contenido: y aun así no lo pidió nadie.
+        val delWorkflow = paso(PASO_DEL_WORKFLOW, BrainTurn(actions = listOf(accion)), fin)
+        assertEquals(emptyList(), delWorkflow.entradas, promesa(p) + " · el paso consciente se autorizó con el objetivo que escribió el workflow")
+        assertEquals(1, delWorkflow.preguntas.size, promesa(p) + " · no preguntó por lo que nadie le pidió: ${delWorkflow.preguntas}")
+
+        // Y lo que la persona sí pidió sigue pasando, aunque el objetivo del paso sea otro texto.
+        val suyo = paso(PASO_DEL_WORKFLOW, BrainTurn(actions = listOf(accion)), fin, dijoLaPersona = MANDA)
+        assertEquals(listOf("sendEmail"), suyo.entradas, promesa(p) + " · no hizo el paso que la persona sí había pedido")
+        assertEquals(emptyList(), suyo.preguntas, promesa(p) + " · preguntó por lo que la persona pidió")
+
+        // Y la app lo pasa de verdad: sin ese cable, el core no tiene con qué distinguirlo.
+        val graphApp = fuenteDeLaApp("GraphApp.kt")
+        assertTrue(Regex("""Ejecucion\.pasoConsciente\([^)]*dichoPorLaPersona\(\)""").containsMatchIn(graphApp),
+            promesa(p) + " · consciousStep no le pasa al paso lo que dijo la persona")
+        val ejecucion = fuenteDeLaApp("Ejecucion.kt")
+        assertTrue(Regex("""armado\.pasoConsciente\([^)]*dijoLaPersona""").containsMatchIn(ejecucion),
+            promesa(p) + " · Ejecucion no reenvía al armado lo que dijo la persona")
     }
 
     /**

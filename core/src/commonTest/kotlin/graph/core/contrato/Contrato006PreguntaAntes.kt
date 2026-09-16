@@ -9,11 +9,13 @@ import graph.core.domain.GraphLog
 import graph.core.domain.LearnedTool
 import graph.core.domain.Phone
 import graph.core.domain.ScreenState
+import graph.core.application.ExecutionEngine
 import graph.core.domain.UserChannel
 import graph.core.precision.ArmadoDeEjecucion
 import graph.core.precision.Freno
 import graph.core.precision.Paraste
 import graph.core.pregunta.CompuertaDePregunta
+import graph.core.pregunta.huella
 import graph.core.telemetria.PuertaDeTelemetria
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.coroutineScope
@@ -56,6 +58,9 @@ class Contrato006PreguntaAntes {
             612 to "«Ya contestado» solo salta el permiso: un dato que sigue faltando y un nombre que sigue siendo ambiguo no se dan por resueltos —la acción no se ejecuta ni cae en el default de las 8— y tampoco se preguntan en bucle.",
             613 to "Una duda sin respuesta no traba la app: la persona puede cerrarla y cerrarla cuenta como «no», y si el canal desaparece la corrida termina sin ejecutar lo sensible, sin plazo que decida por su cuenta.",
             614 to "Una respuesta ambigua no se asume: se vuelve a preguntar una vez y, si sigue ambigua, no se ejecuta. Una negación cuenta cuando abre la respuesta, no en cualquier posición, y una respuesta vacía sigue siendo un no.",
+            615 to "Un paso consciente de un workflow no se autoriza a sí mismo: el objetivo que arma el workflow no es lo que dijo la persona, así que una acción sensible que ese objetivo nombra se pregunta igual.",
+            616 to "Un número del pedido autoriza solo si es el destinatario de esa acción: con más de un destinatario posible en el pedido no se adivina cuál va con cuál y se pregunta; un destino corto se compara por igualdad exacta en vez de darse por incomparable.",
+            617 to "La llave de lo ya contestado no guarda el contenido: es una huella acotada que distingue dos contenidos distintos, no cambia porque cambie el espaciado y no sale al log.",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
@@ -89,6 +94,35 @@ class Contrato006PreguntaAntes {
         /** Dice que no y que sí en la misma frase: no se asume ninguna de las dos, se vuelve a preguntar (614). */
         const val AMBIGUA = "claro, no hay problema, mándalo"
 
+        /* Lo que cierra el control de la E3: un pedido con dos destinatarios, un destino corto, el mismo contenido con
+           otro espaciado y el objetivo que un workflow le escribe a su paso consciente. */
+
+        /** Dos destinatarios en un mismo pedido: el número de la acción está en el texto, pero puede ser el del otro (616). */
+        const val DOS_DESTINOS = "llama a mi jefe al 3001112222 y mándale un mensaje a mi hermana al 3003334444"
+
+        /** El de la hermana: aparece en [DOS_DESTINOS], que es justo lo que no alcanza para autorizar (616). */
+        const val NUMERO_DE_LA_HERMANA = "3003334444"
+
+        /** Un contenido cuyas palabras sí salen del pedido: así lo único que decide el caso es el destinatario (616). */
+        const val PARA_LA_HERMANA = "Mensaje para mi hermana"
+
+        /** Un destino corto, de los que no llegan a 7 cifras: antes no se comparaba nunca y preguntaba siempre (616). */
+        const val CORTO = "3838"
+
+        /** Otro código del mismo largo: corto no quiere decir parecido (616). */
+        const val OTRO_CORTO = "9090"
+
+        /** El pedido que trae el destino corto (616). */
+        const val MANDA_AL_CORTO = "mándale un mensaje al 3838 que llego tarde"
+
+        /** El mismo [KINVARA] con otro espaciado: es el mismo contenido y no se vuelve a preguntar por él (617). */
+        const val KINVARA_ESPACIADO = "Kinvara   al\n  mediodía "
+
+        /** Lo que `GraphApp.consciousStep` le arma a un paso: nombra la acción del paso, y eso no es un permiso (615). */
+        const val PASO_DEL_WORKFLOW = "Estás EN MEDIO del workflow \"avisos\" (avisa cuando llegues tarde). La pantalla ya " +
+            "está donde la dejaron los pasos anteriores: NO reinicies la tarea ni vayas al home. Ejecuta SOLO este paso y " +
+            "termina: $MANDA."
+
         /** Cómo la pantalla lista lo que se ve (`GraphAccessibilityService.uiContext`). */
         fun pantallaCon(vararg etiquetas: String) =
             "paquete: com.x\ntipo: aplicación\nclickeables: 9 · campos de texto: 1\netiquetas visibles: " + etiquetas.joinToString(" · ")
@@ -119,6 +153,53 @@ class Contrato006PreguntaAntes {
             /** Lo que la persona escribió o dictó. `null` = nada suyo: el objetivo lo redactó entero el modelo (611). */
             dijoLaPersona: String? = pedido,
         ): Escena {
+            val montaje = monta(canal, conCanal, apps, pantalla, turnos)
+            val salida = runCatching {
+                montaje.armado.correr(objetivo) { montaje.motor.run(objetivo, dijoLaPersona = dijoLaPersona) }
+            }
+            return montaje.escena(salida)
+        }
+
+        /**
+         * UN PASO CONSCIENTE de un workflow, con el mismo armado de verdad y dentro de una corrida, que es como corre en la
+         * app. El [objetivo] lo escribe el workflow —nombra el paso, su nota y sus datos—, así que lo único que puede
+         * autorizar algo es [dijoLaPersona] (promesa 615). La salida es el `true`/`false` del paso, como texto.
+         */
+        suspend fun paso(
+            objetivo: String,
+            vararg turnos: BrainTurn,
+            canal: Canal = Canal("no"),
+            pedidoDeFuera: String = MIRA,
+            dijoLaPersona: String? = null,
+        ): Escena {
+            val montaje = monta(canal, conCanal = true, apps = emptyList(), pantalla = "", turnos = turnos)
+            val salida = runCatching {
+                montaje.armado.correr(pedidoDeFuera) {
+                    montaje.armado.pasoConsciente(objetivo, montaje.motor, dijoLaPersona).toString()
+                }
+            }
+            return montaje.escena(salida)
+        }
+
+        /** El armado de verdad ya montado: de aquí sale tanto una corrida de fuera como un paso consciente. */
+        private class Montaje(
+            val mano: Mano,
+            val canal: Canal,
+            val cerebro: Cerebro,
+            val diario: Diario,
+            val armado: ArmadoDeEjecucion,
+            val motor: ExecutionEngine,
+        ) {
+            fun escena(salida: Result<String>) = Escena(mano, canal, cerebro, diario, salida)
+        }
+
+        private fun monta(
+            canal: Canal,
+            conCanal: Boolean,
+            apps: List<String>,
+            pantalla: String,
+            turnos: Array<out BrainTurn>,
+        ): Montaje {
             val diario = Diario()
             val mano = Mano()
             val cerebro = Cerebro(*turnos)
@@ -133,8 +214,7 @@ class Contrato006PreguntaAntes {
                 aprendidas = listOf(LearnedTool("contactos", "abre un contacto", listOf("Zorbax Qwyk"))),
                 apps = { apps },
             )
-            val salida = runCatching { armado.correr(objetivo) { sesion.motor.run(objetivo, dijoLaPersona = dijoLaPersona) } }
-            return Escena(mano, canal, cerebro, diario, salida)
+            return Montaje(mano, canal, cerebro, diario, armado, sesion.motor)
         }
     }
 
@@ -573,7 +653,76 @@ class Contrato006PreguntaAntes {
         assertEquals(listOf("sendSms"), clara.entradas, promesa(p) + " · no hizo lo autorizado")
     }
 
+    @Test
+    fun promesa616() = corre {
+        val p = 616
+        // Dos destinatarios en el pedido: el número de la acción está en el texto, pero nadie sabe si es el de ESTA
+        // acción —el cerebro pudo cruzarlos—, así que se pregunta. Su contenido sí sale del pedido: lo único que
+        // decide el caso es el destinatario.
+        val cruzados = corrida(
+            DOS_DESTINOS,
+            BrainTurn(actions = listOf(sms(numero = NUMERO_DE_LA_HERMANA, texto = PARA_LA_HERMANA))),
+            fin(),
+        )
+        assertEquals(emptyList(), cruzados.entradas, promesa(p) + " · un pedido con dos destinatarios autorizó el mensaje")
+        assertEquals(1, cruzados.preguntas.size, promesa(p) + " · no preguntó: ${cruzados.preguntas}")
+
+        // Con un solo destinatario posible sí se sabe cuál es el de la acción: eso tiene que seguir pasando sin preguntar.
+        val uno = corrida(MANDA_AL_NUMERO, BrainTurn(actions = listOf(sms(numero = NUMERO_CON_PREFIJO))), fin())
+        assertEquals(listOf("sendSms"), uno.entradas, promesa(p) + " · el único número del pedido no autorizó su propia acción")
+        assertEquals(emptyList(), uno.preguntas, promesa(p) + " · preguntó por el único destinatario del pedido")
+
+        // Un destino corto se compara por igualdad exacta: antes, con menos de 7 cifras, no se comparaba nunca.
+        val corto = corrida(MANDA_AL_CORTO, BrainTurn(actions = listOf(sms(numero = CORTO))), fin())
+        assertEquals(listOf("sendSms"), corto.entradas, promesa(p) + " · el destino corto del pedido no autorizó: ${corto.preguntas}")
+        assertEquals(emptyList(), corto.preguntas, promesa(p) + " · preguntó por el destino corto que el propio pedido trae")
+
+        // Y corto no quiere decir parecido: otro código, aunque tenga el mismo largo, se pregunta.
+        val otroCorto = corrida(MANDA_AL_CORTO, BrainTurn(actions = listOf(sms(numero = OTRO_CORTO))), fin())
+        assertEquals(emptyList(), otroCorto.entradas, promesa(p) + " · un código corto distinto se dio por bueno")
+        assertEquals(1, otroCorto.preguntas.size, promesa(p) + " · ${otroCorto.preguntas}")
+    }
+
+    @Test
+    fun promesa617() = corre {
+        val p = 617
+        // La llave de lo ya contestado no guarda el contenido: un correo largo o el texto de toda la pantalla dejaban
+        // su copia entera en memoria durante la corrida.
+        val enorme = KINVARA.repeat(4_000)
+        assertTrue(huella(enorme).length <= TOPE_DE_HUELLA,
+            promesa(p) + " · la huella de un contenido de ${enorme.length} caracteres mide ${huella(enorme).length}")
+
+        // Y sigue distinguiendo dos contenidos distintos, que es lo que promete la 610.
+        assertTrue(huella(KINVARA) != huella(OTRO_TEXTO), promesa(p) + " · dos contenidos distintos comparten huella")
+        assertTrue(huella(enorme) != huella(enorme + "x"), promesa(p) + " · dos contenidos largos distintos comparten huella")
+
+        // Nada del contenido vive en la huella: si un día la llave saliera al log, no filtraría lo que el log no filtra.
+        val suya = huella(KINVARA)
+        val texto = plano(KINVARA)
+        for (i in 0..texto.length - 4) {
+            val trozo = texto.substring(i, i + 4)
+            assertTrue(trozo !in suya, promesa(p) + " · la huella lleva «$trozo» del contenido")
+        }
+
+        // El mismo contenido con otro espaciado es el mismo contenido: ni cambia la huella, ni se vuelve a preguntar.
+        assertEquals(huella(KINVARA), huella(KINVARA_ESPACIADO), promesa(p) + " · el espaciado cambió la huella")
+        val compartir = corrida(
+            MIRA,
+            BrainTurn(actions = listOf(comparte(KINVARA_ESPACIADO))),
+            BrainTurn(actions = listOf(comparte(KINVARA))),
+            fin(),
+            canal = Canal("sí, compártelo"),
+        )
+        assertEquals(listOf("shareText"), compartir.entradas, promesa(p) + " · lo autorizado no se hizo")
+        assertEquals(1, compartir.preguntas.size,
+            promesa(p) + " · volvió a preguntar por el mismo contenido con otro espaciado: ${compartir.preguntas}")
+        assertTrue(compartir.diario.lineas.none { suya in it }, promesa(p) + " · la huella salió al log: ${compartir.diario.lineas}")
+    }
+
     /* ---------- Lo que ayuda a juzgar ---------- */
+
+    /** Cuánto puede medir una huella: lo que no depende del largo del contenido cabe de sobra aquí (promesa 617). */
+    private val TOPE_DE_HUELLA = 40
 
     private fun <T> assertSingle(lista: List<T>, mensaje: String): T {
         assertEquals(1, lista.size, "$mensaje · $lista")
