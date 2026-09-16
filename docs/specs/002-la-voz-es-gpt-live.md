@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · **fase 2B2a implementada** (2026-09-16; promesas 247-253 verdes: el delegado ya sabe dónde está, qué ve y qué podrá hacer; cada promesa se vio ROJA con un sabotaje real, abajo; la corrida en el teléfono, nivel 4, pendiente) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · **fase 2B2a implementada** (2026-09-16; promesas 247-253 verdes: el delegado ya sabe dónde está, qué ve y qué podrá hacer; cada promesa se vio ROJA con un sabotaje real, abajo; la corrida en el teléfono, nivel 4, pendiente) · **arreglos del control de la 2B2a** (2026-09-16; promesas 254-258 verdes, **132 en total**: mirar ya no congela la charla, la sesión cuenta sus bytes y el catálogo es el de verdad; siete sabotajes, cada uno rojo sobre su promesa) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -216,6 +216,21 @@ Aplicados sobre `fb4e9cc`, uno a uno y revertidos con `git checkout -- core/src 
 | S252 | las lecturas se declaran actuando en la pantalla y hacen cola | 252 (y 250) |
 | S253 | el log escribe el filtro que buscó la persona | 253 |
 
+### Sabotajes de los arreglos (cada uno pone roja su promesa)
+
+Aplicados sobre `0863403`, uno a uno y revertidos con `git checkout -- core/src app/src`. Las dos mitades de la 254 y de
+la 257 se sabotean por separado: una promesa con dos mitades y un solo sabotaje deja media promesa sin juzgar.
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| S254a | la lectura vuelve al hilo único de la conversación | 254 |
+| S254b | la mirada no tiene tope: se espera para siempre | 254 |
+| S255 | los bytes del item no se acumulan en la sesión | 255 |
+| S256 | la voz vuelve a pedir el catálogo con una lista vacía | 256 |
+| S257a | la etiqueta no se sanea en origen | 257 |
+| S257b | el enfocado cierra por la PRIMERA comilla-paréntesis | 257 |
+| S258 | un catálogo ausente se contesta como un catálogo vacío | 258 |
+
 ---
 
 ## Las fases
@@ -322,13 +337,67 @@ Al log de la voz solo van medidas —cuántas etiquetas, cuántos caracteres—:
 el log acaba en la telemetría remota (spec 005). Por eso `donde_estoy`, `que_veo` y `que_puedo_hacer` se suman a la lista
 cerrada de `PuertaDeTelemetria` con su promesa, y `etiquetas` pasa a ser sustantivo de medida.
 
-**Medido en la propia prueba (promesa 251), no supuesto:** la apertura con el catálogo ocupa **1 198 B** de los 32 768 que
+**Medido en la propia prueba (promesa 251), no supuesto:** la apertura con el catálogo ocupa **2 295 B** de los 32 768 que
 el servidor admite por sesión, y declara **3 herramientas**. Declararlas **no gasta items**: la conversación empieza en 0 de
-los 128, porque las herramientas viajan dentro del `session.start` y no son historial. Lo que el servidor cuenta de verdad
+los 128, porque las herramientas viajan dentro del `session.start` y no son historial.
+
+> La primera medida de esta fase decía **1 198 B**, y era de otra cosa: la prueba medía con dos instrucciones de juguete
+> («Eres Ü.») porque las de verdad vivían en `app`, fuera del alcance del contrato. Por eso la persona se mudó a
+> `core/…/voz/PersonaDeLaVoz.kt`: ahora la 251 mide lo que de verdad viaja desde el teléfono. **Una medida que no se toma
+> sobre lo que viaja no es una medida**, y el margen que se creía tener era casi el doble del real. Lo que el servidor cuenta de verdad
 como item solo se sabrá en el nivel 4; por eso el catálogo se agrupa en `que_puedo_hacer` en vez de declarar una
 herramienta por acción, que habría metido las ~25 del catálogo real en cada apertura.
 
 Pone verdes: **247-253**.
+
+#### Lo que el control encontró, y cómo quedó (promesas 254-258)
+
+**Mirar congelaba la conversación.** `GraphAccessibilityService.state()` recorre el árbol de accesibilidad con **IPC
+binder síncrono**: bloquea el hilo en vez de suspenderlo. Como las herramientas de control corren dentro del hilo único
+de `ConversacionViva`, mientras durara el recorrido no se procesaba el audio que llegaba ni entraba el micrófono —con
+una lista larga, corte audible; con el servicio colgado, la voz muda y sin decir por qué. La regla ya estaba escrita en
+`ConversacionViva.kt`; lo que faltaba era cumplirla. Ahora la lectura salta a **su propio despachador** (`mirarEn`, el
+de entrada/salida, **sin default** para que ningún sitio se olvide de decirlo) y lleva tope.
+
+> **El tope es 2 500 ms, y es un tope de CONVERSACIÓN, no de operación.** Mientras la lectura no vuelve, el delegado no
+> tiene salida y la voz está callada; un silencio de más de dos segundos y medio ya se lee como que se colgó. Y queda muy
+> por encima de lo que tarda un árbol normal —decenas de ms, cientos en una lista larga—, así que solo lo cruza una
+> pantalla patológica o un servicio colgado, y entonces vale más decirlo que esperar. Vencido, se contesta que no se pudo
+> mirar en vez de dejar muda a la voz.
+>
+> **No alcanzaba con `withTimeoutOrNull`:** una corrutina que BLOQUEA el hilo no se puede cancelar, así que el tope solo
+> vence si lo que se espera es una suspensión. La mirada corre en su propia corrutina —y en un alcance que **no** es hijo
+> del que espera, porque con `coroutineScope` habría que esperar a la que quedó bloqueada, que es justo el cuelgue del que
+> se huye— y el tope va sobre el `await`.
+
+**La 252 no podía atrapar esto, y no se puede reforzar para que lo atrape.** Juzga con un ejecutor que *suspende*
+(`CompletableDeferred`), y algo que suspende suelta el hilo: la conversación sigue igual corra donde corra. Su punto
+ciego es estructural, no un caso que le falte. Por eso la **254** usa un ejecutor que **bloquea el hilo de verdad**
+(`CountDownLatch`), y la traba solo la abre un paso del guion, que corre en el hilo de la conversación: si la lectura
+volviera a ese hilo, ese paso no llegaría nunca. El enunciado de la 252 queda igual.
+
+**La sesión contaba items pero no bytes.** El límite del servidor tiene dos mitades —128 items **y** 32 768 B— y el
+historial se llena por la que llegue antes; el recorte mide cada resultado **por separado**, así que dos que caben de a
+uno se pasan juntos. Ahora se acumulan los bytes y se avisa una vez a los 30 720, sin cortar nada. El catálogo baja de
+12 000 a **4 000** y se acota **en bytes** y no en caracteres, que es como cuenta el servidor («á» son dos): entra cuatro
+veces en el presupuesto, y el catálogo real de hoy ocupa ~1 833.
+
+**El catálogo de la voz omitía las aprendidas.** Pedía las herramientas con `emptyList()` mientras el otro llamador sí
+las pasaba: en el teléfono la voz prometía un catálogo que no era el del cerebro. El criterio vive ahora en **un solo
+sitio** (`GraphApp.aprendidasDisponibles()`) y lo usan los dos.
+
+**Una etiqueta con salto de línea rompía el parseo.** El resumen es texto plano y une las etiquetas con « · », así que
+una etiqueta multilínea partía el resumen en una sección que nadie escribió —y se contestaba «no lo veo» de algo que sí
+estaba— y una que trajera el separador inflaba la cuenta. Se sanea **en origen** (`etiquetaDePantalla`) y el que la lee
+es **tolerante**. El saneo no cambia el sentido de lo que ve el cerebro, que come el mismo texto: un salto pasa a espacio
+y el separador a guion. El campo enfocado cierra por la **última** comilla-paréntesis, así que un texto que traiga `")`
+ya no lo trunca.
+
+**Sin servicio, cada herramienta lo contaba a su manera.** `que_puedo_hacer` callaba la causa y devolvía un catálogo
+vacío, que se lee como que Ü no sabe hacer nada. Ahora `acciones` devuelve `null` —que no es una lista vacía— y las tres
+dicen la misma causa con las mismas palabras.
+
+Pone verdes: **254-258**.
 
 ---
 
