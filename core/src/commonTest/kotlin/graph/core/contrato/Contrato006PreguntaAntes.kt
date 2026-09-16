@@ -59,8 +59,12 @@ class Contrato006PreguntaAntes {
             613 to "Una duda sin respuesta no traba la app: la persona puede cerrarla y cerrarla cuenta como «no», y si el canal desaparece la corrida termina sin ejecutar lo sensible, sin plazo que decida por su cuenta.",
             614 to "Una respuesta ambigua no se asume: se vuelve a preguntar una vez y, si sigue ambigua, no se ejecuta. Una negación cuenta cuando abre la respuesta, no en cualquier posición, y una respuesta vacía sigue siendo un no.",
             615 to "Un paso consciente de un workflow no se autoriza a sí mismo: el objetivo que arma el workflow no es lo que dijo la persona, así que una acción sensible que ese objetivo nombra se pregunta igual.",
-            616 to "Un número del pedido autoriza solo si es el destinatario de esa acción: con más de un destinatario posible en el pedido no se adivina cuál va con cuál y se pregunta; un destino corto se compara por igualdad exacta en vez de darse por incomparable.",
+            616 to "Un número del pedido autoriza solo si es el destinatario de esa acción: con más de un destinatario posible en el pedido no se adivina cuál va con cuál y se pregunta.",
             617 to "La llave de lo ya contestado no guarda el contenido: es una huella acotada que distingue dos contenidos distintos, no cambia porque cambie el espaciado y no sale al log.",
+            618 to "Un destino de menos de 7 cifras no se autoriza nunca por coincidir con un número del pedido: un monto o un código no dicen a quién va la acción, así que se pregunta; la igualdad exacta sirve para descartar, nunca para autorizar.",
+            619 to "El permiso de un paso consciente viaja desde la corrida que disparó el workflow, no se vuelve a calcular: una corrida autónoma, que no autoriza nada, tampoco autoriza el paso que dispare.",
+            620 to "Una fecha del pedido no cuenta como destinatario posible: un pedido con una fecha y un solo teléfono no se vuelve ambiguo y no pregunta de más.",
+            621 to "Correr el motor obliga a decir qué dijo la persona: no hay default que autorice con el objetivo, así que un objetivo que redactó el modelo no puede autorizarse a sí mismo por descuido de quien lo corre.",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
@@ -106,14 +110,32 @@ class Contrato006PreguntaAntes {
         /** Un contenido cuyas palabras sí salen del pedido: así lo único que decide el caso es el destinatario (616). */
         const val PARA_LA_HERMANA = "Mensaje para mi hermana"
 
-        /** Un destino corto, de los que no llegan a 7 cifras: antes no se comparaba nunca y preguntaba siempre (616). */
+        /** Un destino corto, de los que no llegan a 7 cifras: un código de banco o de operadora es así (618). */
         const val CORTO = "3838"
 
-        /** Otro código del mismo largo: corto no quiere decir parecido (616). */
+        /** Otro código del mismo largo: corto no quiere decir parecido (618). */
         const val OTRO_CORTO = "9090"
 
-        /** El pedido que trae el destino corto (616). */
+        /** El pedido que nombra el destino corto: ni así autoriza, porque un número corto no dice a quién va (618). */
         const val MANDA_AL_CORTO = "mándale un mensaje al 3838 que llego tarde"
+
+        /* Lo que cierra el control de la E4: un monto que se parece a un código corto, y una fecha que el guion fundía en
+           una ristra de cifras. */
+
+        /** El caso del control: «89000» es lo que la persona cobró, no a quién le manda el mensaje (618). */
+        const val EL_MONTO = "cobré 89000 pesos, mándale un mensaje a mi mamá"
+
+        /** El código corto al que iba el SMS: mismo largo y mismo valor que el monto, y aun así no es un destinatario (618). */
+        const val CODIGO_DEL_MONTO = "89000"
+
+        /** Un contenido que sí sale de [EL_MONTO]: así lo único que decide el caso es el destinatario (618). */
+        const val PARA_MAMA = "Mensaje para mi mamá"
+
+        /** Un pedido con una fecha y un teléfono inequívoco: la fecha no lo vuelve ambiguo (620). */
+        const val CON_FECHA = "mándale al 310 445 9821 que llego tarde el 2026-03-15"
+
+        /** Un pedido cuyo único número es una fecha: no hay destinatario con el que cruzar y se pregunta (620). */
+        const val SOLO_FECHA = "mándale un mensaje el 2026-03-15 que llego tarde"
 
         /** El mismo [KINVARA] con otro espaciado: es el mismo contenido y no se vuelve a preguntar por él (617). */
         const val KINVARA_ESPACIADO = "Kinvara   al\n  mediodía "
@@ -403,7 +425,7 @@ class Contrato006PreguntaAntes {
                 { cerebro }, Voz(), usuario = canal, maxTurnos = 1, pausa = { 0 },
             )
             var salida: Result<String>? = null
-            val trabajo = launch { salida = runCatching { armado.correr(MIRA) { sesion.motor.run(MIRA) } } }
+            val trabajo = launch { salida = runCatching { armado.correr(MIRA) { sesion.motor.run(MIRA, dijoLaPersona = MIRA) } } }
             // Con tope: una compuerta que no pregunta deja la prueba colgada, y colgada no dice qué falló.
             assertEquals(true, withTimeoutOrNull(2_000) { while (canal.preguntas.isEmpty()) yield(); true },
                 promesa(p) + " · no preguntó antes de ejecutar la acción sensible")
@@ -671,16 +693,6 @@ class Contrato006PreguntaAntes {
         val uno = corrida(MANDA_AL_NUMERO, BrainTurn(actions = listOf(sms(numero = NUMERO_CON_PREFIJO))), fin())
         assertEquals(listOf("sendSms"), uno.entradas, promesa(p) + " · el único número del pedido no autorizó su propia acción")
         assertEquals(emptyList(), uno.preguntas, promesa(p) + " · preguntó por el único destinatario del pedido")
-
-        // Un destino corto se compara por igualdad exacta: antes, con menos de 7 cifras, no se comparaba nunca.
-        val corto = corrida(MANDA_AL_CORTO, BrainTurn(actions = listOf(sms(numero = CORTO))), fin())
-        assertEquals(listOf("sendSms"), corto.entradas, promesa(p) + " · el destino corto del pedido no autorizó: ${corto.preguntas}")
-        assertEquals(emptyList(), corto.preguntas, promesa(p) + " · preguntó por el destino corto que el propio pedido trae")
-
-        // Y corto no quiere decir parecido: otro código, aunque tenga el mismo largo, se pregunta.
-        val otroCorto = corrida(MANDA_AL_CORTO, BrainTurn(actions = listOf(sms(numero = OTRO_CORTO))), fin())
-        assertEquals(emptyList(), otroCorto.entradas, promesa(p) + " · un código corto distinto se dio por bueno")
-        assertEquals(1, otroCorto.preguntas.size, promesa(p) + " · ${otroCorto.preguntas}")
     }
 
     @Test
@@ -717,6 +729,57 @@ class Contrato006PreguntaAntes {
         assertEquals(1, compartir.preguntas.size,
             promesa(p) + " · volvió a preguntar por el mismo contenido con otro espaciado: ${compartir.preguntas}")
         assertTrue(compartir.diario.lineas.none { suya in it }, promesa(p) + " · la huella salió al log: ${compartir.diario.lineas}")
+    }
+
+    /**
+     * UN DESTINO CORTO NO SE AUTORIZA POR COINCIDIR (promesa 618). La E4 empezó a comparar los destinos de menos de 7 cifras
+     * por igualdad exacta, y con eso un número cualquiera del pedido —un monto— autorizaba un envío a un código corto que
+     * valía lo mismo. Los códigos de bancos y operadoras son justo así: se vuelve al lado seguro de antes.
+     */
+    @Test
+    fun promesa618() = corre {
+        val p = 618
+        // El caso con que el control saltó la compuerta: el pedido trae un MONTO de cinco cifras y la acción va a un código
+        // corto que vale lo mismo. Coincidir en el largo y en el valor no dice que ese número sea un destinatario.
+        val monto = corrida(EL_MONTO, BrainTurn(actions = listOf(sms(numero = CODIGO_DEL_MONTO, texto = PARA_MAMA))), fin())
+        assertEquals(emptyList(), monto.entradas, promesa(p) + " · un monto del pedido autorizó el mensaje al código corto")
+        assertEquals(1, monto.preguntas.size, promesa(p) + " · no preguntó: ${monto.preguntas}")
+        assertEquals(1, monto.preguntasDeClase("permiso"), promesa(p) + " · ${monto.diario.lineas}")
+
+        // Ni siquiera el código que el propio pedido nombra como destino: lo corto no autoriza, se pregunta.
+        for ((que, numero) in listOf("el que el pedido nombra" to CORTO, "otro del mismo largo" to OTRO_CORTO)) {
+            val corto = corrida(MANDA_AL_CORTO, BrainTurn(actions = listOf(sms(numero = numero))), fin())
+            assertEquals(emptyList(), corto.entradas, promesa(p) + " · $que salió del teléfono sin preguntar")
+            assertEquals(1, corto.preguntas.size, promesa(p) + " · $que no se preguntó: ${corto.preguntas}")
+        }
+
+        // Y lo que sí se puede comparar sigue pasando: el teléfono que el pedido trae autoriza su propia acción (609, 616).
+        val telefono = corrida(MANDA_AL_NUMERO, BrainTurn(actions = listOf(sms(numero = NUMERO_CON_PREFIJO))), fin())
+        assertEquals(listOf("sendSms"), telefono.entradas, promesa(p) + " · el teléfono del pedido dejó de autorizar su acción")
+        assertEquals(emptyList(), telefono.preguntas, promesa(p) + " · preguntó por el único teléfono del pedido")
+    }
+
+    /**
+     * UNA FECHA NO ES UN DESTINATARIO (promesa 620). El guion separa un número escrito a trozos, así que «2026-03-15» se leía
+     * como una ristra de 8 cifras: un pedido con fecha y un teléfono inequívoco quedaba con dos destinatarios posibles y
+     * preguntaba de más. Es el lado seguro, pero es fricción que no hace falta.
+     */
+    @Test
+    fun promesa620() = corre {
+        val p = 620
+        val conFecha = corrida(CON_FECHA, BrainTurn(actions = listOf(sms(numero = NUMERO_CON_PREFIJO))), fin())
+        assertEquals(listOf("sendSms"), conFecha.entradas, promesa(p) + " · la fecha contó como otro destinatario: ${conFecha.preguntas}")
+        assertEquals(emptyList(), conFecha.preguntas, promesa(p) + " · preguntó de más por una fecha del pedido")
+
+        // Y la puerta sigue cerrada: el mismo pedido no autoriza un número que no nombra…
+        val otro = corrida(CON_FECHA, BrainTurn(actions = listOf(sms(numero = OTRO_NUMERO))), fin())
+        assertEquals(emptyList(), otro.entradas, promesa(p) + " · el pedido con fecha autorizó un número que no nombra")
+        assertEquals(1, otro.preguntas.size, promesa(p) + " · ${otro.preguntas}")
+
+        // …ni la fecha misma vale como número con el que cruzar: si es lo único que trae, no hay con qué comparar.
+        val soloFecha = corrida(SOLO_FECHA, BrainTurn(actions = listOf(sms())), fin())
+        assertEquals(emptyList(), soloFecha.entradas, promesa(p) + " · una fecha del pedido autorizó el mensaje")
+        assertEquals(1, soloFecha.preguntas.size, promesa(p) + " · ${soloFecha.preguntas}")
     }
 
     /* ---------- Lo que ayuda a juzgar ---------- */

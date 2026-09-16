@@ -1,11 +1,14 @@
 # Plan de implementación: pregunta antes de ejecutar — el cliente frena lo que no le pediste y pide el contexto que le falta
 
-Estado: **fases E1, E2, E3 y E4 implementadas** (2026-09-16; promesas 601-617 verdes, contrato de 137 promesas; cada una se
-vio ROJA con un sabotaje real — 25 sabotajes, uno por fila de la tabla de abajo). La **E3 nace de un control que dio NO
+Estado: **fases E1, E2, E3, E4 y E5 implementadas** (2026-09-16; promesas 601-621 verdes, contrato de 141 promesas; cada una
+se vio ROJA con un sabotaje real — 29 sabotajes, uno por fila de la tabla de abajo). La **E3 nace de un control que dio NO
 APROBADO**: la compuerta de la E1 se saltaba con frases ordinarias, porque «no hay nada que comparar» valía como permiso
 (ver «Lo que el control encontró»); la **E4 cierra los tres amarillos del control que revisó esa E3**: el paso consciente de
 un workflow se autorizaba a sí mismo, un número del pedido autorizaba aunque fuera de otro destinatario, y la llave de lo ya
-contestado guardaba el contenido entero · Nace de un pedido del Capitán (2026-09-16): «me
+contestado guardaba el contenido entero; la **E5 cierra el rojo y los tres amarillos del control que revisó esa E4**: un
+destino corto se autorizaba por coincidir con un monto del pedido, el permiso de un paso consciente se recalculaba desde otra
+corrida, el motor traía un default que se autorizaba solo, y una fecha contaba como destinatario y hacía preguntar de más ·
+Nace de un pedido del Capitán (2026-09-16): «me
 gustaría que si no sabe qué hacer me pregunte, que pueda tener claro algo antes de ejecutar, que pida contexto para hacer
 las tareas bien» · Rama: `yokh/pregunta-antes`
 
@@ -59,8 +62,8 @@ del mapa `PROMESAS` del test que la juzga; si cambia uno, cambia el otro en el m
 
 | Archivo | Promesas |
 |---|---|
-| `core/src/commonTest/kotlin/graph/core/contrato/Contrato006PreguntaAntes.kt` | 601, 603-610, 612, 614, 616, 617 |
-| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato006LoQueVe.kt` (lee las fuentes de la app: solo jvm lee disco) | 602, 611, 613, 615 |
+| `core/src/commonTest/kotlin/graph/core/contrato/Contrato006PreguntaAntes.kt` | 601, 603-610, 612, 614, 616-618, 620 |
+| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato006LoQueVe.kt` (lee las fuentes de la app y del núcleo: solo jvm lee disco) | 602, 611, 613, 615, 619, 621 |
 
 | # | Promesa | Fase |
 |---|---|---|
@@ -79,8 +82,12 @@ del mapa `PROMESAS` del test que la juzga; si cambia uno, cambia el otro en el m
 | 613 | Una duda sin respuesta no traba la app: la persona puede cerrarla y cerrarla cuenta como «no», y si el canal desaparece la corrida termina sin ejecutar lo sensible, sin plazo que decida por su cuenta. | E3 |
 | 614 | Una respuesta ambigua no se asume: se vuelve a preguntar una vez y, si sigue ambigua, no se ejecuta. Una negación cuenta cuando abre la respuesta, no en cualquier posición, y una respuesta vacía sigue siendo un no. | E3 |
 | 615 | Un paso consciente de un workflow no se autoriza a sí mismo: el objetivo que arma el workflow no es lo que dijo la persona, así que una acción sensible que ese objetivo nombra se pregunta igual. | E4 |
-| 616 | Un número del pedido autoriza solo si es el destinatario de esa acción: con más de un destinatario posible en el pedido no se adivina cuál va con cuál y se pregunta; un destino corto se compara por igualdad exacta en vez de darse por incomparable. | E4 |
+| 616 | Un número del pedido autoriza solo si es el destinatario de esa acción: con más de un destinatario posible en el pedido no se adivina cuál va con cuál y se pregunta. | E4 |
 | 617 | La llave de lo ya contestado no guarda el contenido: es una huella acotada que distingue dos contenidos distintos, no cambia porque cambie el espaciado y no sale al log. | E4 |
+| 618 | Un destino de menos de 7 cifras no se autoriza nunca por coincidir con un número del pedido: un monto o un código no dicen a quién va la acción, así que se pregunta; la igualdad exacta sirve para descartar, nunca para autorizar. | E5 |
+| 619 | El permiso de un paso consciente viaja desde la corrida que disparó el workflow, no se vuelve a calcular: una corrida autónoma, que no autoriza nada, tampoco autoriza el paso que dispare. | E5 |
+| 620 | Una fecha del pedido no cuenta como destinatario posible: un pedido con una fecha y un solo teléfono no se vuelve ambiguo y no pregunta de más. | E5 |
+| 621 | Correr el motor obliga a decir qué dijo la persona: no hay default que autorice con el objetivo, así que un objetivo que redactó el modelo no puede autorizarse a sí mismo por descuido de quien lo corre. | E5 |
 
 **La que cierra el asunto es la 604.** Las otras siete deciden *cuándo* preguntar; la 604 es la que hace que preguntar sea
 seguro: una corrida que espera no actúa, no paga turnos, no se «destraba» sola con un plazo — y se para con el mismo freno de
@@ -118,10 +125,14 @@ cruzar con el pedido, no está autorizado y se pregunta (promesa 609).
   acción, no con cualquier número del texto** (promesa 616): el pedido tiene que traer **un solo** destinatario posible, que
   es con el que se cruza. Con dos, no hay forma de saber cuál va con esta acción —«llama a mi jefe al 300 111 2222 y mándale
   un mensaje a mi hermana al 300 333 4444»: si el cerebro los cruza, el número equivocado también está en el texto—, así que
-  se pregunta. Dos escrituras del mismo número son un mismo destinatario. Con 7 cifras o más se cruzan las últimas 7; un
-  destino corto (de 3 a 6 cifras, un código) se cruza por **igualdad exacta**, que antes no se comparaba nunca. Si el pedido
-  no trae ninguno, **no hay con qué comparar y no autoriza**. Un destinatario vacío no es un destinatario que no cruza: es un
-  dato que falta, y lo pide la pregunta de dato;
+  se pregunta. Dos escrituras del mismo número son un mismo destinatario, y se cruzan por sus últimas 7 cifras. Un destino de
+  **menos de 7 cifras** —un código corto de banco o de operadora— **no se autoriza nunca por coincidencia numérica**
+  (promesa 618): en «cobré 89000 pesos, mándale un mensaje a mi mamá» el 89000 es un monto, no un destinatario, y darlo por
+  bueno mandaba el `send_sms` al código corto `89000` sin preguntar. La igualdad exacta puede seguir sirviendo para
+  **descartar**, nunca para autorizar. Y una **fecha** no cuenta como número del pedido (promesa 620): el guion fundía
+  «2026-03-15» en una ristra de 8 cifras, así que un pedido con fecha y un teléfono inequívoco quedaba «ambiguo» y preguntaba
+  de más. Si el pedido no trae ninguno, **no hay con qué comparar y no autoriza**. Un destinatario vacío no es un
+  destinatario que no cruza: es un dato que falta, y lo pide la pregunta de dato;
 - **el contenido se corresponde** — alguna palabra de 4 o más del contenido, fuera de una lista corta de palabras de
   relleno, está en el pedido. Un contenido sin ninguna palabra propia que cruzar (`«Ya voy»`, `«Ok gracias»`) **tampoco
   autoriza**: no dice que la persona lo haya pedido, solo que es corto.
@@ -222,9 +233,13 @@ la arma él, y ningún archivo de la app la construye.
 | 612 | `set_alarm` sin `hour` en dos turnos seguidos: pregunta UNA vez, la alarma de las 8 **no** llega al teléfono en ninguno de los dos, y el segundo vuelve al cerebro diciendo que el dato sigue faltando. Un `launch_app app=Banco` que sigue ambiguo en el turno 2, igual: no abre ninguna. Y un permiso contestado que sí sigue pasando sin preguntar, que es lo único que el atajo debe saltar |
 | 613 | El canal cuyo `ask` lanza (la pantalla murió): lo sensible no llega al teléfono, el resultado lo dice, la corrida **termina** y pide su turno siguiente. El canal que contesta «» (la persona cerró la duda): cuenta como no. Y las fuentes de la app: `MainActivity.ask` no usa `setCancelable(false)`, contesta «» al cerrarse y al destruirse la pantalla, y ni ella ni `FloatingBubble` tienen plazo que conteste solo |
 | 614 | Siempre con dos turnos de la misma acción, que es como una acción autorizada llega a hacerse (605): «claro, no hay problema, mándalo» → se pregunta una segunda vez y, contestado «dale», el turno siguiente la hace; contestada otra ambigüedad, no la hace y no se pregunta una tercera. «no, déjalo» y «» → niegan a la primera, sin repreguntar. «sí, mándaselo» → autoriza a la primera |
-| 615 | Un paso consciente con el armado de verdad, dentro de su corrida, y con el objetivo que le arma un workflow («Estás EN MEDIO del workflow "avisos"… Ejecuta SOLO este paso y termina: mándale a Ana que llego tarde»): el `send_email` a «ana@…» con «Llego tarde» no sale del teléfono y deja una pregunta, aunque el objetivo lo nombre todo. El mismo paso con `dijoLaPersona` = el pedido de la persona sí se hace. Y las fuentes de la app: `GraphApp.consciousStep` le pasa lo que dijo la persona y `Ejecucion` lo reenvía al armado |
-| 616 | «llama a mi jefe al 3001112222 y mándale un mensaje a mi hermana al 3003334444» + `send_sms` al número de la hermana con un contenido que sí sale del pedido → pregunta: con dos destinatarios posibles no se sabe cuál va con la acción. Con un solo número en el pedido sigue pasando sin preguntar (el de la 609). «mándale un mensaje al 3838 que llego tarde» + `send_sms` a «3838» → se hace sin preguntar; el mismo pedido con `send_sms` a «9090» → pregunta |
+| 615 | Un paso consciente con el armado de verdad, dentro de su corrida, y con el objetivo que le arma un workflow («Estás EN MEDIO del workflow "avisos"… Ejecuta SOLO este paso y termina: mándale a Ana que llego tarde»): el `send_email` a «ana@…» con «Llego tarde» no sale del teléfono y deja una pregunta, aunque el objetivo lo nombre todo. El mismo paso con `dijoLaPersona` = el pedido de la persona sí se hace. Y las fuentes de la app: `GraphApp.consciousStep` le pasa al paso lo que dijo la persona y `Ejecucion` lo reenvía al armado |
+| 616 | «llama a mi jefe al 3001112222 y mándale un mensaje a mi hermana al 3003334444» + `send_sms` al número de la hermana con un contenido que sí sale del pedido → pregunta: con dos destinatarios posibles no se sabe cuál va con la acción. Con un solo número en el pedido sigue pasando sin preguntar (el de la 609) |
 | 617 | La huella de un contenido de 76.000 caracteres mide menos de 40; dos contenidos distintos (y dos largos distintos) no la comparten; ningún trozo de 4 caracteres del contenido aparece en ella. Y con el armado de verdad: autorizado un `share_text`, el mismo texto con otro espaciado en el turno siguiente se hace sin volver a preguntar, y la huella no aparece en ninguna línea del log |
+| 618 | El caso del control, con el armado de verdad: «cobré 89000 pesos, mándale un mensaje a mi mamá» + `send_sms` al código corto «89000» con un contenido que sí sale del pedido → no llega al teléfono y pregunta, aunque el pedido traiga ese mismo número. Igual el código que el propio pedido nombra como destino («mándale un mensaje al 3838 que llego tarde» + `send_sms` a «3838»), y el de otro código del mismo largo. Y un teléfono de 7 cifras o más que el pedido sí trae sigue pasando sin preguntar: lo que se cierra es lo corto, no lo comparable |
+| 619 | Las fuentes de la app: `consciousStep` recibe el permiso de quien lo dispara —no lo vuelve a leer con `dichoPorLaPersona()`—, `newSession` lo toma como parámetro y lo mete en el `consciente` que arma el workflow, la corrida de la persona le pasa lo mismo que al motor, y la acción anticipada autónoma le pasa `null`. Con el comportamiento ya juzgado por la 615: un paso con `dijoLaPersona = null` no ejecuta lo sensible |
+| 620 | «mándale al 310 445 9821 que llego tarde el 2026-03-15» + `send_sms` a «+57 310-445-9821» con «Llego tarde» → se hace sin preguntar: la fecha no es un segundo destinatario. La puerta sigue cerrada: el mismo pedido con `send_sms` a otro número → pregunta, y un pedido cuyo único número es la fecha → pregunta |
+| 621 | La fuente del núcleo: la firma de `ExecutionEngine.run` no trae default para `dijoLaPersona` —quien corre el motor decide qué autoriza— y `ArmadoDeEjecucion.pasoConsciente`, que sí lo trae, lo trae en `null`, que no autoriza nada |
 
 ### Sabotajes (cada uno pone roja su promesa)
 
@@ -252,9 +267,12 @@ la arma él, y ningún archivo de la app la construye.
 | 614 | una negación en cualquier posición vuelve a contar como negación | roja: «claro, no hay problema, mándalo» no ejecuta y no repregunta |
 | 615 | el paso consciente vuelve a correr su motor sin decir qué dijo la persona (el default: el objetivo del paso) | roja: el paso manda el correo que nadie pidió |
 | 616 | el número de la acción vuelve a autorizarse por estar en cualquier parte del pedido | roja: el pedido con dos destinatarios manda el mensaje sin preguntar |
-| 616 | un destino de menos de 7 cifras vuelve a darse por incomparable | roja: el código corto que el propio pedido trae pregunta |
 | 617 | la llave de lo ya contestado vuelve a llevar el contenido tal cual | roja: el mismo contenido con otro espaciado vuelve a preguntar |
 | 617 | la huella devuelve el texto entero | roja: mide lo que mida el contenido y lleva sus trozos |
+| 618 | un destino corto vuelve a autorizarse por igualdad exacta con un número del pedido | roja: el monto de 5 cifras manda el SMS al código corto sin preguntar |
+| 619 | `consciousStep` vuelve a calcular el permiso con `dichoPorLaPersona()` en vez de recibirlo de su corrida | roja: el paso mira los prompts de otra corrida |
+| 620 | la fecha vuelve a contar como destinatario posible del pedido | roja: el pedido con fecha y un solo teléfono pregunta de más |
+| 621 | `run` vuelve a traer `dijoLaPersona: String? = goal` | roja: el motor se autoriza con el objetivo que le den |
 
 ---
 
@@ -334,6 +352,18 @@ Pone verdes: **609-614**.
 
 Pone verdes: **615-617**.
 
+### Fase E5 — el rojo y los tres amarillos del control de la E4 (esta corrida)
+
+- `core/…/pregunta/AccionSensible.kt` — un destino de menos de 7 cifras no se autoriza por coincidencia numérica (vuelve el
+  lado seguro de antes de la E4), y una fecha no cuenta como destinatario posible del pedido.
+- `core/…/application/Engine.kt` — `run` pierde el default de `dijoLaPersona`: quien corre el motor dice qué autoriza, y el
+  compilador no deja no decidirlo.
+- `app/…/GraphApp.kt` — el permiso viaja: `newSession` recibe lo que dijo la persona de esa corrida y se lo da al
+  `consciente` del workflow, que se lo pasa al paso; `consciousStep` ya no lo vuelve a leer de los prompts de la última
+  corrida explícita, así que una corrida autónoma no le presta el permiso de otra.
+
+Pone verdes: **618-621**.
+
 ---
 
 ## Diferencias deliberadas con Windows
@@ -377,6 +407,9 @@ una acción puede volver con «pregunté primero y no la hice» y que la respues
   comparar— deja pasar un SMS al número equivocado con el texto correcto. Si algún día el cliente resuelve contactos, esto
   se revisa con su promesa. Y cuando el pedido trae **dos** números, se pregunta siempre (promesa 616): preguntar de más en
   un pedido con dos destinatarios es más barato que mandarle a uno lo del otro.
+- **Un destino corto siempre se pregunta** (promesa 618), aunque el pedido traiga ese mismo número: sin saber qué es cada
+  número del texto, un monto («cobré 89000 pesos») es indistinguible de un código de banco, y los códigos cortos son justo
+  los que cobran. Es preguntar de más en un caso poco común para no mandar un SMS a un código que nadie nombró como destino.
 - Las listas de palabras son cerradas y en español: un pedido en otro idioma («text Ana that I'm late») no autoriza, así que
   el cliente pregunta. Preguntar de más es el lado seguro del error.
 - El registro de lo ya preguntado vive en la corrida del motor: un **reencaminado** (la persona habla otra vez) arma una

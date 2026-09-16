@@ -299,11 +299,11 @@ class Contrato003LoQueSaleYUnaCorrida {
             )
             armado.correr(PEDIDO) {
                 runCatching { armado.correr(PEDIDO) { "encima" } }
-                sesion.motor.run(PEDIDO)
+                sesion.motor.run(PEDIDO, dijoLaPersona = PEDIDO)
             }
 
             val parado = CerebroGuionado(BrainTurn(actions = listOf(AgentAction.Tap(1, 1))), alPensar = { armado.parar("píldora") })
-            runCatching { armado.correr(PEDIDO) { armado.arma(manos, { parado }, Voz(), pausa = { 0 }).motor.run(PEDIDO) } }
+            runCatching { armado.correr(PEDIDO) { armado.arma(manos, { parado }, Voz(), pausa = { 0 }).motor.run(PEDIDO, dijoLaPersona = PEDIDO) } }
 
             // Que cada vía de verdad escribió su línea EN ESTA CORRIDA: sin ellas, un log vacío daría verde.
             val suyas = log.lineas.drop(desde)
@@ -363,7 +363,7 @@ class Contrato003LoQueSaleYUnaCorrida {
             val primera = runCatching {
                 armado.correr("abre ajustes") {
                     salidaSegunda = runCatching {
-                        armado.correr("pon una alarma") { armado.arma(manos(mano), { segunda }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("pon una alarma") }
+                        armado.correr("pon una alarma") { armado.arma(manos(mano), { segunda }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("pon una alarma", dijoLaPersona = "pon una alarma") }
                     }
                     abiertaTras = freno.abierta
                     armado.parar("píldora")
@@ -405,10 +405,10 @@ class Contrato003LoQueSaleYUnaCorrida {
             var b: Result<String>? = null
             coroutineScope {
                 val primera = launch {
-                    a = runCatching { armado.correr("abre ajustes") { armado.arma(manos(mano), { lenta }, Voz(), pausa = { 0 }).motor.run("abre ajustes") } }
+                    a = runCatching { armado.correr("abre ajustes") { armado.arma(manos(mano), { lenta }, Voz(), pausa = { 0 }).motor.run("abre ajustes", dijoLaPersona = "abre ajustes") } }
                 }
                 pensando.await()
-                b = runCatching { armado.correr("pon una alarma") { armado.arma(manos(mano), { segunda }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("pon una alarma") } }
+                b = runCatching { armado.correr("pon una alarma") { armado.arma(manos(mano), { segunda }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("pon una alarma", dijoLaPersona = "pon una alarma") } }
                 suelta.complete(Unit)
                 primera.join()
             }
@@ -424,7 +424,7 @@ class Contrato003LoQueSaleYUnaCorrida {
             val armado = ArmadoDeEjecucion(freno)
             val cerebro = CerebroGuionado(BrainTurn(actions = listOf(AgentAction.Tap(1, 1))), BrainTurn(done = true, text = "hecho"))
             val voz = Voz()
-            val dijo = armado.arma(manos(Mano()), { cerebro }, voz, pausa = { 0 }).motor.run("sin tarea")
+            val dijo = armado.arma(manos(Mano()), { cerebro }, voz, pausa = { 0 }).motor.run("sin tarea", dijoLaPersona = "sin tarea")
             assertEquals(0, cerebro.turnos, promesa(318) + " · un motor sin tarea le pidió turnos a Graph")
             assertTrue(dijo.startsWith("paraste:"), promesa(318) + " · «$dijo»")
             assertTrue(voz.narrado.none { "Paré" in it }, promesa(318) + " · dijo que paró porque se lo pidieron: ${voz.narrado}")
@@ -436,7 +436,7 @@ class Contrato003LoQueSaleYUnaCorrida {
             val armado = ArmadoDeEjecucion(freno)
             val mano = Mano(alEntrar = { if (it == "tap") freno.termine() })
             val cerebro = CerebroGuionado(*Array(8) { BrainTurn(actions = listOf(AgentAction.Tap(1, 1))) })
-            val dijo = armado.correr("se cierra debajo") { armado.arma(manos(mano), { cerebro }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("se cierra debajo") }
+            val dijo = armado.correr("se cierra debajo") { armado.arma(manos(mano), { cerebro }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("se cierra debajo", dijoLaPersona = "se cierra debajo") }
             assertEquals(1, cerebro.turnos, promesa(318) + " · sin tarea el motor siguió pidiendo turnos")
             assertEquals(listOf("tap"), mano.entradas, promesa(318))
             assertTrue(dijo.startsWith("paraste:"), promesa(318) + " · «$dijo»")
@@ -457,7 +457,7 @@ class Contrato003LoQueSaleYUnaCorrida {
             val voz = Voz()
             val mano = Mano()
             val dijo = armado.correr("se cierra mientras piensa") {
-                armado.arma(manos(mano), { cerebro }, voz, usuario = usuario, pausa = { 0 }).motor.run("se cierra mientras piensa")
+                armado.arma(manos(mano), { cerebro }, voz, usuario = usuario, pausa = { 0 }).motor.run("se cierra mientras piensa", dijoLaPersona = "se cierra mientras piensa")
             }
             assertEquals(emptyList(), preguntas, promesa(318) + " · con la tarea cerrada mientras pensaba, el motor le preguntó a la persona")
             assertEquals(emptyList(), voz.dicho, promesa(318) + " · con la tarea cerrada mientras pensaba, el motor habló")
@@ -497,7 +497,7 @@ class Contrato003LoQueSaleYUnaCorrida {
                 dentro.await()
                 primera.cancel()                                                    // cancelada, sin llegar a su finally
                 b = runCatching {
-                    armado.correr("pon una alarma") { armado.arma(manos(mano), { segunda }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("pon una alarma") }
+                    armado.correr("pon una alarma") { armado.arma(manos(mano), { segunda }, Voz(), maxTurnos = 8, pausa = { 0 }).motor.run("pon una alarma", dijoLaPersona = "pon una alarma") }
                 }
                 suelta.complete(Unit)
                 primera.join()

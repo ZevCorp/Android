@@ -193,7 +193,7 @@ class Contrato003LaAppPorLaPuerta {
             override fun speak(text: String) {}
         }
         armado.correr("se cierra a mitad") {
-            armado.arma(manos(mano), { guion(cierra = true) }, cierraLaTarea, pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("se cierra a mitad")
+            armado.arma(manos(mano), { guion(cierra = true) }, cierraLaTarea, pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("se cierra a mitad", dijoLaPersona = "se cierra a mitad")
         }
         assertEquals(emptyList(), mano.entradas, promesa(307) + " · el armado tocó las manos sin tarea abierta")
         assertTrue(bitacora.lineas.count { it.startsWith("puerta: sin tarea abierta, no paso «") } >= 6,
@@ -205,7 +205,7 @@ class Contrato003LaAppPorLaPuerta {
 
         // Con la tarea abierta las mismas acciones llegan, cada una por su vista: la fábrica no está rota.
         armado.correr("con tarea") {
-            armado.arma(manos(mano), { guion(cierra = false) }, Voz(), pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("con tarea")
+            armado.arma(manos(mano), { guion(cierra = false) }, Voz(), pausa = { 0 }, aprendidas = aprendidas, workflows = workflows).motor.run("con tarea", dijoLaPersona = "con tarea")
         }
         assertEquals(listOf("tap", "telefono.openApp", "home", "setAlarm", "tapLabel", "tapLabel"), mano.entradas, promesa(307))
     }
@@ -360,7 +360,7 @@ class Contrato003LaAppPorLaPuerta {
             val sesion = armado.arma(manos(Mano()), { vuelve }, Voz(), pausa = { 0 })
             coroutineScope {
                 alcance = this
-                val corrida = launch { runCatching { armado.correr("suelta sola") { sesion.motor.run("suelta sola") } } }
+                val corrida = launch { runCatching { armado.correr("suelta sola") { sesion.motor.run("suelta sola", dijoLaPersona = "suelta sola") } } }
                 pensando.await()
                 armado.parar("píldora")
                 corrida.join()
@@ -389,7 +389,7 @@ class Contrato003LaAppPorLaPuerta {
         coroutineScope {
             alcance = this
             val corrida = launch {
-                salioColgada = runCatching { armado.correr("colgada") { sesion.motor.run("colgada") } }.exceptionOrNull()
+                salioColgada = runCatching { armado.correr("colgada") { sesion.motor.run("colgada", dijoLaPersona = "colgada") } }.exceptionOrNull()
             }
             pensando.await()
             val alto = TimeSource.Monotonic.markNow()
@@ -426,7 +426,7 @@ class Contrato003LaAppPorLaPuerta {
         var trasElPaso = -1
         var medidasDentro = -1
         armado.correr("guarda el documento") {
-            armado.arma(manos, { toca(2) }, Voz(), pausa = { 0 }).motor.run("guarda el documento")
+            armado.arma(manos, { toca(2) }, Voz(), pausa = { 0 }).motor.run("guarda el documento", dijoLaPersona = "guarda el documento")
             // Una corrida que se intenta abrir encima no es una petición nueva.
             runCatching { armado.correr("guárdalo otra vez") { "encima" } }
             // El paso consciente arma su motor sobre otra puerta y vuelve a tocar «Guardar»: es la tercera de la petición.
@@ -442,7 +442,7 @@ class Contrato003LaAppPorLaPuerta {
             promesa(320) + " · ${primera.single()}")
 
         // Una corrida nueva de fuera sí abre otra petición: el mismo toque vuelve a llegar y deja su propia medida.
-        armado.correr("guarda el documento") { armado.arma(manos, { toca(1) }, Voz(), pausa = { 0 }).motor.run("guarda el documento") }
+        armado.correr("guarda el documento") { armado.arma(manos, { toca(1) }, Voz(), pausa = { 0 }).motor.run("guarda el documento", dijoLaPersona = "guarda el documento") }
         assertEquals(3, toques(), promesa(320) + " · una corrida nueva de fuera no devolvió el tope a cero")
         assertEquals(2, medidas().size, promesa(320) + " · la corrida nueva no dejó su propia medida: ${medidas()}")
         assertTrue(medidas().last().startsWith("peticion: llamadas=1 "), promesa(320) + " · ${medidas().last()}")
