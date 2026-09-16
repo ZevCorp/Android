@@ -1,22 +1,34 @@
 package graph.core.contrato
 
+import graph.core.domain.LearnedTool
+import graph.core.domain.Mcp
+import graph.core.domain.ScreenState
+import graph.core.graph.AndroidSurface
+import graph.core.graph.TurnScreenState
+import graph.core.graph.toTurnState
+import graph.core.telemetria.PuertaDeTelemetria
 import graph.core.voz.Apertura
 import graph.core.voz.Argumento
 import graph.core.voz.CanalDeVoz
+import graph.core.voz.CatalogoDeVoz
 import graph.core.voz.ColaDeReproduccion
 import graph.core.voz.CompuertaDeEco
 import graph.core.voz.ConversacionViva
 import graph.core.voz.DetectorDeInterrupcion
+import graph.core.voz.HerramientasDeVoz
 import graph.core.voz.Hecho
 import graph.core.voz.Llamada
 import graph.core.voz.ModoDeCaptura
+import graph.core.voz.OjosDeLaVoz
 import graph.core.voz.ProtocoloGptLive
 import graph.core.voz.Recibido
 import graph.core.voz.Reloj
 import graph.core.voz.Resultado
 import graph.core.voz.TelemetriaDeVoz
 import graph.core.voz.TurnosSinMarca
+import graph.core.voz.TOPE_DE_UN_RESULTADO
 import graph.core.voz.Utensilio
+import graph.core.voz.bytesUtf8
 import graph.core.voz.causaFatal
 import graph.core.voz.esSilencio
 import graph.core.voz.pico
@@ -50,6 +62,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
@@ -116,6 +129,13 @@ class Contrato002VozGptLive {
             244 to "La cola del altavoz guarda como mucho 30 segundos y al llenarse descarta lo más viejo; suena solo si tiene bytes, nunca por volumen, y callar la vacía en el acto.",
             245 to "A la telemetría remota de la voz solo llega la medida: el largo de cada frase y el cierre del turno; ninguna frase, argumento ni texto del delegado sale del teléfono.",
             246 to "La voz en vivo solo se arranca desde el panel de desarrollador y toma su clave del build interno, nunca de la configuración remota.",
+            247 to "Dónde estoy: la voz contesta con la app al frente, el tipo de pantalla y su tamaño, leídos del mismo estado que ya arma el turno de Graph y sin pedir captura; si no hay pantalla que leer lo dice y no se la inventa.",
+            248 to "Qué veo: las etiquetas visibles, cuántos elementos se pueden tocar y el campo enfocado salen del `uiContext` que ya viaja a Graph; un filtro de hasta 60 caracteres contesta si algo está en pantalla sin mirar tildes ni mayúsculas, y lo que la pantalla no deja leer se dice tal cual.",
+            249 to "Qué puedo hacer: el catálogo de capacidades se deriva del catálogo real de acciones, así que una acción nueva aparece sin tocar la voz; va agrupado por vía y cabe en un resultado aunque una descripción sea enorme.",
+            250 to "Las tres herramientas de la voz solo leen: no reciben manos, así que ninguna toca la pantalla ni abre nada, y cualquier otra llamada del delegado se contesta «todavía no» sin ejecutar nada.",
+            251 to "La sesión abre con las tres herramientas dentro de la delegación y ninguna en la voz; declararlas no gasta items, así que la conversación empieza en cero de los 128, y la apertura entera cabe de sobra en los 32 768 bytes de la sesión.",
+            252 to "Leer no congela la charla: las tres son de control, así que una lectura retenida no frena a las que vienen detrás, ni el micrófono, ni el cierre del turno.",
+            253 to "Del teléfono solo sale la medida de lo que se mira —cuántas etiquetas y cuántos caracteres—: ni una etiqueta, ni el filtro, ni lo que la pantalla muestra llegan al log local, y lo que llega a la telemetría remota pasa por el filtro de la voz y por la puerta sin una palabra de la pantalla.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -980,6 +1000,7 @@ class Contrato002VozGptLive {
         compuertaActiva: Boolean = false,
         ejecutor: suspend (Llamada) -> String = { "hecho: ${it.nombre}" },
         actuaEnPantalla: (String) -> Boolean = { true },
+        utensilios: List<Utensilio> = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar")))),
         bargeIn: Boolean? = null,
         aPelo: Boolean = false,
     ) {
@@ -995,7 +1016,6 @@ class Contrato002VozGptLive {
         var callado = 0
         private val instruccionesVoz = "Eres Ü. Hablas corto y delegas."
         private val instruccionesDelegado = "ERES Ü Y ESTAS SON TUS INSTRUCCIONES COMPLETAS"
-        private val utensilios = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar"))))
         private val ejecutar: suspend (Llamada) -> String = { ejecutadas += it.id; ejecutor(it) }
         private val reproducir: (ByteArray) -> Unit = { sonado += it }
         private val callar: () -> Unit = { callado++; sonando = false }   // callar vacía la cola: deja de sonar
@@ -2195,6 +2215,248 @@ class Contrato002VozGptLive {
         )
         for ((tag, m) in cuelan) {
             assertTrue(TelemetriaDeVoz.paraRemoto(tag, m)?.contains("SECRETO") != true, promesa(245) + " · «$m» → «${TelemetriaDeVoz.paraRemoto(tag, m)}»")
+        }
+    }
+
+    /* ---------- Ojos y catálogo: dónde estoy, qué veo, qué puedo hacer (2B2a) ---------- */
+
+    /** El `uiContext` tal como lo arma hoy el servicio de accesibilidad (`GraphAccessibilityService.uiContext()`). */
+    private fun uiContextComoElDelTurno(
+        paquete: String = "com.whatsapp",
+        tipo: String = "aplicación",
+        teclado: Boolean = true,
+        tocables: Int = 12,
+        campos: Int = 2,
+        enfocado: String = "Mensaje",
+        etiquetas: List<String> = listOf("Cámara", "Enviar", "Enviar audio", "Adjuntar", "Buscar"),
+    ): String = buildString {
+        append("paquete: $paquete\n")
+        append("tipo: $tipo${if (teclado) " · teclado abierto" else ""}\n")
+        append("clickeables: $tocables · campos de texto: $campos")
+        if (enfocado.isNotBlank()) append(" (enfocado: \"$enfocado\")")
+        append("\netiquetas visibles: ")
+        append(etiquetas.joinToString(" · ").ifBlank { "(ninguna)" })
+    }
+
+    /**
+     * EL MISMO ESTADO QUE VIAJA EN EL TURNO DE GRAPH: el `ScreenState` de la accesibilidad pasado por `toTurnState`, sin
+     * captura. Si la voz mirara por otro lado acabaría contando una pantalla distinta de la que ve el cerebro.
+     */
+    private fun pantallaDelTurno(
+        screen: String = "com.whatsapp · WhatsApp",
+        uiContext: String = uiContextComoElDelTurno(),
+        ancho: Int = 1080,
+        alto: Int = 2400,
+    ): TurnScreenState = ScreenState(screen, uiContext, ancho, alto, screenshotPng = byteArrayOf(1, 2, 3))
+        .toTurnState(apps = null, surface = AndroidSurface.from(screen), withScreenshot = false)
+
+    @Test
+    fun promesa247() {
+        val estado = pantallaDelTurno()
+        assertNull(estado.screenshot, promesa(247) + " · mirar no es capturar: la PNG no viaja")
+        assertFalse(ProtocoloGptLive().mira, promesa(247) + " · la voz no se declara capaz de mirar")
+
+        val donde = OjosDeLaVoz.dondeEstoy(estado)
+        for (trozo in listOf("com.whatsapp · WhatsApp", "aplicación", "teclado abierto", "1080×2400")) {
+            assertTrue(trozo in donde, promesa(247) + " · falta «$trozo» en «$donde»")
+        }
+
+        // El tipo de pantalla es el que trae el estado, no uno inventado; sin teclado no se habla de teclado.
+        val home = OjosDeLaVoz.dondeEstoy(
+            pantallaDelTurno(
+                screen = "com.miui.home",
+                uiContext = uiContextComoElDelTurno(
+                    paquete = "com.miui.home", tipo = "launcher de Android (home o cajón de apps)",
+                    teclado = false, campos = 0, enfocado = "",
+                ),
+            ),
+        )
+        assertTrue("launcher de Android (home o cajón de apps)" in home, promesa(247) + " · «$home»")
+        assertFalse("teclado" in home, promesa(247) + " · no hay teclado abierto y se nombra: «$home»")
+
+        // Sin servicio de accesibilidad no hay estado que leer, y se dice en vez de callar o inventar.
+        assertEquals(OjosDeLaVoz.SIN_PANTALLA, OjosDeLaVoz.dondeEstoy(null), promesa(247))
+
+        // Una pantalla protegida: lo que dice el estado, tal cual, y la app al frente se sabe igual.
+        val protegida = OjosDeLaVoz.dondeEstoy(pantallaDelTurno(uiContext = "sin contenido accesible (pantalla vacía o protegida)"))
+        assertTrue("sin contenido accesible (pantalla vacía o protegida)" in protegida, promesa(247) + " · «$protegida»")
+        assertTrue("com.whatsapp · WhatsApp" in protegida, promesa(247) + " · «$protegida»")
+    }
+
+    @Test
+    fun promesa248() {
+        val estado = pantallaDelTurno()
+        val todo = OjosDeLaVoz.queVeo(estado)
+        for (trozo in listOf("12", "Mensaje", "Cámara", "Enviar audio", "Buscar")) {
+            assertTrue(trozo in todo, promesa(248) + " · falta «$trozo» en «$todo»")
+        }
+        assertEquals(5, OjosDeLaVoz.etiquetas(estado), promesa(248))
+
+        // Un filtro contesta si eso está, sin mirar tildes ni mayúsculas.
+        for (filtro in listOf("enviar", "ENVIAR", "Enviar")) {
+            val r = OjosDeLaVoz.queVeo(estado, filtro)
+            assertTrue("«$filtro»: sí" in r, promesa(248) + " · «$filtro» → «$r»")
+            assertTrue("Enviar audio" in r, promesa(248) + " · «$filtro» → «$r»")
+        }
+        val conTilde = OjosDeLaVoz.queVeo(estado, "camara")
+        assertTrue("«camara»: sí" in conTilde && "Cámara" in conTilde, promesa(248) + " · «camara» no encontró «Cámara»: «$conTilde»")
+
+        val no = OjosDeLaVoz.queVeo(estado, "guardar")
+        assertTrue("«guardar»: no" in no, promesa(248) + " · «$no»")
+        assertFalse("Enviar" in no, promesa(248) + " · lo que no se preguntó no se vuelca: «$no»")
+
+        // Un filtro larguísimo no es una búsqueda: se cita recortado.
+        val largo = OjosDeLaVoz.queVeo(estado, "z".repeat(300))
+        assertTrue("z".repeat(OjosDeLaVoz.TOPE_DEL_FILTRO) in largo, promesa(248) + " · «$largo»")
+        assertFalse("z".repeat(OjosDeLaVoz.TOPE_DEL_FILTRO + 1) in largo, promesa(248) + " · el filtro se cita entero: «$largo»")
+
+        // Lo que la pantalla no deja leer se dice tal cual, y un formato que no se reconoce no se inventa.
+        val protegida = "sin contenido accesible (pantalla vacía o protegida)"
+        assertEquals(protegida, OjosDeLaVoz.queVeo(pantallaDelTurno(uiContext = protegida)), promesa(248))
+        assertEquals("""{"otro":"formato"}""", OjosDeLaVoz.queVeo(pantallaDelTurno(uiContext = """{"otro":"formato"}""")), promesa(248))
+        assertEquals(OjosDeLaVoz.SIN_PANTALLA, OjosDeLaVoz.queVeo(null), promesa(248))
+        assertEquals(0, OjosDeLaVoz.etiquetas(null), promesa(248))
+    }
+
+    @Test
+    fun promesa249() = corre {
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val aprendidas = listOf(LearnedTool("calc", "la calculadora", listOf("5", "+")))
+        val mcp = Mcp(mano.gestos, mano.sistema, aprendidas, mano.reproductor)
+        val catalogo = CatalogoDeVoz.capacidades(mcp.tools)
+
+        for (t in mcp.tools) assertTrue(t.name in catalogo, promesa(249) + " · «${t.name}» no está en lo que lee el delegado")
+        for (via in mcp.tools.map { it.via }.distinct()) assertTrue(via in catalogo, promesa(249) + " · sin agrupar por «$via»")
+        assertTrue("calc" in catalogo, promesa(249) + " · una acción nueva (aprendida) no aparece sola")
+        assertEquals(emptyList(), mano.entradas, promesa(249) + " · armar el catálogo tocó el teléfono: ${mano.entradas}")
+
+        // La descripción de `check_simit_fines` son ~1500 caracteres, y encima 40 acciones más: el mensaje sigue cabiendo.
+        val gordo = Mcp(
+            mano.gestos, mano.sistema,
+            aprendidas + (1..40).map { LearnedTool("larga$it", "x".repeat(400), listOf("a")) },
+            mano.reproductor,
+        )
+        val texto = CatalogoDeVoz.capacidades(gordo.tools)
+        assertTrue("check_simit_fines" in texto, promesa(249))
+        assertTrue(texto.length <= CatalogoDeVoz.TOPE_DEL_CATALOGO, promesa(249) + " · ${texto.length} caracteres")
+        val mensaje = ProtocoloGptLive().resultados(listOf(Resultado("call_1", texto))).single()
+        assertTrue(bytesUtf8(mensaje) <= TOPE_DE_UN_RESULTADO, promesa(249) + " · ${bytesUtf8(mensaje)} bytes")
+    }
+
+    @Test
+    fun promesa250() = corre {
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val mcp = Mcp(mano.gestos, mano.sistema, emptyList(), mano.reproductor)
+        val ojos = HerramientasDeVoz(pantalla = { pantallaDelTurno() }, acciones = { mcp.tools })
+
+        for (nombre in listOf("pulsar", "escribir", "launch_app", "go_home", "abrir_app", "hazme_un_cafe")) {
+            assertEquals(
+                CatalogoDeVoz.TODAVIA_NO,
+                ojos.ejecutar(Llamada("call_x", nombre, mapOf("que" to "Enviar"))),
+                promesa(250) + " · «$nombre»",
+            )
+        }
+        for (u in CatalogoDeVoz.UTENSILIOS) {
+            val r = ojos.ejecutar(Llamada("call_${u.nombre}", u.nombre, emptyMap()))
+            assertNotEquals(CatalogoDeVoz.TODAVIA_NO, r, promesa(250) + " · «${u.nombre}» tenía que contestar lo que ve")
+            assertTrue(r.isNotBlank(), promesa(250) + " · «${u.nombre}» no contestó nada")
+            assertFalse(CatalogoDeVoz.actuaEnPantalla(u.nombre), promesa(250) + " · «${u.nombre}» se declara actuando en la pantalla")
+        }
+        assertEquals(emptyList(), mano.entradas, promesa(250) + " · algo llegó al teléfono: ${mano.entradas}")
+        assertEquals(0, mano.lecturas, promesa(250) + " · el estado lo da quien la construye, no unas manos propias")
+    }
+
+    @Test
+    fun promesa251() = corre {
+        val bytesDeLaSesion = 32_768
+        val apertura = p.apertura("Eres Ü.", "Eres el delegado de Ü.", CatalogoDeVoz.UTENSILIOS)
+        val m = json(apertura)
+        assertEquals(setOf("model", "instructions", "audio", "delegation"), m["session"]?.jsonObject?.keys, promesa(251) + " · la sesión de la voz no lleva herramientas")
+        val tools = assertIs<JsonArray>(m.en("session", "delegation", "responses", "tools"), promesa(251))
+        assertEquals(
+            listOf(CatalogoDeVoz.DONDE_ESTOY, CatalogoDeVoz.QUE_VEO, CatalogoDeVoz.QUE_PUEDO_HACER),
+            tools.map { it.texto("name") },
+            promesa(251),
+        )
+        val bytes = bytesUtf8(apertura)
+        assertTrue(bytes < bytesDeLaSesion, promesa(251) + " · la apertura ocupa $bytes B de los $bytesDeLaSesion de la sesión")
+        println("251: la apertura con el catálogo ocupa $bytes bytes y declara ${tools.size} herramientas")
+
+        // Declararlas no gasta items: los 128 son del historial, y la conversación empieza en cero.
+        val v = Voz(utensilios = CatalogoDeVoz.UTENSILIOS)
+        v.guion(
+            llega(sesionAbierta),
+            hace { assertEquals(0, v.conv.itemsEnSesion, promesa(251) + " · declarar el catálogo gastó items de la sesión") },
+            llega(sinHechos),
+        )
+        v.conv.conversar()
+        assertEquals(1, v.tipos().count { it == "session.start" }, promesa(251) + " · ${v.tipos()}")
+        assertEquals(3, assertIs<JsonArray>(v.enviados().first().en("session", "delegation", "responses", "tools"), promesa(251)).size, promesa(251))
+    }
+
+    @Test
+    fun promesa252() = corre {
+        val soltar = CompletableDeferred<String>()
+        val v = Voz(
+            ejecutor = { if (it.id == "call_lento") soltar.await() else "hecho: ${it.nombre}" },
+            actuaEnPantalla = CatalogoDeVoz::actuaEnPantalla,
+            utensilios = CatalogoDeVoz.UTENSILIOS,
+        )
+        v.guion(
+            llega(sesionAbierta),
+            llega(usuario("¿qué ves?")),
+            llega(pide("call_lento", CatalogoDeVoz.QUE_VEO)),
+            llega(pide("call_donde", CatalogoDeVoz.DONDE_ESTOY)),
+            hace { v.conv.oirMicrofono(vozDeLaSala()) },
+            llega(sinHechos),
+            hace {
+                assertEquals(listOf("call_lento", "call_donde"), v.ejecutadas, promesa(252) + " · la segunda lectura esperó detrás de la retenida")
+                assertEquals(listOf<String?>("call_donde"), v.salidas().map { it.texto("item", "call_id") }, promesa(252) + " · y se contestó sin esperarla")
+                assertEquals(1, v.audios().size, promesa(252) + " · el micrófono se quedó esperando a la lectura")
+                assertEquals(0, v.cuenta("response.create"), promesa(252) + " · con una lectura sin contestar no se pide respuesta")
+            },
+            hace { soltar.complete("veo la cámara") },
+            llega(sinHechos),
+            hace { v.reloj.ms += 2000 },
+            llega(sinHechos),
+        )
+        v.conv.conversar()
+        assertEquals(listOf<String?>("call_donde", "call_lento"), v.salidas().map { it.texto("item", "call_id") }, promesa(252))
+        assertEquals(1, v.cuenta("response.create"), promesa(252) + " · ${v.tipos()}")
+        assertEquals("response.create", v.tipos().last(), promesa(252))
+        assertEquals(1, v.enLog("usuario dijo: ¿qué ves?"), promesa(252) + " · el turno no cerró: ${v.log}")
+    }
+
+    @Test
+    fun promesa253() = corre {
+        val etiquetas = listOf("Zorbax", "Qwyk", "3001234567")
+        val secretos = etiquetas + listOf("WhatsApp", "Cámara")
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val mcp = Mcp(mano.gestos, mano.sistema, emptyList(), mano.reproductor)
+        val lineas = mutableListOf<Pair<String, String>>()
+        val ojos = HerramientasDeVoz(
+            pantalla = { pantallaDelTurno(uiContext = uiContextComoElDelTurno(etiquetas = etiquetas, enfocado = "Zorbax")) },
+            acciones = { mcp.tools },
+            log = { tag, mensaje -> lineas += tag to mensaje },
+        )
+        ojos.ejecutar(Llamada("call_1", CatalogoDeVoz.DONDE_ESTOY, emptyMap()))
+        ojos.ejecutar(Llamada("call_2", CatalogoDeVoz.QUE_VEO, mapOf(CatalogoDeVoz.FILTRO to "Qwyk")))
+        ojos.ejecutar(Llamada("call_3", CatalogoDeVoz.QUE_PUEDO_HACER, emptyMap()))
+        ojos.ejecutar(Llamada("call_4", "pulsar", mapOf("que" to "Zorbax")))
+        assertEquals(4, lineas.size, promesa(253) + " · cada llamada deja su medida y una sola: $lineas")
+
+        for ((tag, mensaje) in lineas) {
+            assertTrue(TelemetriaDeVoz.esDeLaVoz(tag), promesa(253) + " · «$tag» no pasa por el filtro de la voz")
+            for (secreto in secretos) assertFalse(secreto in mensaje, promesa(253) + " · «$secreto» en el log: «$mensaje»")
+        }
+
+        // La medida sobrevive el viaje entero: el filtro de la voz y, detrás, la puerta de la telemetría (spec 005).
+        val remoto = lineas.mapNotNull { (tag, mensaje) -> TelemetriaDeVoz.paraRemoto(tag, mensaje)?.let { PuertaDeTelemetria.mensaje(it) } }
+        assertEquals(4, remoto.size, promesa(253) + " · $remoto")
+        assertTrue(remoto.any { "3 etiquetas" in it }, promesa(253) + " · la medida se perdió por el camino: $remoto")
+        assertTrue(remoto.any { CatalogoDeVoz.QUE_VEO in it }, promesa(253) + " · qué se miró se pierde: $remoto")
+        for (linea in remoto) {
+            for (secreto in secretos) assertFalse(secreto in linea, promesa(253) + " · «$secreto» sale del teléfono en «$linea»")
         }
     }
 }
