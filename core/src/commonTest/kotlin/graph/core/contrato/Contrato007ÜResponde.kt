@@ -25,6 +25,19 @@ class Contrato007ÜResponde {
                 "«hola tú», «tuve», ni con ninguna palabra que solo contenga la letra u en medio de otra palabra " +
                 "(p. ej. «cuchara», «auto»): el nombre tiene que ser una palabra completa de la frase, no una " +
                 "coincidencia parcial.",
+            // Juzgadas por fuente en Contrato007WakeWordEnApp.kt (app no corre en jvmTest, igual que 246/256/259).
+            703 to "La escucha de la palabra vive en `app/`, en su propio archivo, y usa `SystemTranscriber` " +
+                "pidiendo reconocimiento en el dispositivo (`EXTRA_PREFER_OFFLINE`); su bucle nunca nombra " +
+                "`MeetingBrain` ni `taskQueue`, y nunca pasa la frase escuchada completa a `LogBus.log` (ni loguea " +
+                "nada que no sea un aviso fijo, sin la variable del texto).",
+            704 to "El interruptor «Activar «Hola Ü»» vive en el panel principal de MainActivity (no en el panel " +
+                "de desarrollador), se guarda en las preferencias y arranca APAGADO hasta que el usuario lo " +
+                "prende una vez.",
+            705 to "Al detectar la palabra: suena un aviso ya existente, la burbuja reacciona con una animación " +
+                "ya existente, se narra y se habla un saludo elegido al azar entre variantes, el badge de " +
+                "`VoiceDock` avisa «te escucho» reusando su mecanismo, y se entra al Modo Reunión llamando a " +
+                "`dock()` de forma programática (sin coordenadas de arrastre) — sin romper cómo se exponen " +
+                "`docked`/`listening`.",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
