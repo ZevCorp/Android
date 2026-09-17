@@ -200,7 +200,16 @@ class RealtimeVoiceClient : Transcriber {
             put("modalities", buildJsonArray { add(JsonPrimitive("audio")); add(JsonPrimitive("text")) })
             put("input_audio_format", "pcm16")
             put("output_audio_format", "pcm16")
-            put("turn_detection", buildJsonObject { put("type", "server_vad") })
+            // create_response=false: el VAD del servidor solo marca fin de turno (dispara
+            // conversation.item.input_audio_transcription.completed), pero NUNCA genera una
+            // respuesta de audio por su cuenta. La única respuesta que se escucha es la que
+            // dispara explícitamente speakFinal() con el texto ya decidido por el cerebro —
+            // sin esto, una respuesta fantasma del servidor podía competir con la real y
+            // cortarle el audio a mitad de camino (hallazgo de revisor).
+            put("turn_detection", buildJsonObject {
+                put("type", "server_vad")
+                put("create_response", false)
+            })
             // El modelo de voz NUNCA decide qué ejecutar: cero function calling propio (eso es del
             // cerebro de tareas, arriba). Con transcripción de entrada habilitada para poder pasar
             // el texto del usuario por el mismo camino que hoy usa Deepgram (IntentDistiller → cerebro).
