@@ -350,6 +350,36 @@ class Contrato002VozEnVivoDev {
             promesa(259) + " · con la burbuja anclada, el toque ya no va a onDockedTap()",
         )
 
+        // ── El ORDEN importa: `execLive` se resuelve antes que `voiceDock.docked` — cortar la
+        //    narración de la ejecución con un solo toque sigue siendo el gesto esperado aunque el
+        //    modo reunión siga anclado. Invertir el orden dejaría esa narración sonando (el toque
+        //    caería siempre en onDockedTap() sin pasar por stopExecLive()) ───────────────────────
+        val posExecLive = Regex("""(?<![\p{L}\p{N}_])execLive\s*->""").find(textoListener)
+            ?: fail(promesa(259) + " · no encuentro la rama `execLive ->` en el listener")
+        val posDockedRama = Regex("""voiceDock\s*\.\s*docked\s*->""").find(textoListener)
+            ?: fail(promesa(259) + " · no encuentro la rama `voiceDock.docked ->` en el listener")
+        assertTrue(
+            posExecLive.range.first < posDockedRama.range.first,
+            promesa(259) + " · `execLive` tiene que evaluarse antes que `voiceDock.docked` en el listener",
+        )
+
+        // ── Cuando `execLive` Y `voiceDock.docked` son ciertos A LA VEZ (una duda de una tarea de
+        //    la reunión respondida con "Responder con voz" mientras esa tarea sigue corriendo), el
+        //    toque no puede perderse para el gesto de mutear: tiene que seguir contando, o hacen
+        //    falta TRES toques en vez de dos para llegar al doble toque que mutea ───────────────────
+        val ramaExecLive = Regex("""(?<![\p{L}\p{N}_])execLive\s*->\s*\{""").find(bubble.soloCodigo)
+            ?: fail(promesa(259) + " · la rama `execLive` no abre un bloque `{ … }` en el listener")
+        val cuerpoRamaExecLive = bubble.bloque(ramaExecLive.range.last)
+        val textoRamaExecLive = bubble.sinComentarios.substring(cuerpoRamaExecLive.first, cuerpoRamaExecLive.last + 1)
+        assertTrue(
+            Regex("""\bstopExecLive\s*\(\s*\)""").containsMatchIn(textoRamaExecLive),
+            promesa(259) + " · el toque con `execLive` encendido ya no corta la narración de la ejecución",
+        )
+        assertTrue(
+            Regex("""if\s*\(\s*voiceDock\s*\.\s*docked\s*\)\s*\{?\s*onDockedTap\s*\(\s*\)\s*\}?""").containsMatchIn(textoRamaExecLive),
+            promesa(259) + " · con `voiceDock.docked` a la vez que `execLive`, el toque no llama a onDockedTap(): se pierde para el doble toque que mutea",
+        )
+
         val firmaOnDockedTap = Regex("""\bfun\s+onDockedTap\s*\(\s*\)\s*\{""").find(bubble.soloCodigo)
             ?: fail(promesa(259) + " · FloatingBubble no declara onDockedTap()")
         val cuerpoOnDockedTap = bubble.bloque(firmaOnDockedTap.range.last)

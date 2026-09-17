@@ -158,8 +158,16 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                     speechHide?.cancel()
                     speech?.visibility = View.GONE
                 }
-                // Escucha en vivo de la ejecución: el toque a la burbuja la apaga.
-                execLive -> { playTick(); stopExecLive() }
+                // Escucha en vivo de la ejecución: el toque a la burbuja la apaga. Puede coincidir
+                // con el modo reunión todavía anclado (una tarea de la reunión disparó una duda y
+                // el usuario respondió "Responder con voz" mientras corría): en ese caso el toque
+                // NO se pierde para el gesto de mutear, cuenta igual que si hubiera caído directo
+                // en onDockedTap() — si no, hacen falta tres toques en vez de dos para mutear.
+                execLive -> {
+                    playTick()
+                    stopExecLive()
+                    if (voiceDock.docked) onDockedTap()
+                }
                 // Modo reunión anclado (esté o no escuchando en este instante): doble toque mutea/
                 // desmutea; nunca cae en onBubbleTap() ni activateMic() (chocaría con la escucha
                 // permanente ya corriendo).
