@@ -76,4 +76,7 @@ android {
 dependencies {
     implementation(project(":core"))
     implementation("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.8.1")
+    // WebSocket para la voz en vivo (RealtimeVoiceClient → gpt-realtime de OpenAI). Primer uso de
+    // OkHttp en el proyecto: todo lo demás sigue con HttpURLConnection para REST simple.
+    implementation("com.squareup.okhttp3:okhttp:4.12.0")
 }

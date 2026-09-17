@@ -31,6 +31,7 @@ import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
 import com.zevcorp.graph.platform.LogBus
 import com.zevcorp.graph.platform.MicService
+import com.zevcorp.graph.voice.RealtimeVoiceClient
 import com.zevcorp.graph.voice.Transcriber
 import com.zevcorp.graph.voice.defaultTranscriber
 import graph.core.domain.UserChannel
@@ -69,6 +70,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var ttsReady = false
     /** Voz de nueva generación (OpenAI); si está activa y hay key, reemplaza al TTS del sistema. */
     private val openAiTts by lazy { com.zevcorp.graph.voice.OpenAiTts(service) }
+    /** ¿El usuario eligió "Live" (dev-only)? Motor de voz en vivo con `gpt-realtime`, oído+boca. */
+    private fun useRealtimeVoice() = app.prefs.getString("voiceEngine", "openai") == "realtime"
+    /**
+     * La sesión Realtime del turno en curso (nace en `startExecVoice`/`startExecLive`, se reutiliza
+     * en `showSpeech` para que el cerebro conteste con LA MISMA voz que escuchó, y se cierra al
+     * terminar la ejecución). null cuando el motor clásico está activo o no hay ejecución en curso.
+     */
+    private var realtimeVoice: RealtimeVoiceClient? = null
 
     /** Esquinas superiores = zona de encaje para el MODO REUNIÓN (escucha continua con cerebro). */
     private val voiceDock by lazy {
@@ -531,9 +540,16 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             moveSpeechToBubble()
             if (aloud) {
                 val clean = text.filter { it.code in 32..0x2FFF }
-                // Voz de nueva generación (OpenAI) si está elegida y hay key; si falla, TTS del sistema.
-                val spoke = runCatching { openAiTts.speak(clean) }.getOrDefault(false)
-                if (!spoke && ttsReady) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "graph")
+                // Live (dev-only): si hay una sesión Realtime abierta de este mismo turno, que la
+                // diga ELLA (misma voz que escuchó). Si no está conectada o falla, cae al TTS clásico.
+                val liveVoice = realtimeVoice
+                val spokeLive = if (liveVoice != null && liveVoice.connected)
+                    runCatching { liveVoice.speakFinal(clean) }.getOrDefault(false) else false
+                if (!spokeLive) {
+                    // Voz de nueva generación (OpenAI) si está elegida y hay key; si falla, TTS del sistema.
+                    val spoke = runCatching { openAiTts.speak(clean) }.getOrDefault(false)
+                    if (!spoke && ttsReady) tts?.speak(clean, TextToSpeech.QUEUE_FLUSH, null, "graph")
+                }
             }
             speechHide?.cancel()
             speechHide = launch { delay(if (aloud) 5200 else 3400); speech?.visibility = View.GONE }
@@ -990,14 +1006,20 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
      */
     fun showExecutionMic(on: Boolean) {
         scope.launch {
-            if (!on) execTranscriber?.stop()
+            if (!on) {
+                execTranscriber?.stop()
+                // Fin de la ejecución: cierra la sesión Realtime de este turno si había una abierta.
+                realtimeVoice?.close()
+                realtimeVoice = null
+            }
             execMicButton?.visibility = if (on) View.VISIBLE else View.GONE
         }
     }
 
     private fun startExecVoice(mic: View) {
         if (execTranscriber != null) { execTranscriber?.stop(); return } // ya escuchando → corta
-        val t = defaultTranscriber(service)
+        val live = useRealtimeVoice()
+        val t: Transcriber = if (live) RealtimeVoiceClient().also { realtimeVoice = it } else defaultTranscriber(service)
         execTranscriber = t
         mic.animate().scaleX(1.15f).scaleY(1.15f).setDuration(150).start()
         MicService.start(service)
@@ -1007,7 +1029,20 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             MicService.stop(service)
             execTranscriber = null
             mic.animate().scaleX(1f).scaleY(1f).setDuration(400).start()
-            if (text.isNotBlank()) app.augmentExecution(text)
+            if (text.isNotBlank()) { app.augmentExecution(text); return@launch }
+            // Live no conectó (sin red, 403 del backend, WS caído): este turno cae al pipeline
+            // clásico para no dejar al usuario sin voz. Se vuelve a escuchar una vez con Deepgram/System.
+            if (live && t is RealtimeVoiceClient && !t.connected) {
+                LogBus.log("voice", "Realtime no disponible, caigo al pipeline clásico para este turno")
+                realtimeVoice = null
+                val fallback = defaultTranscriber(service)
+                execTranscriber = fallback
+                MicService.start(service)
+                val retryText = withContext(Dispatchers.IO) { runCatching { fallback.listen() }.getOrElse { "" } }
+                MicService.stop(service)
+                execTranscriber = null
+                if (retryText.isNotBlank()) app.augmentExecution(retryText)
+            }
         }
     }
 
@@ -1028,14 +1063,22 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         if (execLive) return
         narrate("Te sigo escuchando mientras trabajo; tócame para dejar de oírte 👂")
         LogBus.log("voice", "▶ escucha en vivo durante la ejecución")
+        var live = useRealtimeVoice()
         execLiveJob = scope.launch {
             MicService.start(service)
             try {
                 while (app.executing) {
-                    val t = defaultTranscriber(service)
+                    val t: Transcriber = if (live) RealtimeVoiceClient().also { realtimeVoice = it } else defaultTranscriber(service)
                     execLiveTranscriber = t
                     val text = withContext(Dispatchers.IO) { runCatching { t.listen() }.getOrElse { "" } }
                     execLiveTranscriber = null
+                    if (live && t is RealtimeVoiceClient && !t.connected) {
+                        // No reintenta Realtime en el resto de esta escucha en vivo: cae al pipeline
+                        // clásico para no dejar al usuario sin voz ni martillar un backend caído.
+                        LogBus.log("voice", "Realtime no disponible en escucha en vivo, sigo con el pipeline clásico")
+                        realtimeVoice = null
+                        live = false
+                    }
                     if (!app.executing) break
                     if (text.isBlank()) { delay(250); continue }
                     LogBus.log("voice", "en vivo: \"${text.take(120)}\"")
