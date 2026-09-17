@@ -20,6 +20,44 @@ object PalabraDeActivacion {
      *  por substring: así «hola tú» (segunda palabra «tu», no «u») y «cuchara» (una sola palabra, no
      *  «u») quedan afuera aunque contengan la letra en algún lado. */
     fun activa(texto: String): Boolean {
-        TODO("promesa 701/702: reconocer la palabra de activación")
+        val palabras = normaliza(texto).split(' ').filter { it.isNotEmpty() }
+        return when (palabras.size) {
+            1 -> palabras[0] == NOMBRE
+            2 -> palabras[0] in PREFIJOS && palabras[1] == NOMBRE
+            else -> false
+        }
     }
+
+    /** minúsculas; tildes y diéresis fuera; todo lo que no sea letra o dígito pasa a espacio; espacios
+     *  repetidos colapsados y bordes recortados. Nunca deja el [texto] de entrada en un log: quien
+     *  llama a [activa] solo se entera del resultado, sí o no. */
+    private fun normaliza(texto: String): String {
+        val sb = StringBuilder(texto.length)
+        for (c in texto.lowercase()) {
+            val plana = SIN_TILDE[c]
+            when {
+                plana != null -> sb.append(plana)
+                c.isLetterOrDigit() -> sb.append(c)
+                else -> sb.append(' ')
+            }
+        }
+        var colapsado = false
+        return buildString {
+            for (c in sb) {
+                if (c == ' ') {
+                    if (!colapsado && isNotEmpty()) append(' ')
+                    colapsado = true
+                } else {
+                    append(c)
+                    colapsado = false
+                }
+            }
+        }.trim()
+    }
+
+    private val SIN_TILDE = mapOf(
+        'á' to 'a', 'é' to 'e', 'í' to 'i', 'ó' to 'o', 'ú' to 'u', 'ü' to 'u',
+        'à' to 'a', 'è' to 'e', 'ì' to 'i', 'ò' to 'o', 'ù' to 'u',
+        'â' to 'a', 'ê' to 'e', 'î' to 'i', 'ô' to 'o', 'û' to 'u',
+    )
 }
