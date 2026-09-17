@@ -375,6 +375,26 @@ class MainActivity : Activity(), UserChannel {
         setup.gap(dp(6))
         setup.addView(caption("Al activar accesibilidad aparece la burbuja flotante. En Apps predeterminadas → " +
             "App de asistente digital elige Ü: lo invocas manteniendo el botón de encendido."))
+        setup.gap(dp(8))
+        // Palabra de activación (spec 007): decir el nombre de Ü enciende el Modo Reunión sin tocar
+        // nada. Arranca APAGADA hasta que el usuario la prende una vez.
+        lateinit var wakeWordBtn: Button
+        fun paintWakeWord() {
+            val on = app.prefs.getBoolean("wakeWordEnabled", false)
+            wakeWordBtn.text = if (on) "Desactivar «Hola Ü»" else "Activar «Hola Ü»"
+        }
+        wakeWordBtn = button("Activar «Hola Ü»") {
+            val on = !app.prefs.getBoolean("wakeWordEnabled", false)
+            app.prefs.edit().putBoolean("wakeWordEnabled", on).apply()
+            bubble()?.setWakeWordEnabled(on)
+            paintWakeWord()
+        }
+        setup.addView(wakeWordBtn)
+        paintWakeWord()
+        setup.gap(dp(6))
+        setup.addView(caption("Di «hola ü» o «ey ü» (o «oye ü») y Ü empieza a escuchar solo, sin tocar nada: " +
+            "el mismo Modo Reunión que al arrastrar la burbuja a una esquina, con un saludo que confirma que " +
+            "está activo."))
         root.addView(setup)
         root.gap(dp(14))
 

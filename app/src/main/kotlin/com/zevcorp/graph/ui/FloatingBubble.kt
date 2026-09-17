@@ -85,6 +85,35 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             returnToCorner = { left -> scope.launch { snapTo(cornerX(left), service.dp(6)) } })
     }
 
+    /** Segunda puerta de entrada al Modo Reunión, por voz (spec 007): decir el nombre de Ü enciende
+     *  la misma escucha que arrastrar la burbuja a una esquina, sin tocarla. */
+    private val wakeWordDock by lazy {
+        WakeWordDock(service, shouldListen = ::canListenForWakeWord, onDetected = ::onWakeWordDetected)
+    }
+
+    /** Solo tiene sentido escuchar la palabra si el interruptor está prendido y nada más está usando
+     *  el micrófono o la atención de la burbuja: el Modo Reunión, una ejecución, la escucha en vivo
+     *  de una ejecución, o el panel de chat abierto. */
+    private fun canListenForWakeWord(): Boolean =
+        app.prefs.getBoolean("wakeWordEnabled", false) && app.ui != null &&
+            !voiceDock.docked && !voiceDock.listening && !app.executing && !execLive && panel == null
+
+    /**
+     * Se llama al detectar la palabra de activación (spec 007) — NUNCA con la frase que se dijo, solo
+     * el aviso de que pasó. Mismo patrón que el resto de la burbuja: un aviso sonoro ya existente, una
+     * animación ya existente, un saludo amistoso narrado y hablado, el badge de VoiceDock reusado, y
+     * de ahí derecho al Modo Reunión de siempre.
+     */
+    private fun onWakeWordDetected() {
+        playListenChime()
+        pulse()
+        val greeting = SALUDOS.random()
+        narrate(greeting)
+        speak(greeting)
+        voiceDock.showListeningBadge()
+        voiceDock.dockNow()
+    }
+
     /* ---------- Feedback sonoro: un tick breve para toques rápidos, un carrillón para activar el
      * micrófono — igual de cuidado que el háptico de una app premium, nunca intrusivo. ---------- */
 
@@ -174,6 +203,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         bubble.pivotY = size / 2f
         wm.addView(bubble, bubbleParams)
         scheduleIdleShrink()
+        // Si el interruptor ya estaba prendido de una sesión anterior, retoma la escucha de la palabra.
+        if (app.prefs.getBoolean("wakeWordEnabled", false)) wakeWordDock.start(scope)
+    }
+
+    /** El interruptor «Activar «Hola Ü»» del panel principal cambió (spec 007): arranca o para la
+     *  escucha de la palabra en caliente, sin esperar a que se reinicie el servicio de accesibilidad. */
+    fun setWakeWordEnabled(on: Boolean) {
+        if (on) wakeWordDock.start(scope) else wakeWordDock.stop()
     }
 
     /* ---------- Reposo: la carita se encoge cuando llevas rato sin usarla ---------- */
@@ -501,6 +538,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         scope.cancel()
         dragAnimator?.cancel()
         idleAnimator?.cancel()
+        wakeWordDock.stop()
         voiceDock.destroy()
         tts?.shutdown()
         openAiTts.stop()
@@ -1093,5 +1131,12 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         const val GESTURE_WINDOW_MS = 260L
         /** Escala de la carita cuando está asentada al inicio de la barra de texto de la app. */
         const val BAR_SCALE = 0.45f
+        /** Saludos al detectar la palabra de activación (spec 007): amistosos, cortos, uno al azar. */
+        val SALUDOS = listOf(
+            "¡Hola! Te escucho 👂",
+            "Dime, aquí estoy",
+            "¿En qué te ayudo?",
+            "Te escucho, cuéntame",
+        )
     }
 }
