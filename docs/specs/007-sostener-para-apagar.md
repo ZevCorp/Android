@@ -63,7 +63,7 @@ El permiso de accesibilidad sigue concedido: por eso volver a activarlo es insta
 
 | Archivo | Promesas |
 |---|---|
-| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato007SostenerParaApagar.kt` (lee las fuentes de `app`, igual que la 259: solo `jvmTest` lee disco) | 710-718 |
+| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato007SostenerParaApagar.kt` (lee las fuentes de `app`, igual que la 259: solo `jvmTest` lee disco) | 710-719 |
 
 | # | Promesa |
 |---|---|
@@ -76,6 +76,7 @@ El permiso de accesibilidad sigue concedido: por eso volver a activarlo es insta
 | 716 | Despertar a Ü vuelve a mostrar la misma burbuja sin recrear el motor de voz ni los sonidos, y no hace nada si ya estaba despierta. |
 | 717 | Abrir la app de nuevo (`dockToApp`/`setHiddenForApp`) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto. |
 | 718 | Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en `performClick()` ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre. |
+| 719 | Mientras Ü está dormido no se puede seguir escuchando la palabra de activación: `canListenForWakeWord()` excluye el estado dormido y `sleep()` detiene ese bucle; si el interruptor seguía prendido, despertar lo retoma. |
 
 ### La regla, en una línea por clase
 
@@ -113,6 +114,7 @@ Se juzga leyendo las fuentes de `app`, igual que la promesa 259 y las 602/611/61
 | 716 | `wakeIfAsleep()` corta temprano si `!asleep`, llama a `wm.addView(bubble, bubbleParams)` y no contiene `TextToSpeech(` ni `SoundPool.Builder` |
 | 717 | `dockToApp()` y `setHiddenForApp()` llaman a `wakeIfAsleep()`, y `AssistActivity` llama a `bubble?.wakeIfAsleep()` |
 | 718 | `explodeAndSleep()` marca `shutdownFired = true`, `ACTION_DOWN` la resetea a `false`, y `ACTION_UP, ACTION_CANCEL` la mira con `if (shutdownFired) { … } else if (!moved) v.performClick()` |
+| 719 | `canListenForWakeWord()` incluye `!asleep`, `sleep()` llama a `wakeWordDock.stop()` (descartando líneas `//` antes de buscar), y `wakeIfAsleep()` llama a `wakeWordDock.start(...)` si `wakeWordEnabled` sigue en `true` |
 
 ### Sabotajes (cada uno pone roja su promesa)
 
@@ -127,6 +129,7 @@ Se juzga leyendo las fuentes de `app`, igual que la promesa 259 y las 602/611/61
 | 716 | `wakeIfAsleep()` recrea el TTS o el SoundPool en vez de reusarlos | roja: encuentra `TextToSpeech(` o `SoundPool.Builder` en su cuerpo |
 | 717 | `dockToApp()`/`setHiddenForApp()`/`AssistActivity` dejan de despertar a Ü | roja: no encuentra `wakeIfAsleep()` en alguno de los tres |
 | 718 | se quita `shutdownFired` (o su reseteo, o el `if` que la mira en `ACTION_UP`/`ACTION_CANCEL`): el toque que apaga a Ü vuelve a colar un `v.performClick()` sin condición | roja: no encuentra la bandera, su reseteo en `ACTION_DOWN`, o el `if (shutdownFired) { … } else if (!moved) v.performClick()` en ese orden |
+| 719 | se quita `&& !asleep` de `canListenForWakeWord()`, o `wakeWordDock.stop()` de `sleep()` (o queda solo como comentario), o `wakeWordDock.start(...)` de `wakeIfAsleep()` | roja: no encuentra `!asleep` en `canListenForWakeWord()`, o `sinComentarios()` no encuentra `wakeWordDock.stop()` real en `sleep()`, o no encuentra el `if (wakeWordEnabled) wakeWordDock.start(...)` en `wakeIfAsleep()` |
 
 ---
 

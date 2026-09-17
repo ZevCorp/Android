@@ -34,6 +34,7 @@ class Contrato007SostenerParaApagar {
             716 to "Despertar a Ü vuelve a mostrar la misma burbuja sin recrear el motor de voz ni los sonidos, y no hace nada si ya estaba despierta.",
             717 to "Abrir la app de nuevo (dockToApp/setHiddenForApp) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto.",
             718 to "Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en performClick() ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre.",
+            719 to "Mientras Ü está dormido no se puede seguir escuchando la palabra de activación: canListenForWakeWord() excluye el estado dormido y sleep() detiene ese bucle; si el interruptor seguía prendido, despertar lo retoma.",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
@@ -157,6 +158,37 @@ class Contrato007SostenerParaApagar {
         assertTrue(
             Regex("""if\s*\(\s*shutdownFired\s*\)\s*\{[\s\S]*?}\s*else\s+if\s*\(\s*!\s*moved\s*\)\s*v\.performClick\(\)""").containsMatchIn(up),
             promesa(p) + " · soltar el dedo justo después de que la explosión disparó puede seguir cayendo en v.performClick(): $up",
+        )
+    }
+
+    @Test
+    fun promesa719() {
+        val bubble = fuenteDeLaApp(BUBBLE)
+        val p = 719
+
+        // canListenForWakeWord() es un cuerpo de expresión (`= …`), sin llaves: se recorta hasta la
+        // línea en blanco que la separa de la siguiente declaración, no con cuerpo().
+        val desde = bubble.indexOf("private fun canListenForWakeWord")
+        if (desde < 0) fail(promesa(p) + " · no encuentro canListenForWakeWord()")
+        val hasta = bubble.indexOf("\n\n", desde).let { if (it < 0) bubble.length else it }
+        val canListen = bubble.substring(desde, hasta)
+        assertTrue(
+            Regex("""!\s*asleep""").containsMatchIn(canListen),
+            promesa(p) + " · canListenForWakeWord() no excluye el estado dormido: $canListen",
+        )
+
+        // Sin comentarios: un comentario que solo MENCIONE wakeWordDock.stop() no puede hacer pasar
+        // un juez que en verdad la borró (mismo límite que 711/712/714).
+        val sleep = sinComentarios(cuerpo(bubble, Regex("""private fun sleep\s*\(""")))
+        assertTrue(
+            Regex("""wakeWordDock\s*\.\s*stop\s*\(\s*\)""").containsMatchIn(sleep),
+            promesa(p) + " · sleep() no detiene la escucha de la palabra de activación: $sleep",
+        )
+
+        val wake = sinComentarios(cuerpo(bubble, Regex("""fun wakeIfAsleep\s*\(""")))
+        assertTrue(
+            Regex("""getBoolean\(\s*"wakeWordEnabled"\s*,\s*false\s*\)\s*\)\s*wakeWordDock\s*\.\s*start\s*\(""").containsMatchIn(wake),
+            promesa(p) + " · wakeIfAsleep() no retoma la escucha de la palabra si el interruptor seguía prendido: $wake",
         )
     }
 

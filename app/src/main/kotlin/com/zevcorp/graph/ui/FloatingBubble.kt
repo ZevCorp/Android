@@ -96,7 +96,8 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
      *  de una ejecución, o el panel de chat abierto. */
     private fun canListenForWakeWord(): Boolean =
         app.prefs.getBoolean("wakeWordEnabled", false) && app.ui != null &&
-            !voiceDock.docked && !voiceDock.listening && !app.executing && !execLive && panel == null
+            !voiceDock.docked && !voiceDock.listening && !app.executing && !execLive && panel == null &&
+            !asleep
 
     /**
      * Se llama al detectar la palabra de activación (spec 007) — NUNCA con la frase que se dijo, solo
@@ -626,6 +627,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         wanderJob?.cancel(); idleJob?.cancel()
         tts?.stop()
         openAiTts.stop()
+        wakeWordDock.stop() // sin esto seguiría escuchando "hola ü" en segundo plano con Ü dormido
         voiceDock.destroy() // corta el modo reunión si estaba activo; persiste sus notas igual que undock()
         speechHide?.cancel()
         speech?.let { runCatching { wm.removeView(it) } }
@@ -642,6 +644,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         shrunk = false
         runCatching { wm.addView(bubble, bubbleParams) }
         scheduleIdleShrink()
+        if (app.prefs.getBoolean("wakeWordEnabled", false)) wakeWordDock.start(scope) // retoma la escucha si seguía prendida
         LogBus.log("ui", "Ü despierta de nuevo")
     }
 
