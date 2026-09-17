@@ -8,6 +8,7 @@ import android.media.MediaRecorder
 import android.util.Base64
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.LogBus
+import graph.core.voice.RealtimeSession
 import java.net.HttpURLConnection
 import java.net.URL
 import java.util.concurrent.TimeUnit
@@ -163,7 +164,7 @@ class RealtimeVoiceClient : Transcriber {
         when (o["type"]?.jsonPrimitive?.contentOrNull) {
             "session.created" -> if (!updateSent) {
                 updateSent = true
-                ws?.send(sessionUpdatePayload())
+                ws?.send(Json.encodeToString(JsonObject.serializer(), RealtimeSession.sessionUpdatePayload()))
             }
             "session.updated" -> onReady()
             "input_audio_buffer.speech_started" -> onLevel?.invoke(1f)
@@ -193,30 +194,6 @@ class RealtimeVoiceClient : Transcriber {
             }
         }
     }
-
-    private fun sessionUpdatePayload(): String = Json.encodeToString(JsonObject.serializer(), buildJsonObject {
-        put("type", "session.update")
-        put("session", buildJsonObject {
-            put("modalities", buildJsonArray { add(JsonPrimitive("audio")); add(JsonPrimitive("text")) })
-            put("input_audio_format", "pcm16")
-            put("output_audio_format", "pcm16")
-            // create_response=false: el VAD del servidor solo marca fin de turno (dispara
-            // conversation.item.input_audio_transcription.completed), pero NUNCA genera una
-            // respuesta de audio por su cuenta. La única respuesta que se escucha es la que
-            // dispara explícitamente speakFinal() con el texto ya decidido por el cerebro —
-            // sin esto, una respuesta fantasma del servidor podía competir con la real y
-            // cortarle el audio a mitad de camino (hallazgo de revisor).
-            put("turn_detection", buildJsonObject {
-                put("type", "server_vad")
-                put("create_response", false)
-            })
-            // El modelo de voz NUNCA decide qué ejecutar: cero function calling propio (eso es del
-            // cerebro de tareas, arriba). Con transcripción de entrada habilitada para poder pasar
-            // el texto del usuario por el mismo camino que hoy usa Deepgram (IntentDistiller → cerebro).
-            put("tools", buildJsonArray { })
-            put("input_audio_transcription", buildJsonObject { put("model", "whisper-1") })
-        })
-    })
 
     /* ---------- Escucha (Transcriber) ---------- */
 
