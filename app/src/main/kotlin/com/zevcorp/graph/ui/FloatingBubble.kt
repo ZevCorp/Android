@@ -63,6 +63,10 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     private var tapCount = 0
     private var tapJob: Job? = null
 
+    // Gestos con la burbuja anclada (modo reunión): cuenta aparte para no cruzarse con tapCount/tapJob.
+    private var dockTapCount = 0
+    private var dockTapJob: Job? = null
+
     private var speech: TextView? = null
     private var speechParams: WindowManager.LayoutParams? = null
     private var speechHide: Job? = null
@@ -154,10 +158,20 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                     speechHide?.cancel()
                     speech?.visibility = View.GONE
                 }
-                // Escucha en vivo de la ejecución: el toque a la burbuja la apaga.
-                execLive -> { playTick(); stopExecLive() }
-                // Durante la escucha por esquina: el toque termina la grabación y procesa.
-                voiceDock.listening -> { playTick(); voiceDock.stopNow() }
+                // Escucha en vivo de la ejecución: el toque a la burbuja la apaga. Puede coincidir
+                // con el modo reunión todavía anclado (una tarea de la reunión disparó una duda y
+                // el usuario respondió "Responder con voz" mientras corría): en ese caso el toque
+                // NO se pierde para el gesto de mutear, cuenta igual que si hubiera caído directo
+                // en onDockedTap() — si no, hacen falta tres toques en vez de dos para mutear.
+                execLive -> {
+                    playTick()
+                    stopExecLive()
+                    if (voiceDock.docked) onDockedTap()
+                }
+                // Modo reunión anclado (esté o no escuchando en este instante): doble toque mutea/
+                // desmutea; nunca cae en onBubbleTap() ni activateMic() (chocaría con la escucha
+                // permanente ya corriendo).
+                voiceDock.docked -> onDockedTap()
                 // Pequeña al inicio de la barra de la app: UN toque = sube grande y es el micrófono.
                 appDocked && atBar -> { playListenChime(); flyUpAndListen() }
                 // Estado normal: gestos por número de toques (1 menú · 2 micrófono · 3 tema).
@@ -804,6 +818,28 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
                 } else { playTick(); closePanel() }
                 2 -> { playListenChime(); activateMic() }
                 else -> cycleTheme()
+            }
+        }
+    }
+
+    /**
+     * Toque con la burbuja anclada en la esquina (modo reunión). Cuenta toques en la misma ventana
+     * que [onBubbleTap], pero por su cuenta: un DOBLE toque mutea/desmutea la escucha con
+     * [VoiceDock.toggleMute] sin cancelar nada del modo reunión, y NUNCA cae en [onBubbleTap] ni en
+     * [activateMic] — el micrófono de un solo comando chocaría con la escucha permanente ya
+     * corriendo. Un solo toque, si había un segmento de escucha abierto, lo corta para procesar ya
+     * lo dicho (el mismo gesto de siempre); sin segmento abierto, no hace nada.
+     */
+    private fun onDockedTap() {
+        dockTapCount++
+        dockTapJob?.cancel()
+        dockTapJob = scope.launch {
+            delay(GESTURE_WINDOW_MS)
+            val n = dockTapCount
+            dockTapCount = 0
+            when {
+                n >= 2 -> { playTick(); voiceDock.toggleMute() }
+                voiceDock.listening -> { playTick(); voiceDock.stopNow() }
             }
         }
     }

@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · **fase 2B2a implementada** (2026-09-16; promesas 247-253 verdes: el delegado ya sabe dónde está, qué ve y qué podrá hacer; cada promesa se vio ROJA con un sabotaje real, abajo; la corrida en el teléfono, nivel 4, pendiente) · **arreglos del control de la 2B2a** (2026-09-16; promesas 254-258 verdes, **132 en total**: mirar ya no congela la charla, la sesión cuenta sus bytes y el catálogo es el de verdad; siete sabotajes, cada uno rojo sobre su promesa) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · **fase 2B2a implementada** (2026-09-16; promesas 247-253 verdes: el delegado ya sabe dónde está, qué ve y qué podrá hacer; cada promesa se vio ROJA con un sabotaje real, abajo; la corrida en el teléfono, nivel 4, pendiente) · **arreglos del control de la 2B2a** (2026-09-16; promesas 254-258 verdes, **132 en total**: mirar ya no congela la charla, la sesión cuenta sus bytes y el catálogo es el de verdad; siete sabotajes, cada uno rojo sobre su promesa) · **ergonomía del modo reunión: silencio con doble toque** (2026-09-16; promesa 259 verde: doble toque en la burbuja con el modo reunión anclado mutea/desmutea sin salir de la reunión y sin chocar con el micrófono de un solo comando) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -120,6 +120,7 @@ si cambia uno, cambia el otro en el mismo commit.
 | 256 | El catálogo que lee el delegado trae las herramientas aprendidas con el mismo criterio que una corrida: la voz y la anticipación se las piden al único sitio que lo decide, y ninguna de las dos escribe una lista vacía a mano. | 2B2a |
 | 257 | Una etiqueta de la pantalla se sanea en origen —sin saltos de línea ni el separador con que se unen— y quien la lee es tolerante: una etiqueta rara no hace decir «no lo veo» de algo que está ni infla la cuenta, y el campo enfocado sale entero aunque su texto traiga comillas y paréntesis. | 2B2a |
 | 258 | Sin servicio de accesibilidad las tres herramientas dicen la misma causa con las mismas palabras: qué puedo hacer ya no la calla devolviendo un catálogo vacío, que se lee como que Ü no sabe hacer nada. | 2B2a |
+| 259 | Con la burbuja anclada en el modo reunión, `listenLoop` consulta `muted` antes de abrir cada segmento nuevo: muteada, no abre el micrófono pero el bucle sigue vivo. Un doble toque en la burbuja llama a `VoiceDock.toggleMute()` y nunca cae en el micrófono de un solo comando (`onBubbleTap`/`activateMic`), esté o no escuchando en ese instante. Ni `toggleMute()` ni el camino de silencio de `listenLoop` tocan `taskQueue`, `taskWorker` ni `Ejecucion.parar` | Silencio |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -200,6 +201,7 @@ salida que no llama a `acabar()`— da rojo con su nombre en vez de dejar el con
 | 256 | Las fuentes de `app`: `aprendidasDisponibles()` se declara UNA vez, la voz y la anticipación la usan las dos, y ninguna escribe `emptyList()` en la llamada al catálogo. Y por comportamiento, un `Mcp` de verdad con una herramienta aprendida: `que_puedo_hacer` la nombra pasando por el ejecutor, no por el catálogo suelto |
 | 257 | Etiquetas con salto de línea, con el separador dentro, con un punto medio pegado y de más de 40 caracteres. Y sin sanear, como si llegaran de otra versión del servicio: la cuenta sigue siendo 2 y «Buscar» se encuentra. Un campo enfocado cuyo texto trae `")` sale entero |
 | 258 | Sin pantalla y sin catálogo, las tres respuestas nombran el servicio de accesibilidad con las mismas palabras; y con servicio pero sin ninguna acción, la respuesta NO dice que el servicio esté apagado |
+| 259 | Fuentes de `app`, igual que 246/256 (`app` no corre en `jvmTest`): que `muted`/`toggleMute()` existan en `VoiceDock`; que el chequeo de `muted` en `listenLoop` esté ANTES de abrir el segmento (`listening = true`) y su bloque no llame a `defaultTranscriber`; que el doble toque en el `when` de `FloatingBubble`, con la burbuja anclada, llame a `toggleMute()` sin pasar nunca por `onBubbleTap()` ni `activateMic()`; y que ni `toggleMute()` ni ese bloque de `listenLoop` nombren `taskQueue`, `taskWorker` ni `Ejecucion.parar` |
 
 
 ### Sabotajes de la fase 2B2a (cada uno pone roja su promesa)
@@ -230,6 +232,14 @@ la 257 se sabotean por separado: una promesa con dos mitades y un solo sabotaje 
 | S257a | la etiqueta no se sanea en origen | 257 |
 | S257b | el enfocado cierra por la PRIMERA comilla-paréntesis | 257 |
 | S258 | un catálogo ausente se contesta como un catálogo vacío | 258 |
+
+### Sabotaje de la ergonomía de silencio (pone roja su promesa)
+
+Aplicado sobre esta corrida y revertido con `git checkout -- app/src`.
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| S259 | el doble toque con la burbuja anclada llama a `activateMic()` en vez de `voiceDock.toggleMute()` | 259 |
 
 ---
 
@@ -398,6 +408,39 @@ vacío, que se lee como que Ü no sabe hacer nada. Ahora `acciones` devuelve `nu
 dicen la misma causa con las mismas palabras.
 
 Pone verdes: **254-258**.
+
+#### Ergonomía del modo reunión: silencio con doble toque (promesa 259, esta corrida)
+
+La única forma de callar el modo reunión era sacar la burbuja de la esquina, lo que además corta cualquier tarea que
+el worker esté por tomar de la cola — apagar todo para pedirle a Ü que no escuche un momento. Y había un choque
+latente: en el hueco entre segmentos (`docked && !listening`, mientras el cerebro piensa o Ü habla) un doble toque
+caía en `onBubbleTap()` → `activateMic()`, que abre OTRA escucha de un solo comando encima del modo reunión ya
+corriendo.
+
+Puro `app/`, sin cambios en `core`:
+
+- `VoiceDock.kt` — `@Volatile var muted` (solo lectura hacia afuera, como `docked`/`listening`) y `toggleMute()`, que
+  invierte el silencio, corta un segmento abierto (lo dicho hasta ahí se procesa igual que con un toque) y lo anota en
+  el log. `listenLoop()` consulta `muted` en cada vuelta, ANTES de abrir el micrófono: muteada, ni transcribe ni
+  avanza el segmento — solo espera un rato corto y vuelve a mirar, con el mismo patrón que ya usa la espera de
+  `quietUntil`. El bucle sigue vivo, las notas quedan y `taskWorker`/`taskQueue` siguen procesando la cola: mutear
+  nunca cancela una tarea en curso ni las que esperan turno. El aviso (`showBadge`) cambia a «🔇 muteado · toca dos
+  veces para volver a escuchar», distinto del «🎧 en la reunión…» de siempre.
+- `FloatingBubble.kt` — mientras `voiceDock.docked` (esté o no `listening`), el toque ya no cae en el `when` general:
+  va a `onDockedTap()`, que cuenta toques en su propia ventana (separada de `tapCount`/`tapJob`, para no cruzarse con
+  el gesto normal). Un DOBLE toque llama a `voiceDock.toggleMute()`; nunca llega a `onBubbleTap()` ni a
+  `activateMic()`. Un solo toque, si había un segmento abierto, lo corta (el mismo gesto de siempre); sin segmento
+  abierto, no hace nada — se prioriza que el doble toque mutee de forma confiable sobre conservar ese atajo.
+
+`cancel()` y `undock()` no miran `muted`: sacar la burbuja de la esquina sigue siendo la única forma de apagar el modo
+reunión entero, muteado o no. `dock()` arranca siempre sin mute (una reunión nueva empieza escuchando).
+
+Juzgado por fuente, igual que 246/256 (`app` no corre en `jvmTest`): que `muted`/`toggleMute` existan, que el chequeo
+de `muted` en `listenLoop` esté antes de `listening = true` y su bloque no abra el micrófono, que el doble toque en
+`FloatingBubble` llame a `toggleMute()` sin pasar por `onBubbleTap()`/`activateMic()`, y que ni `toggleMute()` ni ese
+bloque toquen `taskQueue`, `taskWorker` ni `Ejecucion.parar`.
+
+Pone verdes: **259**.
 
 ---
 

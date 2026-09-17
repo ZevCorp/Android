@@ -31,6 +31,8 @@ import kotlinx.coroutines.withContext
  * fragmento pasa por el cerebro de reunión (MeetingBrain), que decide: tomar nota, lanzar una
  * construcción al motor EN PARALELO (la escucha nunca se detiene), hablar en voz alta, o detectar
  * el cierre e intervenir con el resumen + demo. Todo queda en files/meetings/ (MeetingLog).
+ * Un doble toque en la burbuja mutea/desmutea la escucha SIN salir de la reunión: el bucle sigue
+ * vivo, las notas quedan y el worker de tareas sigue procesando la cola.
  * Sacar la burbuja de la esquina es la única forma de terminar.
  */
 class VoiceDock(
@@ -71,6 +73,10 @@ class VoiceDock(
 
     /** Hay un segmento de escucha de micrófono en curso. */
     @Volatile var listening = false
+        private set
+
+    /** Silencio del modo reunión (doble toque en la burbuja): el bucle sigue vivo, pero no abre el micrófono. */
+    @Volatile var muted = false
         private set
 
     private val zone get() = service.dp(120)
@@ -118,8 +124,22 @@ class VoiceDock(
         transcriber?.stop()
     }
 
+    /**
+     * Doble toque en la burbuja mientras está anclada: alterna el silencio SIN salir de la reunión.
+     * [listenLoop] sigue vivo, las notas ya tomadas se conservan y el worker de tareas ([taskWorker]
+     * sobre [taskQueue]) sigue procesando lo que ya esté encolado — mutear NUNCA cancela una tarea en
+     * curso ni las que esperan en la cola. Si había un segmento de escucha abierto, se corta (lo dicho
+     * hasta aquí se procesa igual que con un toque durante la escucha).
+     */
+    fun toggleMute() {
+        muted = !muted
+        if (muted) transcriber?.stop()
+        LogBus.log("meeting", if (muted) "🔇 reunión muteada (doble toque para reanudar)" else "🔊 reunión reanuda la escucha")
+    }
+
     private fun dock() {
         docked = true
+        muted = false
         MicService.start(service)
         LogBus.log("meeting", "▶ MODO REUNIÓN en la esquina ${if (dockLeft) "izquierda" else "derecha"}")
         narrate("Estoy en la reunión 👂 tomo notas y construyo lo que decidan")
@@ -174,6 +194,14 @@ class VoiceDock(
                 // Ü está hablando: micrófono cerrado hasta que termine (no se escucha a sí mismo).
                 val quiet = quietUntil - System.currentTimeMillis()
                 if (quiet > 0) { delay(quiet.coerceAtMost(500)); continue }
+
+                // Muteado por el usuario (doble toque en la burbuja): no se abre el micrófono, pero
+                // el bucle sigue vivo y el worker de tareas sigue procesando lo que ya esté encolado.
+                if (muted) {
+                    withContext(Dispatchers.Main) { showBadge("🔇 muteado · toca dos veces para volver a escuchar") }
+                    delay(400)
+                    continue
+                }
 
                 listening = true
                 withContext(Dispatchers.Main) {
