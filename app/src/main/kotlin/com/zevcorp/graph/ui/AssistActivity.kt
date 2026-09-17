@@ -136,6 +136,8 @@ class AssistActivity : Activity() {
             insets
         }
 
+        // El asistente del botón de encendido despierta a Ü si estaba dormido por el gesto (spec 007).
+        (app.ui as? GraphAccessibilityService)?.bubble?.wakeIfAsleep()
         addBubble("Hola, ¿en qué te ayudo?", mine = false)
         startListening() // como Gemini: al abrir ya está escuchando
     }

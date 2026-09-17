@@ -305,30 +305,48 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         }
     }
 
-    /** Arrastre fluido con inercia: un flick corto la lanza a la esquina; siempre "aterriza" al borde. */
+    /** Arrastre fluido con inercia: un flick corto la lanza a la esquina; siempre "aterriza" al borde. Sostenerla
+     *  quieta [SHUTDOWN_HOLD_MS] sin moverla ni soltarla la hace explotar y apaga a Ü (spec 007). */
     private fun attachDrag(size: Int) {
         var downX = 0f; var downY = 0f; var startX = 0; var startY = 0; var moved = false
         var tracker: VelocityTracker? = null
+        var shutdownJob: Job? = null
         bubble.setOnTouchListener { v, e ->
             when (e.actionMasked) {
                 MotionEvent.ACTION_DOWN -> {
                     wake() // tocarla/moverla la despierta y la agranda
                     dragAnimator?.cancel()
                     downX = e.rawX; downY = e.rawY; startX = bubbleParams.x; startY = bubbleParams.y; moved = false
+                    shutdownFired = false // nuevo toque: lo del anterior (si explotó) no se le arrastra
                     tracker = VelocityTracker.obtain().also { it.addMovement(e) }
+                    shutdownJob = scope.launch { delay(SHUTDOWN_HOLD_MS); explodeAndSleep() }
                 }
                 MotionEvent.ACTION_MOVE -> {
                     tracker?.addMovement(e)
                     val dx = (e.rawX - downX).toInt(); val dy = (e.rawY - downY).toInt()
-                    if (moved || dx * dx + dy * dy > 120) {
+                    val distSq = dx * dx + dy * dy
+                    // Umbral chico: decide RÁPIDO, en el primer instante del toque, si es un tap o el
+                    // arranque de un arrastre real. No cancela el apagado (ver más abajo): sirve solo
+                    // para mover la burbuja y avisarle al modo reunión.
+                    if (moved || distSq > 120) {
                         moved = true
                         bubbleParams.x = startX + dx; bubbleParams.y = startY + dy
                         runCatching { wm.updateViewLayout(bubble, bubbleParams) }
                         voiceDock.track(bubbleParams.x + size / 2, bubbleParams.y + size / 2)
                     }
+                    // Umbral propio y bastante más tolerante para CANCELAR el apagado pendiente
+                    // (SHUTDOWN_CANCEL_DISTANCE_SQ): sostener la burbuja quieta 5 s tiembla de sobra
+                    // el umbral chico de arriba; solo un arrastre franco e intencional cancela.
+                    if (shutdownJob != null && distSq > SHUTDOWN_CANCEL_DISTANCE_SQ) { shutdownJob?.cancel(); shutdownJob = null }
                 }
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
-                    if (!moved) v.performClick()
+                    shutdownJob?.cancel(); shutdownJob = null // se soltó antes de tiempo: ya no se apaga
+                    if (shutdownFired) {
+                        // El apagado ya arrancó con ESTE mismo toque (burbuja dormida a mitad del
+                        // gesto): soltar el dedo no debe además contar como un click normal, o
+                        // reabriría el panel recién cerrado (control 007 · hallazgo ALTA). El próximo
+                        // toque, con Ü ya despierta, se comporta como siempre.
+                    } else if (!moved) v.performClick()
                     else if (voiceDock.docked) {
                         // El dedo se mantuvo 2.5 s en la esquina y la escucha ya arrancó: solo
                         // asienta la burbuja en la esquina, sin volver a armar nada.
@@ -397,6 +415,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
     /** La app (MainActivity) pasó a primer plano SIN barra (vistas versus/desarrollador): la burbuja
      * se posiciona al centro superior a tamaño completo, sin encogerse ni pasear mientras dure. */
     fun dockToApp() {
+        wakeIfAsleep() // volver a la app despierta a Ü si estaba dormido por el gesto (spec 007)
         bubble.visibility = View.VISIBLE
         if (appDocked && !atBar) return
         rememberHome()
@@ -480,6 +499,7 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
      */
     fun setHiddenForApp(hidden: Boolean) {
         scope.launch {
+            wakeIfAsleep() // volver a la app despierta a Ü si estaba dormido por el gesto (spec 007)
             if (hidden) {
                 appDocked = false; atBar = false
                 wanderJob?.cancel(); idleJob?.cancel(); dragAnimator?.cancel()
@@ -555,6 +575,83 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
         panel?.let { runCatching { wm.removeView(it) } }
         speech?.let { runCatching { wm.removeView(it) } }
         stopBar?.let { runCatching { wm.removeView(it) } }
+    }
+
+    /* ---------- Apagado por gesto: sostener la burbuja quieta la hace explotar y duerme a Ü (spec 007) ----------
+     * Android no deja que la app apague su propio permiso de accesibilidad desde adentro: lo único que se puede
+     * apagar es lo que la app controla. Por eso "apagar" acá significa: la burbuja desaparece de la pantalla, el
+     * modo reunión y cualquier voz sonando se cortan, y Ü queda dormido hasta que algo lo despierte
+     * ([wakeIfAsleep], desde `dockToApp`/`setHiddenForApp` o desde `AssistActivity`). El permiso sigue concedido:
+     * por eso despertarlo es instantáneo, sin pasar por Ajustes. ---------- */
+
+    /** true mientras Ü está dormido por el gesto: sin vista en pantalla, sin modo reunión ni voz. */
+    @Volatile private var asleep = false
+
+    /**
+     * true si EL TOQUE ACTUAL ya disparó [explodeAndSleep]: así su propio `ACTION_UP`/`ACTION_CANCEL`
+     * no cuenta como un click normal (que reabriría el panel recién cerrado, control 007 · hallazgo
+     * ALTA). Se resetea en cada `ACTION_DOWN`, así que el próximo toque, con Ü ya despierta, se
+     * comporta como siempre.
+     */
+    private var shutdownFired = false
+
+    /** La carita escala hacia arriba y se desvanece como un estallido; al terminar, [sleep] corta todo. */
+    private fun explodeAndSleep() {
+        if (asleep) return
+        shutdownFired = true // este toque ya disparó el apagado: su ACTION_UP no debe colar un click
+        vibrateShort()
+        val fromScale = bubble.scaleX
+        dragAnimator?.cancel()
+        idleAnimator?.cancel()
+        dragAnimator = ValueAnimator.ofFloat(0f, 1f).apply {
+            duration = 260
+            interpolator = AccelerateInterpolator(1.4f)
+            addUpdateListener { a ->
+                val f = a.animatedValue as Float
+                val scale = fromScale + (2.2f - fromScale) * f
+                bubble.scaleX = scale; bubble.scaleY = scale
+                bubble.alpha = 1f - f
+            }
+            addListener(object : AnimatorListenerAdapter() {
+                override fun onAnimationEnd(animation: Animator) = sleep()
+            })
+            start()
+        }
+    }
+
+    /** Corta el modo reunión (si estaba activo) y cualquier voz sonando, y quita la burbuja de la pantalla. */
+    private fun sleep() {
+        asleep = true
+        appDocked = false; atBar = false
+        wanderJob?.cancel(); idleJob?.cancel()
+        tts?.stop()
+        openAiTts.stop()
+        voiceDock.destroy() // corta el modo reunión si estaba activo; persiste sus notas igual que undock()
+        speechHide?.cancel()
+        speech?.let { runCatching { wm.removeView(it) } }
+        speech = null
+        runCatching { wm.removeView(bubble) }
+        bubble.alpha = 1f; bubble.scaleX = 1f; bubble.scaleY = 1f // lista para cuando despierte
+        LogBus.log("ui", "Ü se apagó: sostenida 5 s")
+    }
+
+    /** Vuelve a mostrar la burbuja tras [sleep]: el mismo View, el mismo TTS, el mismo SoundPool. */
+    fun wakeIfAsleep() {
+        if (!asleep) return
+        asleep = false
+        shrunk = false
+        runCatching { wm.addView(bubble, bubbleParams) }
+        scheduleIdleShrink()
+        LogBus.log("ui", "Ü despierta de nuevo")
+    }
+
+    private fun vibrateShort() = runCatching {
+        val vibrator = service.getSystemService(android.os.Vibrator::class.java) ?: return@runCatching
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
+            vibrator.vibrate(android.os.VibrationEffect.createOneShot(80, android.os.VibrationEffect.DEFAULT_AMPLITUDE))
+        } else {
+            @Suppress("DEPRECATION") vibrator.vibrate(80)
+        }
     }
 
     /* ---------- Voz y narración (globo de diálogo + TTS) ---------- */
@@ -1146,5 +1243,14 @@ class FloatingBubble(private val service: AccessibilityService) : UserChannel, V
             "¿En qué te ayudo?",
             "Te escucho, cuéntame",
         )
+        /** Sostener la burbuja quieta este tiempo, sin moverla y sin soltarla, apaga a Ü (spec 007). */
+        const val SHUTDOWN_HOLD_MS = 5_000L
+        /**
+         * Umbral (distancia al cuadrado, en px²) para CANCELAR el apagado pendiente por movimiento
+         * real. 6× la distancia lineal del umbral de tap/arrastre (120 ≈ 11 px) → ~66 px: sostener
+         * quieta la burbuja 5 s tiembla de sobra 11 px con una mano real, pero no tanto como 66 px;
+         * un arrastre franco e intencional sí los supera (control 007 · hallazgo MEDIA).
+         */
+        const val SHUTDOWN_CANCEL_DISTANCE_SQ = 120 * 36
     }
 }
