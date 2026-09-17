@@ -318,6 +318,30 @@ class MainActivity : Activity(), UserChannel {
         setup.addView(caption("Elige qué cerebro ejecuta las tareas. Sol/Terra/Luna usan tu OpenAI API key; " +
             "Gemini usa la key de Google. La voz natural también usa la OpenAI API key."))
         setup.gap(dp(8))
+        // VOZ EN VIVO (dev-only, mismo gate que el selector de Modelo): gpt-realtime de OpenAI por
+        // WebSocket, oído+boca del turno de voz — nunca decide qué ejecutar. No se ofrece en el
+        // selector público de Voz (openVoiceSettings) porque pide un token efímero al backend Graph;
+        // sin ese token el turno cae solo al pipeline clásico (Deepgram + TTS).
+        lateinit var liveVoiceBtn: TextView
+        fun liveVoiceLabel() = if (app.prefs.getString("voiceEngine", "openai") == "realtime")
+            "Voz: Live (gpt-realtime)  ✓" else "Voz: clásica (Deepgram + TTS)"
+        liveVoiceBtn = button(liveVoiceLabel()) {
+            val current = app.prefs.getString("voiceEngine", "openai") ?: "openai"
+            val next = if (current == "realtime") {
+                app.prefs.getString("voiceEngineBeforeLive", "openai") ?: "openai"
+            } else {
+                app.prefs.edit().putString("voiceEngineBeforeLive", current).apply()
+                "realtime"
+            }
+            app.prefs.edit().putString("voiceEngine", next).apply()
+            liveVoiceBtn.text = liveVoiceLabel()
+            log("Motor de voz → $next")
+        }
+        setup.addView(liveVoiceBtn)
+        setup.gap(dp(6))
+        setup.addView(caption("Live usa gpt-realtime con un token efímero del backend Graph (nunca una key " +
+            "incrustada). Si el backend no responde, cada turno cae solo al pipeline clásico."))
+        setup.gap(dp(8))
         // Neo4j Aura (opcional): el grafo de conocimiento donde se proyectan aprendizajes y workflows.
         fun neoField(hintText: String, prefKey: String, password: Boolean = false) = EditText(this).apply {
             hint = hintText

@@ -121,6 +121,12 @@ class GraphApp : Application() {
         android.provider.Settings.Secure.getString(contentResolver, android.provider.Settings.Secure.ANDROID_ID)
     }
 
+    /** URL base de Graph ya resuelta (pref → build). Pública para llamadas fuera del cerebro (p.ej. `RealtimeVoiceClient`). */
+    fun resolvedGraphBaseUrl(): String = graphBaseUrl()
+
+    /** El mismo `X-Miracle-Device-Id` que ya usa `GraphBrain`, expuesto para llamadas fuera del cerebro. */
+    fun resolvedDeviceId(): String = deviceId
+
     private val bubble get() = (ui as? GraphAccessibilityService)?.bubble
 
     private val voice = object : Voice {
