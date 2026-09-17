@@ -145,6 +145,7 @@ class Contrato002VozGptLive {
             256 to "El catálogo que lee el delegado trae las herramientas aprendidas con el mismo criterio que una corrida: la voz y la anticipación se las piden al único sitio que lo decide, y ninguna de las dos escribe una lista vacía a mano.",
             257 to "Una etiqueta de la pantalla se sanea en origen —sin saltos de línea ni el separador con que se unen— y quien la lee es tolerante: una etiqueta rara no hace decir «no lo veo» de algo que está ni infla la cuenta, y el campo enfocado sale entero aunque su texto traiga comillas y paréntesis.",
             258 to "Sin servicio de accesibilidad las tres herramientas dicen la misma causa con las mismas palabras: qué puedo hacer ya no la calla devolviendo un catálogo vacío, que se lee como que Ü no sabe hacer nada.",
+            259 to "Un doble toque con la burbuja anclada en el modo reunión mutea o desmutea la escucha sin salir de la reunión: `listenLoop` consulta `muted` antes de abrir cada segmento nuevo y, muteada, no abre el micrófono pero sigue viva; ni `toggleMute()` ni ese camino tocan la cola ni el worker de tareas, y el mismo doble toque nunca cae en el micrófono de un solo comando (`onBubbleTap`/`activateMic`).",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
