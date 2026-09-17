@@ -137,6 +137,20 @@ class VoiceDock(
         LogBus.log("meeting", if (muted) "🔇 reunión muteada (doble toque para reanudar)" else "🔊 reunión reanuda la escucha")
     }
 
+    /**
+     * Entra al Modo Reunión SIN pasar por el arrastre a una esquina (spec 007: lo dispara la palabra
+     * de activación detectada por voz). Wrapper público de [dock]: la lógica de encendido no cambia,
+     * solo se agrega una segunda puerta de entrada. Si ya está anclada, no hace nada.
+     */
+    fun dockNow() {
+        if (docked) return
+        dock()
+    }
+
+    /** Aviso «te escucho» al detectar la palabra de activación (spec 007), reusando el mismo
+     *  mecanismo de aviso flotante que ya usan 🎧/🔇 — sin duplicarlo. */
+    fun showListeningBadge() = showBadge("👂 te escucho…")
+
     private fun dock() {
         docked = true
         muted = false
