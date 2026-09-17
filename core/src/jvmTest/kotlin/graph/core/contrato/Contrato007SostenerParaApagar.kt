@@ -25,24 +25,24 @@ class Contrato007SostenerParaApagar {
         const val ASSIST = "AssistActivity.kt"
 
         val PROMESAS = mapOf(
-            701 to "Sostener la burbuja quieta, sin moverla y sin soltarla, arma un temporizador de 5 segundos hacia el apagado; con el dedo quieto ese tiempo entero, se dispara.",
-            702 to "Soltar el dedo (ACTION_UP o ACTION_CANCEL) antes de que se cumplan los 5 segundos cancela el apagado sin efecto: el toque simple y el arrastre normal siguen funcionando igual que siempre.",
-            703 to "Un movimiento FRANCO de la burbuja cancela el apagado pendiente, con un umbral propio y bastante más tolerante que el de tap/arrastre (para que el temblor normal de una mano sostenida 5 s no lo corte solo), sin tocar el resto del arrastre ni el aviso al modo reunión.",
-            704 to "Cumplidos los 5 segundos, la burbuja anima una explosión (escala hacia arriba y opacidad hacia 0 con ValueAnimator, sin traer ninguna librería nueva) y solo al terminar la animación dispara el apagado.",
-            705 to "El apagado corta el modo reunión si estaba activo (persistiendo sus notas) y detiene cualquier voz sonando, la del sistema y la de OpenAI.",
-            706 to "El apagado quita la vista de la burbuja de la pantalla y deja registrado que Ü se apagó por este gesto, con la misma medida que cualquier otra línea del log (nunca texto libre fuera de la puerta de telemetría).",
-            707 to "Despertar a Ü vuelve a mostrar la misma burbuja sin recrear el motor de voz ni los sonidos, y no hace nada si ya estaba despierta.",
-            708 to "Abrir la app de nuevo (dockToApp/setHiddenForApp) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto.",
-            709 to "Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en performClick() ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre.",
+            710 to "Sostener la burbuja quieta, sin moverla y sin soltarla, arma un temporizador de 5 segundos hacia el apagado; con el dedo quieto ese tiempo entero, se dispara.",
+            711 to "Soltar el dedo (ACTION_UP o ACTION_CANCEL) antes de que se cumplan los 5 segundos cancela el apagado sin efecto: el toque simple y el arrastre normal siguen funcionando igual que siempre.",
+            712 to "Un movimiento FRANCO de la burbuja cancela el apagado pendiente, con un umbral propio y bastante más tolerante que el de tap/arrastre (para que el temblor normal de una mano sostenida 5 s no lo corte solo), sin tocar el resto del arrastre ni el aviso al modo reunión.",
+            713 to "Cumplidos los 5 segundos, la burbuja anima una explosión (escala hacia arriba y opacidad hacia 0 con ValueAnimator, sin traer ninguna librería nueva) y solo al terminar la animación dispara el apagado.",
+            714 to "El apagado corta el modo reunión si estaba activo (persistiendo sus notas) y detiene cualquier voz sonando, la del sistema y la de OpenAI.",
+            715 to "El apagado quita la vista de la burbuja de la pantalla y deja registrado que Ü se apagó por este gesto, con la misma medida que cualquier otra línea del log (nunca texto libre fuera de la puerta de telemetría).",
+            716 to "Despertar a Ü vuelve a mostrar la misma burbuja sin recrear el motor de voz ni los sonidos, y no hace nada si ya estaba despierta.",
+            717 to "Abrir la app de nuevo (dockToApp/setHiddenForApp) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto.",
+            718 to "Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en performClick() ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre.",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
 
     @Test
-    fun promesa701() {
+    fun promesa710() {
         val bubble = fuenteDeLaApp(BUBBLE)
-        val p = 701
+        val p = 710
 
         assertTrue(
             Regex("""SHUTDOWN_HOLD_MS\s*=\s*5_?000L""").containsMatchIn(bubble),
@@ -56,9 +56,9 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa702() {
+    fun promesa711() {
         val bubble = fuenteDeLaApp(BUBBLE)
-        val p = 702
+        val p = 711
         val up = cuerpo(attachDrag(bubble), Regex("""MotionEvent\.ACTION_UP,\s*MotionEvent\.ACTION_CANCEL\s*->\s*\{"""))
         // Sin comentarios: un comentario que solo MENCIONE la llamada no puede hacer pasar un juez
         // que en verdad la borró (control 007 · límite del juez por texto).
@@ -73,9 +73,9 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa703() {
+    fun promesa712() {
         val bubble = fuenteDeLaApp(BUBBLE)
-        val p = 703
+        val p = 712
         val move = cuerpo(attachDrag(bubble), Regex("""MotionEvent\.ACTION_MOVE\s*->\s*\{"""))
 
         // El umbral chico (120 ≈ 11 px) sigue sirviendo SOLO para tap-vs-arrastre: ya no cancela el
@@ -104,9 +104,9 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa704() {
+    fun promesa713() {
         val explode = cuerpo(fuenteDeLaApp(BUBBLE), Regex("""private fun explodeAndSleep\s*\("""))
-        val p = 704
+        val p = 713
         assertTrue("ValueAnimator" in explode, promesa(p) + " · la explosión no usa ValueAnimator (no se trae una librería nueva)")
         assertTrue(Regex("""bubble\.scaleX\s*=""").containsMatchIn(explode) && Regex("""bubble\.scaleY\s*=""").containsMatchIn(explode),
             promesa(p) + " · la explosión no escala la burbuja: $explode")
@@ -118,11 +118,11 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa705() {
+    fun promesa714() {
         // Sin comentarios: un comentario que solo MENCIONE voiceDock.destroy()/undock() no puede
         // hacer pasar un juez que en verdad la borró (control 007 · límite del juez por texto).
         val sleep = sinComentarios(cuerpo(fuenteDeLaApp(BUBBLE), Regex("""private fun sleep\s*\(""")))
-        val p = 705
+        val p = 714
         assertTrue(
             Regex("""voiceDock\s*\.\s*(destroy|undock)\s*\(\s*\)""").containsMatchIn(sleep),
             promesa(p) + " · el apagado no corta el modo reunión si estaba activo: $sleep",
@@ -132,9 +132,9 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa709() {
+    fun promesa718() {
         val bubble = fuenteDeLaApp(BUBBLE)
-        val p = 709
+        val p = 718
 
         assertTrue(
             Regex("""private\s+var\s+shutdownFired\s*=\s*false""").containsMatchIn(bubble),
@@ -161,9 +161,9 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa706() {
+    fun promesa715() {
         val sleep = cuerpo(fuenteDeLaApp(BUBBLE), Regex("""private fun sleep\s*\("""))
-        val p = 706
+        val p = 715
         assertTrue(
             Regex("""wm\s*\.\s*removeView\s*\(\s*bubble\s*\)""").containsMatchIn(sleep),
             promesa(p) + " · el apagado no quita la burbuja de la pantalla: $sleep",
@@ -177,9 +177,9 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa707() {
+    fun promesa716() {
         val wake = cuerpo(fuenteDeLaApp(BUBBLE), Regex("""fun wakeIfAsleep\s*\("""))
-        val p = 707
+        val p = 716
         assertTrue(
             Regex("""if\s*\(\s*!\s*asleep\s*\)\s*return""").containsMatchIn(wake),
             promesa(p) + " · despertar sin estar dormida hace algo de más: $wake",
@@ -193,9 +193,9 @@ class Contrato007SostenerParaApagar {
     }
 
     @Test
-    fun promesa708() {
+    fun promesa717() {
         val bubble = fuenteDeLaApp(BUBBLE)
-        val p = 708
+        val p = 717
         val dockToApp = cuerpo(bubble, Regex("""fun dockToApp\s*\("""))
         assertTrue("wakeIfAsleep()" in dockToApp, promesa(p) + " · dockToApp no despierta a Ü al volver a la app")
         val setHiddenForApp = cuerpo(bubble, Regex("""fun setHiddenForApp\s*\("""))

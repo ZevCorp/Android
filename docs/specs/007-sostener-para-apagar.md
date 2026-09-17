@@ -1,13 +1,13 @@
 # Plan de implementación: sostener la burbuja 5 segundos la apaga — explota y Ü se duerme
 
-Estado: **implementada** (2026-09-16; promesas 701-708 verdes, contrato de 8 promesas; cada una se vio ROJA leyendo
+Estado: **implementada** (2026-09-16; promesas 710-717 verdes, contrato de 8 promesas; cada una se vio ROJA leyendo
 las fuentes sin el cableado antes de escribirlo). Nace de un pedido del Capitán: «me gustaría que cuando lo sostengo
 durante 5 segundos haga una animación como de explotarse y ya se apague o cierre el agente» · Rama:
 `yokh/apagar-con-gesto`.
 
 **Control (2026-09-16): NO APROBADO, corregido en el mismo commit.** El uso más natural del gesto (sostener quieta,
 sin arrastrar, que es exactamente lo previsto) rompía el apagado apenas se soltaba el dedo — ver los dos hallazgos
-de abajo y la promesa nueva 709. Contrato ahora en 9 promesas (701-709); 703 se endureció con el umbral corregido.
+de abajo y la promesa nueva 718. Contrato ahora en 9 promesas (710-718); 712 se endureció con el umbral corregido.
 
 - **[ALTA, corregido]** Soltar el dedo justo después de que la explosión disparó caía, sin condición, en
   `v.performClick()` → `onBubbleTap()` → `openPanel()`: el apagado duraba un cuarto de segundo antes de que el mismo
@@ -15,18 +15,18 @@ de abajo y la promesa nueva 709. Contrato ahora en 9 promesas (701-709); 703 se 
   pone en `true` al arrancar, `ACTION_DOWN` la resetea a `false` en cada toque nuevo, y `ACTION_UP`/`ACTION_CANCEL`
   la mira ANTES de decidir `v.performClick()`: si el apagado ya disparó en este mismo toque, no hace nada (ni click,
   ni fling, ni nada del resto del arrastre). El siguiente toque, con Ü ya despierta, se comporta como siempre. Ver
-  promesa 709.
+  promesa 718.
 - **[MEDIA, corregido]** El umbral de 120 (≈11 px, pensado para distinguir tap de arrastre en cientos de ms)
   también cancelaba el apagado pendiente — aplicado a un sostenido de 5 s, el temblor normal de una mano real lo
   supera con facilidad, cortando el apagado sin que la persona sienta que hizo algo mal. Se separaron los dos
   criterios: el umbral chico (120) sigue decidiendo tap-vs-arrastre en el instante y ya NO cancela el apagado; un
   umbral propio, `SHUTDOWN_CANCEL_DISTANCE_SQ = 120 * 36` (6× la distancia lineal, ~66 px en vez de ~11 px), es el
-  único que cancela el apagado por movimiento real. Ver promesa 703 (reescrita).
-- **[MEDIA, test]** Dos jueces por texto (702 y 705) daban falso verde si se borraba la llamada real pero quedaba un
+  único que cancela el apagado por movimiento real. Ver promesa 712 (reescrita).
+- **[MEDIA, test]** Dos jueces por texto (711 y 714) daban falso verde si se borraba la llamada real pero quedaba un
   COMENTARIO con las mismas palabras. Se agregó `sinComentarios()` (descarta líneas que empiezan con `//` antes de
   buscar el patrón) y se aplicó a esas dos promesas puntuales, sin rehacer el juez entero.
 
-Esta spec numera sus promesas **desde 701** (ver `docs/como-trabajamos.md`). Si al integrar con la otra mitad de la
+Esta spec numera sus promesas **desde 710** (ver `docs/como-trabajamos.md`). Si al integrar con la otra mitad de la
 007 (`ü-responde-a-su-nombre`, en otra rama) los números chocan, se renumera en ese momento.
 
 ---
@@ -63,19 +63,19 @@ El permiso de accesibilidad sigue concedido: por eso volver a activarlo es insta
 
 | Archivo | Promesas |
 |---|---|
-| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato007SostenerParaApagar.kt` (lee las fuentes de `app`, igual que la 259: solo `jvmTest` lee disco) | 701-709 |
+| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato007SostenerParaApagar.kt` (lee las fuentes de `app`, igual que la 259: solo `jvmTest` lee disco) | 710-718 |
 
 | # | Promesa |
 |---|---|
-| 701 | Sostener la burbuja quieta, sin moverla y sin soltarla, arma un temporizador de 5 segundos hacia el apagado; con el dedo quieto ese tiempo entero, se dispara. |
-| 702 | Soltar el dedo (`ACTION_UP` o `ACTION_CANCEL`) antes de que se cumplan los 5 segundos cancela el apagado sin efecto: el toque simple y el arrastre normal siguen funcionando igual que siempre. |
-| 703 | Un movimiento FRANCO de la burbuja cancela el apagado pendiente, con un umbral propio y bastante más tolerante que el de tap/arrastre (para que el temblor normal de una mano sostenida 5 s no lo corte solo), sin tocar el resto del arrastre ni el aviso al modo reunión. |
-| 704 | Cumplidos los 5 segundos, la burbuja anima una explosión (escala hacia arriba y opacidad hacia 0 con `ValueAnimator`, sin traer ninguna librería nueva) y solo al terminar la animación dispara el apagado. |
-| 705 | El apagado corta el modo reunión si estaba activo (persistiendo sus notas) y detiene cualquier voz sonando, la del sistema y la de OpenAI. |
-| 706 | El apagado quita la vista de la burbuja de la pantalla y deja registrado que Ü se apagó por este gesto, con la misma medida que cualquier otra línea del log (nunca texto libre fuera de la puerta de telemetría). |
-| 707 | Despertar a Ü vuelve a mostrar la misma burbuja sin recrear el motor de voz ni los sonidos, y no hace nada si ya estaba despierta. |
-| 708 | Abrir la app de nuevo (`dockToApp`/`setHiddenForApp`) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto. |
-| 709 | Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en `performClick()` ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre. |
+| 710 | Sostener la burbuja quieta, sin moverla y sin soltarla, arma un temporizador de 5 segundos hacia el apagado; con el dedo quieto ese tiempo entero, se dispara. |
+| 711 | Soltar el dedo (`ACTION_UP` o `ACTION_CANCEL`) antes de que se cumplan los 5 segundos cancela el apagado sin efecto: el toque simple y el arrastre normal siguen funcionando igual que siempre. |
+| 712 | Un movimiento FRANCO de la burbuja cancela el apagado pendiente, con un umbral propio y bastante más tolerante que el de tap/arrastre (para que el temblor normal de una mano sostenida 5 s no lo corte solo), sin tocar el resto del arrastre ni el aviso al modo reunión. |
+| 713 | Cumplidos los 5 segundos, la burbuja anima una explosión (escala hacia arriba y opacidad hacia 0 con `ValueAnimator`, sin traer ninguna librería nueva) y solo al terminar la animación dispara el apagado. |
+| 714 | El apagado corta el modo reunión si estaba activo (persistiendo sus notas) y detiene cualquier voz sonando, la del sistema y la de OpenAI. |
+| 715 | El apagado quita la vista de la burbuja de la pantalla y deja registrado que Ü se apagó por este gesto, con la misma medida que cualquier otra línea del log (nunca texto libre fuera de la puerta de telemetría). |
+| 716 | Despertar a Ü vuelve a mostrar la misma burbuja sin recrear el motor de voz ni los sonidos, y no hace nada si ya estaba despierta. |
+| 717 | Abrir la app de nuevo (`dockToApp`/`setHiddenForApp`) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto. |
+| 718 | Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en `performClick()` ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre. |
 
 ### La regla, en una línea por clase
 
@@ -104,29 +104,29 @@ Se juzga leyendo las fuentes de `app`, igual que la promesa 259 y las 602/611/61
 
 | # | Cómo se juzga sin tocar nada |
 |---|---|
-| 701 | `attachDrag` declara `SHUTDOWN_HOLD_MS = 5_000L` y su bloque `ACTION_DOWN` arma `scope.launch { delay(SHUTDOWN_HOLD_MS); explodeAndSleep() }` |
-| 702 | El bloque `ACTION_UP, ACTION_CANCEL` cancela ese `Job` antes de decidir el resto, y sigue conteniendo `v.performClick()` y `flingToEdge(...)` (descartando líneas `//` antes de buscar) |
-| 703 | `ACTION_MOVE` deja el umbral chico (120) solo para `moved`/`voiceDock.track`, y cancela el `Job` con un umbral propio `SHUTDOWN_CANCEL_DISTANCE_SQ` declarado entre 5× y 8× el chico (en distancia al cuadrado) |
-| 704 | `explodeAndSleep()` usa `ValueAnimator`, cambia `bubble.scaleX/scaleY` y `bubble.alpha`, y su `onAnimationEnd` llama a `sleep()` |
-| 705 | `sleep()` llama a `voiceDock.destroy()` (o `undock()`) y a `tts?.stop()` y `openAiTts.stop()` (descartando líneas `//` antes de buscar) |
-| 706 | `sleep()` llama a `wm.removeView(bubble)`, marca `asleep = true`, y su `LogBus.log(tag, …)` usa un tag de la lista cerrada de `PuertaDeTelemetria.TAGS` |
-| 707 | `wakeIfAsleep()` corta temprano si `!asleep`, llama a `wm.addView(bubble, bubbleParams)` y no contiene `TextToSpeech(` ni `SoundPool.Builder` |
-| 708 | `dockToApp()` y `setHiddenForApp()` llaman a `wakeIfAsleep()`, y `AssistActivity` llama a `bubble?.wakeIfAsleep()` |
-| 709 | `explodeAndSleep()` marca `shutdownFired = true`, `ACTION_DOWN` la resetea a `false`, y `ACTION_UP, ACTION_CANCEL` la mira con `if (shutdownFired) { … } else if (!moved) v.performClick()` |
+| 710 | `attachDrag` declara `SHUTDOWN_HOLD_MS = 5_000L` y su bloque `ACTION_DOWN` arma `scope.launch { delay(SHUTDOWN_HOLD_MS); explodeAndSleep() }` |
+| 711 | El bloque `ACTION_UP, ACTION_CANCEL` cancela ese `Job` antes de decidir el resto, y sigue conteniendo `v.performClick()` y `flingToEdge(...)` (descartando líneas `//` antes de buscar) |
+| 712 | `ACTION_MOVE` deja el umbral chico (120) solo para `moved`/`voiceDock.track`, y cancela el `Job` con un umbral propio `SHUTDOWN_CANCEL_DISTANCE_SQ` declarado entre 5× y 8× el chico (en distancia al cuadrado) |
+| 713 | `explodeAndSleep()` usa `ValueAnimator`, cambia `bubble.scaleX/scaleY` y `bubble.alpha`, y su `onAnimationEnd` llama a `sleep()` |
+| 714 | `sleep()` llama a `voiceDock.destroy()` (o `undock()`) y a `tts?.stop()` y `openAiTts.stop()` (descartando líneas `//` antes de buscar) |
+| 715 | `sleep()` llama a `wm.removeView(bubble)`, marca `asleep = true`, y su `LogBus.log(tag, …)` usa un tag de la lista cerrada de `PuertaDeTelemetria.TAGS` |
+| 716 | `wakeIfAsleep()` corta temprano si `!asleep`, llama a `wm.addView(bubble, bubbleParams)` y no contiene `TextToSpeech(` ni `SoundPool.Builder` |
+| 717 | `dockToApp()` y `setHiddenForApp()` llaman a `wakeIfAsleep()`, y `AssistActivity` llama a `bubble?.wakeIfAsleep()` |
+| 718 | `explodeAndSleep()` marca `shutdownFired = true`, `ACTION_DOWN` la resetea a `false`, y `ACTION_UP, ACTION_CANCEL` la mira con `if (shutdownFired) { … } else if (!moved) v.performClick()` |
 
 ### Sabotajes (cada uno pone roja su promesa)
 
 | # | Sabotaje | Lo que debe decir el juez |
 |---|---|---|
-| 701 | `ACTION_DOWN` no arma ningún temporizador | roja: no encuentra `scope.launch { delay(SHUTDOWN_HOLD_MS)…` |
-| 702 | `ACTION_UP`/`ACTION_CANCEL` no cancela el `Job` (dispara aunque se soltó antes de los 5 s), o queda solo como comentario | roja: `sinComentarios()` no encuentra `shutdownJob?.cancel()` real en ese bloque |
-| 703 | el movimiento franco no cancela el apagado pendiente, o vuelve a cancelarlo con el umbral chico (120) en vez del propio | roja: no encuentra el `if (shutdownJob != null && … > SHUTDOWN_CANCEL_DISTANCE_SQ)`, o `SHUTDOWN_CANCEL_DISTANCE_SQ` sale de 5×-8× el umbral chico, o `shutdownJob?.cancel()` reaparece dentro del `if (moved || … > 120)` |
-| 704 | la explosión no anima nada, o dispara `sleep()` antes de terminar la animación | roja: no hay `ValueAnimator` o `onAnimationEnd` no llama a `sleep()` |
-| 705 | `sleep()` no corta el modo reunión si estaba activo, o queda solo como comentario | roja: `sinComentarios()` no encuentra `voiceDock.destroy()`/`undock()` real |
-| 706 | `sleep()` no quita la burbuja de la pantalla, o loguea con un tag fuera de la lista cerrada | roja: no encuentra `wm.removeView(bubble)`, o el tag no está en `PuertaDeTelemetria.TAGS` |
-| 707 | `wakeIfAsleep()` recrea el TTS o el SoundPool en vez de reusarlos | roja: encuentra `TextToSpeech(` o `SoundPool.Builder` en su cuerpo |
-| 708 | `dockToApp()`/`setHiddenForApp()`/`AssistActivity` dejan de despertar a Ü | roja: no encuentra `wakeIfAsleep()` en alguno de los tres |
-| 709 | se quita `shutdownFired` (o su reseteo, o el `if` que la mira en `ACTION_UP`/`ACTION_CANCEL`): el toque que apaga a Ü vuelve a colar un `v.performClick()` sin condición | roja: no encuentra la bandera, su reseteo en `ACTION_DOWN`, o el `if (shutdownFired) { … } else if (!moved) v.performClick()` en ese orden |
+| 710 | `ACTION_DOWN` no arma ningún temporizador | roja: no encuentra `scope.launch { delay(SHUTDOWN_HOLD_MS)…` |
+| 711 | `ACTION_UP`/`ACTION_CANCEL` no cancela el `Job` (dispara aunque se soltó antes de los 5 s), o queda solo como comentario | roja: `sinComentarios()` no encuentra `shutdownJob?.cancel()` real en ese bloque |
+| 712 | el movimiento franco no cancela el apagado pendiente, o vuelve a cancelarlo con el umbral chico (120) en vez del propio | roja: no encuentra el `if (shutdownJob != null && … > SHUTDOWN_CANCEL_DISTANCE_SQ)`, o `SHUTDOWN_CANCEL_DISTANCE_SQ` sale de 5×-8× el umbral chico, o `shutdownJob?.cancel()` reaparece dentro del `if (moved || … > 120)` |
+| 713 | la explosión no anima nada, o dispara `sleep()` antes de terminar la animación | roja: no hay `ValueAnimator` o `onAnimationEnd` no llama a `sleep()` |
+| 714 | `sleep()` no corta el modo reunión si estaba activo, o queda solo como comentario | roja: `sinComentarios()` no encuentra `voiceDock.destroy()`/`undock()` real |
+| 715 | `sleep()` no quita la burbuja de la pantalla, o loguea con un tag fuera de la lista cerrada | roja: no encuentra `wm.removeView(bubble)`, o el tag no está en `PuertaDeTelemetria.TAGS` |
+| 716 | `wakeIfAsleep()` recrea el TTS o el SoundPool en vez de reusarlos | roja: encuentra `TextToSpeech(` o `SoundPool.Builder` en su cuerpo |
+| 717 | `dockToApp()`/`setHiddenForApp()`/`AssistActivity` dejan de despertar a Ü | roja: no encuentra `wakeIfAsleep()` en alguno de los tres |
+| 718 | se quita `shutdownFired` (o su reseteo, o el `if` que la mira en `ACTION_UP`/`ACTION_CANCEL`): el toque que apaga a Ü vuelve a colar un `v.performClick()` sin condición | roja: no encuentra la bandera, su reseteo en `ACTION_DOWN`, o el `if (shutdownFired) { … } else if (!moved) v.performClick()` en ese orden |
 
 ---
 
