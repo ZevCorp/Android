@@ -35,7 +35,7 @@ class Contrato007SostenerParaApagar {
             717 to "Abrir la app de nuevo (dockToApp/setHiddenForApp) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto.",
             718 to "Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en performClick() ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre.",
             719 to "Mientras Ü está dormido no se puede seguir escuchando la palabra de activación: canListenForWakeWord() excluye el estado dormido y sleep() detiene ese bucle; si el interruptor seguía prendido, despertar lo retoma.",
-            720 to "En WakeWordDock, una cancelación de la corrutina de escucha (CancellationException) se relanza en vez de tragarse como un error más, y un start() inmediato después de un stop() nunca deja que la limpieza de la iteración vieja pise el transcriber/listening de la iteración nueva (token de generación).",
+            720 to "En WakeWordDock, una cancelación de la corrutina de escucha (CancellationException) se relanza en vez de tragarse como un error más, y un start() inmediato después de un stop() nunca deja que la limpieza de la iteración vieja pise el transcriber/listening de la iteración nueva ni que su detección dispare onDetected() (token de generación).",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
@@ -269,6 +269,22 @@ class Contrato007SostenerParaApagar {
         assertTrue(
             Regex("""if\s*\(\s*myGen\s*==\s*gen\s*\)\s*\{\s*listening\s*=\s*false\s*\n?\s*transcriber\s*=\s*null""").containsMatchIn(loop),
             promesa(p) + " · la limpieza de fin de iteración (transcriber/listening) no está condicionada a seguir siendo la generación vigente: $loop",
+        )
+        // containsMatchIn solo exige que el patrón protegido EXISTA en algún lugar, no que sea la ÚNICA
+        // escritura: una escritura extra incondicional de transcriber/listening al lado de la protegida
+        // reintroduciría el bug real sin poner rojo este assert si no se cuentan las ocurrencias.
+        val escriturasTranscriber = Regex("""transcriber\s*=\s*null""").findAll(loop).count()
+        val escriturasListening = Regex("""listening\s*=\s*false""").findAll(loop).count()
+        assertTrue(
+            escriturasTranscriber == 1 && escriturasListening == 1,
+            promesa(p) + " · hay una escritura de transcriber/listening fuera de la protegida por generación (transcriber=null: $escriturasTranscriber, listening=false: $escriturasListening): $loop",
+        )
+
+        // La detección de la palabra (onDetected()) también queda afuera si una generación vieja
+        // resuelve con un resultado real: el chequeo de generación tiene que envolverla también.
+        assertTrue(
+            Regex("""if\s*\(\s*myGen\s*==\s*gen\s*&&.*?\)\s*\{\s*\n?\s*onDetected\s*\(\s*\)""").containsMatchIn(loop),
+            promesa(p) + " · el bloque que dispara onDetected() no está condicionado a seguir siendo la generación vigente: $loop",
         )
     }
 

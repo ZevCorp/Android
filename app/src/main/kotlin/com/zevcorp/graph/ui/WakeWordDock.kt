@@ -88,7 +88,7 @@ class WakeWordDock(
                 listening = false
                 transcriber = null
             }
-            if (heard.isNotBlank() && PalabraDeActivacion.activa(heard)) {
+            if (myGen == gen && heard.isNotBlank() && PalabraDeActivacion.activa(heard)) {
                 onDetected()
                 delay(400) // deja que arranque el Modo Reunión antes de volver a mirar shouldListen()
             } else {
