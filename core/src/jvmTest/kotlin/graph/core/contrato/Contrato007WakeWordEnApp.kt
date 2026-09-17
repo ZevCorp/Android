@@ -55,6 +55,19 @@ class Contrato007WakeWordEnApp {
             Regex("""EXTRA_PREFER_OFFLINE""").containsMatchIn(transcribers),
             promesa(p) + " · SystemTranscriber no usa EXTRA_PREFER_OFFLINE",
         )
+
+        // Sin reconocedor de voz disponible en el dispositivo, el bucle no reintenta cada rato: espera un backoff
+        // bien más largo que el reintento normal (150 ms / 400 ms), no lo gasta en batería.
+        val bloque = Regex("""isRecognitionAvailable\([^)]*\)\)\s*\{\s*delay\((\w+)\)""").find(dock)
+            ?: fail(promesa(p) + " · no encuentro un delay dentro del if de isRecognitionAvailable")
+        val nombreConstante = bloque.groupValues[1]
+        val valorMs = Regex(Regex.escape(nombreConstante) + """\s*=\s*([\d_]+)L""").find(dock)
+            ?.groupValues?.get(1)?.replace("_", "")?.toLong()
+            ?: fail(promesa(p) + " · no encuentro el valor de $nombreConstante")
+        assertTrue(
+            valorMs >= 5_000,
+            promesa(p) + " · sin reconocedor disponible, el backoff ($nombreConstante = $valorMs ms) sigue siendo un reintento corto",
+        )
     }
 
     @Test

@@ -2,6 +2,7 @@ package com.zevcorp.graph.ui
 
 import android.accessibilityservice.AccessibilityService
 import android.os.PowerManager
+import android.speech.SpeechRecognizer
 import com.zevcorp.graph.voice.SystemTranscriber
 import graph.core.voz.PalabraDeActivacion
 import kotlinx.coroutines.CoroutineScope
@@ -32,6 +33,11 @@ class WakeWordDock(
     private val onDetected: () -> Unit,
 ) {
 
+    companion object {
+        /** Sin reconocedor de voz en el dispositivo: no tiene sentido reintentar cada rato, gasta batería para nada. */
+        private const val SIN_RECONOCEDOR_DELAY_MS = 8_000L
+    }
+
     private var loopJob: Job? = null
     private var transcriber: SystemTranscriber? = null
 
@@ -59,6 +65,10 @@ class WakeWordDock(
         while (currentCoroutineContext().isActive) {
             if (!screenOn || !shouldListen()) {
                 delay(500)
+                continue
+            }
+            if (!SpeechRecognizer.isRecognitionAvailable(service)) {
+                delay(SIN_RECONOCEDOR_DELAY_MS)
                 continue
             }
             listening = true
