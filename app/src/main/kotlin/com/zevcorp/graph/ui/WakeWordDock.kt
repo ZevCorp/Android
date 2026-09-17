@@ -5,6 +5,7 @@ import android.os.PowerManager
 import android.speech.SpeechRecognizer
 import com.zevcorp.graph.voice.SystemTranscriber
 import graph.core.voz.PalabraDeActivacion
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -41,6 +42,13 @@ class WakeWordDock(
     private var loopJob: Job? = null
     private var transcriber: SystemTranscriber? = null
 
+    /**
+     * Se incrementa en cada [start]. La iteración de [loop] captura su valor al arrancar: si para
+     * cuando termina de limpiarse ya hay una generación más nueva corriendo (un stop()+start() rápido),
+     * se abstiene de tocar [transcriber]/[listening] para no pisar el estado del reconocedor nuevo.
+     */
+    private var gen = 0
+
     /** Hay un tramo de escucha de la palabra en curso (para no competir con otro uso del micrófono). */
     @Volatile var listening = false
         private set
@@ -50,7 +58,8 @@ class WakeWordDock(
 
     fun start(scope: CoroutineScope) {
         if (loopJob?.isActive == true) return
-        loopJob = scope.launch(Dispatchers.Main) { loop() }
+        val myGen = ++gen
+        loopJob = scope.launch(Dispatchers.Main) { loop(myGen) }
     }
 
     fun stop() {
@@ -61,7 +70,7 @@ class WakeWordDock(
         listening = false
     }
 
-    private suspend fun loop() {
+    private suspend fun loop(myGen: Int) {
         while (currentCoroutineContext().isActive) {
             if (!screenOn || !shouldListen()) {
                 delay(500)
@@ -74,9 +83,11 @@ class WakeWordDock(
             listening = true
             val t = SystemTranscriber(service, preferOffline = true)
             transcriber = t
-            val heard = runCatching { t.listen() }.getOrElse { "" }
-            listening = false
-            transcriber = null
+            val heard = runCatching { t.listen() }.getOrElse { e -> if (e is CancellationException) throw e else "" }
+            if (myGen == gen) {
+                listening = false
+                transcriber = null
+            }
             if (heard.isNotBlank() && PalabraDeActivacion.activa(heard)) {
                 onDetected()
                 delay(400) // deja que arranque el Modo Reunión antes de volver a mirar shouldListen()

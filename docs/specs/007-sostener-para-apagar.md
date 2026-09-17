@@ -26,6 +26,22 @@ de abajo y la promesa nueva 718. Contrato ahora en 9 promesas (710-718); 712 se 
   COMENTARIO con las mismas palabras. Se agregó `sinComentarios()` (descarta líneas que empiezan con `//` antes de
   buscar el patrón) y se aplicó a esas dos promesas puntuales, sin rehacer el juez entero.
 
+**Control (2026-09-16, segunda pasada): NO APROBADO, corregido en el mismo commit.** Dos hallazgos MEDIA sobre
+`WakeWordDock.kt` (no altos, pero reales). Contrato ahora en 10 promesas (710-720).
+
+- **[MEDIA, corregido]** El `getOrElse { "" }` de `loop()` tragaba una `CancellationException` como cualquier otro
+  error. Hoy no explota solo porque el `delay()` siguiente corta la iteración por casualidad, no por garantía:
+  cualquier código futuro entre ese `getOrElse` y la próxima suspensión reabre el problema. Se agregó el
+  relanzamiento explícito: `.getOrElse { e -> if (e is CancellationException) throw e else "" }`. Ver promesa 720.
+- **[MEDIA, corregido]** `start()` solo miraba `loopJob?.isActive` para decidir si ya había un bucle corriendo, pero
+  `stop()` anulaba `loopJob` en forma síncrona mientras la limpieza real de la corrutina vieja (`transcriber = null`,
+  `listening = false`) corría después, de forma asíncrona. Un `stop()` (sostener para dormir) seguido de un
+  `start()` casi inmediato (`wakeIfAsleep()`) podía dejar que la limpieza vieja pisara el `transcriber` de la
+  iteración NUEVA y activa, dejándolo en `null` sin que nadie lo pare — el reconocedor seguiría escuchando con Ü
+  dormido, el mismo síntoma que la promesa 719 evitó por otra vía. Se agregó un contador de generación (`gen`):
+  `start()` lo incrementa y lo captura en `myGen`, y la limpieza de fin de iteración solo escribe si
+  `myGen == gen`. Ver promesa 720.
+
 Esta spec numera sus promesas **desde 710** (ver `docs/como-trabajamos.md`). Si al integrar con la otra mitad de la
 007 (`ü-responde-a-su-nombre`, en otra rama) los números chocan, se renumera en ese momento.
 
@@ -63,7 +79,7 @@ El permiso de accesibilidad sigue concedido: por eso volver a activarlo es insta
 
 | Archivo | Promesas |
 |---|---|
-| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato007SostenerParaApagar.kt` (lee las fuentes de `app`, igual que la 259: solo `jvmTest` lee disco) | 710-719 |
+| `core/src/jvmTest/kotlin/graph/core/contrato/Contrato007SostenerParaApagar.kt` (lee las fuentes de `app`, igual que la 259: solo `jvmTest` lee disco) | 710-720 |
 
 | # | Promesa |
 |---|---|
@@ -77,6 +93,7 @@ El permiso de accesibilidad sigue concedido: por eso volver a activarlo es insta
 | 717 | Abrir la app de nuevo (`dockToApp`/`setHiddenForApp`) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto. |
 | 718 | Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en `performClick()` ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre. |
 | 719 | Mientras Ü está dormido no se puede seguir escuchando la palabra de activación: `canListenForWakeWord()` excluye el estado dormido y `sleep()` detiene ese bucle; si el interruptor seguía prendido, despertar lo retoma. |
+| 720 | En `WakeWordDock`, una cancelación de la corrutina de escucha (`CancellationException`) se relanza en vez de tragarse como un error más, y un `start()` inmediato después de un `stop()` nunca deja que la limpieza de la iteración vieja pise el `transcriber`/`listening` de la iteración nueva (token de generación). |
 
 ### La regla, en una línea por clase
 
@@ -97,6 +114,12 @@ vuelve a agregar la MISMA vista al `WindowManager` sin recrear `TextToSpeech` ni
 `dockToApp()`, `setHiddenForApp()` (los dos caminos por los que `MainActivity.onResume()` ya toca la burbuja al
 volver a la app) y desde `AssistActivity.onCreate()` (el asistente del botón de encendido).
 
+`WakeWordDock.loop()` relanza la `CancellationException` de `t.listen()` en vez de tragarla en el `getOrElse`, y
+`start()` arma un contador de generación (`gen`, incrementado en cada llamada) que cada iteración de `loop()`
+captura como `myGen`: la limpieza de fin de iteración (`transcriber = null`, `listening = false`) solo escribe si
+`myGen` sigue siendo la generación vigente, así un `stop()` seguido de un `start()` casi inmediato nunca deja que
+la limpieza de la iteración vieja pise el estado de la nueva.
+
 ### Con qué se juzga cada una
 
 Es Android puro —gestos con la mano, `ValueAnimator`, `WindowManager`— y no corre en `jvmTest`, pero lo que promete
@@ -115,6 +138,7 @@ Se juzga leyendo las fuentes de `app`, igual que la promesa 259 y las 602/611/61
 | 717 | `dockToApp()` y `setHiddenForApp()` llaman a `wakeIfAsleep()`, y `AssistActivity` llama a `bubble?.wakeIfAsleep()` |
 | 718 | `explodeAndSleep()` marca `shutdownFired = true`, `ACTION_DOWN` la resetea a `false`, y `ACTION_UP, ACTION_CANCEL` la mira con `if (shutdownFired) { … } else if (!moved) v.performClick()` |
 | 719 | `canListenForWakeWord()` incluye `!asleep`, `sleep()` llama a `wakeWordDock.stop()` (descartando líneas `//` antes de buscar), y `wakeIfAsleep()` llama a `wakeWordDock.start(...)` si `wakeWordEnabled` sigue en `true` |
+| 720 | `WakeWordDock` declara `private var gen = 0`, `start()` la incrementa (`++gen`) y se la pasa a `loop()`, `loop()` relanza con `is CancellationException) throw` dentro del `getOrElse` de `t.listen()`, y su limpieza de fin de iteración va dentro de `if (myGen == gen) { listening = false; transcriber = null }` |
 
 ### Sabotajes (cada uno pone roja su promesa)
 
@@ -130,6 +154,7 @@ Se juzga leyendo las fuentes de `app`, igual que la promesa 259 y las 602/611/61
 | 717 | `dockToApp()`/`setHiddenForApp()`/`AssistActivity` dejan de despertar a Ü | roja: no encuentra `wakeIfAsleep()` en alguno de los tres |
 | 718 | se quita `shutdownFired` (o su reseteo, o el `if` que la mira en `ACTION_UP`/`ACTION_CANCEL`): el toque que apaga a Ü vuelve a colar un `v.performClick()` sin condición | roja: no encuentra la bandera, su reseteo en `ACTION_DOWN`, o el `if (shutdownFired) { … } else if (!moved) v.performClick()` en ese orden |
 | 719 | se quita `&& !asleep` de `canListenForWakeWord()`, o `wakeWordDock.stop()` de `sleep()` (o queda solo como comentario), o `wakeWordDock.start(...)` de `wakeIfAsleep()` | roja: no encuentra `!asleep` en `canListenForWakeWord()`, o `sinComentarios()` no encuentra `wakeWordDock.stop()` real en `sleep()`, o no encuentra el `if (wakeWordEnabled) wakeWordDock.start(...)` en `wakeIfAsleep()` |
+| 720 | en `WakeWordDock.loop()` se quita el `if (e is CancellationException) throw e` del `getOrElse` (vuelve a tragarla como `""`), o por separado se quita el chequeo de generación (`if (myGen == gen)`) antes de limpiar `transcriber`/`listening` | roja: no encuentra `is CancellationException) throw` dentro del `getOrElse` de `t.listen()`, o no encuentra `if (myGen == gen) { listening = false … transcriber = null }` envolviendo la limpieza |
 
 ---
 

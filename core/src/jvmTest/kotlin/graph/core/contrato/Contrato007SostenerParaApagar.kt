@@ -35,6 +35,7 @@ class Contrato007SostenerParaApagar {
             717 to "Abrir la app de nuevo (dockToApp/setHiddenForApp) o el asistente del botón de encendido despiertan a Ü si estaba dormido por el gesto.",
             718 to "Si el apagado ya disparó DENTRO del mismo toque (la burbuja explotó sin que hubiera arrastre), soltar el dedo justo después no cuenta como un click normal: no cae en performClick() ni reabre el panel. El próximo toque, con Ü ya despierta, se comporta como siempre.",
             719 to "Mientras Ü está dormido no se puede seguir escuchando la palabra de activación: canListenForWakeWord() excluye el estado dormido y sleep() detiene ese bucle; si el interruptor seguía prendido, despertar lo retoma.",
+            720 to "En WakeWordDock, una cancelación de la corrutina de escucha (CancellationException) se relanza en vez de tragarse como un error más, y un start() inmediato después de un stop() nunca deja que la limpieza de la iteración vieja pise el transcriber/listening de la iteración nueva (token de generación).",
         )
 
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
@@ -237,6 +238,37 @@ class Contrato007SostenerParaApagar {
         assertTrue(
             Regex("""bubble\s*\?\.\s*wakeIfAsleep\s*\(\s*\)""").containsMatchIn(assist),
             promesa(p) + " · el asistente del botón de encendido no despierta a Ü",
+        )
+    }
+
+    @Test
+    fun promesa720() {
+        val dock = fuenteDeLaApp("WakeWordDock.kt")
+        val p = 720
+
+        assertTrue(
+            Regex("""private\s+var\s+gen\s*=\s*0""").containsMatchIn(dock),
+            promesa(p) + " · no declara el contador de generación",
+        )
+
+        val start = cuerpo(dock, Regex("""fun start\s*\("""))
+        assertTrue(
+            Regex("""\+\+\s*gen""").containsMatchIn(start),
+            promesa(p) + " · start() no incrementa la generación: $start",
+        )
+        assertTrue(
+            Regex("""loop\s*\(\s*\w+\s*\)""").containsMatchIn(start),
+            promesa(p) + " · start() no le pasa la generación capturada a loop(): $start",
+        )
+
+        val loop = cuerpo(dock, Regex("""private suspend fun loop\s*\("""))
+        assertTrue(
+            Regex("""getOrElse\s*\{[^}]*is\s+CancellationException\s*\)\s*throw\b""").containsMatchIn(loop),
+            promesa(p) + " · loop() traga la CancellationException del reconocedor en vez de relanzarla: $loop",
+        )
+        assertTrue(
+            Regex("""if\s*\(\s*myGen\s*==\s*gen\s*\)\s*\{\s*listening\s*=\s*false\s*\n?\s*transcriber\s*=\s*null""").containsMatchIn(loop),
+            promesa(p) + " · la limpieza de fin de iteración (transcriber/listening) no está condicionada a seguir siendo la generación vigente: $loop",
         )
     }
 
