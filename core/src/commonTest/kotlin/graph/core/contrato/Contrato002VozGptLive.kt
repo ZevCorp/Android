@@ -1,22 +1,37 @@
 package graph.core.contrato
 
+import graph.core.domain.LearnedTool
+import graph.core.domain.Mcp
+import graph.core.domain.ScreenState
+import graph.core.graph.AndroidSurface
+import graph.core.graph.TOPE_DE_UNA_ETIQUETA
+import graph.core.graph.TurnScreenState
+import graph.core.graph.etiquetaDePantalla
+import graph.core.graph.toTurnState
+import graph.core.telemetria.PuertaDeTelemetria
 import graph.core.voz.Apertura
 import graph.core.voz.Argumento
 import graph.core.voz.CanalDeVoz
+import graph.core.voz.CatalogoDeVoz
 import graph.core.voz.ColaDeReproduccion
 import graph.core.voz.CompuertaDeEco
 import graph.core.voz.ConversacionViva
 import graph.core.voz.DetectorDeInterrupcion
+import graph.core.voz.HerramientasDeVoz
 import graph.core.voz.Hecho
 import graph.core.voz.Llamada
 import graph.core.voz.ModoDeCaptura
+import graph.core.voz.OjosDeLaVoz
+import graph.core.voz.PersonaDeLaVoz
 import graph.core.voz.ProtocoloGptLive
 import graph.core.voz.Recibido
 import graph.core.voz.Reloj
 import graph.core.voz.Resultado
 import graph.core.voz.TelemetriaDeVoz
 import graph.core.voz.TurnosSinMarca
+import graph.core.voz.TOPE_DE_UN_RESULTADO
 import graph.core.voz.Utensilio
+import graph.core.voz.bytesUtf8
 import graph.core.voz.causaFatal
 import graph.core.voz.esSilencio
 import graph.core.voz.pico
@@ -29,6 +44,7 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.yield
@@ -50,6 +66,7 @@ import kotlin.test.assertContentEquals
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertIs
+import kotlin.test.assertNotEquals
 import kotlin.test.assertNotNull
 import kotlin.test.assertNotSame
 import kotlin.test.assertNull
@@ -116,6 +133,19 @@ class Contrato002VozGptLive {
             244 to "La cola del altavoz guarda como mucho 30 segundos y al llenarse descarta lo más viejo; suena solo si tiene bytes, nunca por volumen, y callar la vacía en el acto.",
             245 to "A la telemetría remota de la voz solo llega la medida: el largo de cada frase y el cierre del turno; ninguna frase, argumento ni texto del delegado sale del teléfono.",
             246 to "La voz en vivo solo se arranca desde el panel de desarrollador y toma su clave del build interno, nunca de la configuración remota.",
+            247 to "Dónde estoy: la voz contesta con la app al frente, el tipo de pantalla y su tamaño, leídos del mismo estado que ya arma el turno de Graph y sin pedir captura; si no hay pantalla que leer lo dice y no se la inventa.",
+            248 to "Qué veo: las etiquetas visibles, cuántos elementos se pueden tocar y el campo enfocado salen del `uiContext` que ya viaja a Graph; un filtro de hasta 60 caracteres contesta si algo está en pantalla sin mirar tildes ni mayúsculas, y lo que la pantalla no deja leer se dice tal cual.",
+            249 to "Qué puedo hacer: el catálogo de capacidades se deriva del catálogo real de acciones, así que una acción nueva aparece sin tocar la voz; va agrupado por vía y cabe en un resultado aunque una descripción sea enorme.",
+            250 to "Las tres herramientas de la voz solo leen: no reciben manos, así que ninguna toca la pantalla ni abre nada, y cualquier otra llamada del delegado se contesta «todavía no» sin ejecutar nada.",
+            251 to "La sesión abre con las tres herramientas dentro de la delegación y ninguna en la voz; declararlas no gasta items, así que la conversación empieza en cero de los 128, y la apertura entera cabe de sobra en los 32 768 bytes de la sesión.",
+            252 to "Leer no congela la charla: las tres son de control, así que una lectura retenida no frena a las que vienen detrás, ni el micrófono, ni el cierre del turno.",
+            253 to "Del teléfono solo sale la medida de lo que se mira —cuántas etiquetas y cuántos caracteres—: ni una etiqueta, ni el filtro, ni lo que la pantalla muestra llegan al log local, y lo que llega a la telemetría remota pasa por el filtro de la voz y por la puerta sin una palabra de la pantalla.",
+            254 to "Mirar no congela la conversación: la lectura de pantalla corre en su propio despachador y no en el hilo de la voz, así que aunque BLOQUEE el hilo el micrófono sigue viajando y las demás llamadas se contestan; y si tarda más que el tope se contesta que no se pudo mirar, en vez de dejar muda a la voz.",
+            255 to "La sesión cuenta sus bytes además de sus items: cada item suma lo que ocupa, se avisa una vez antes de cruzar los 32 768 bytes que admite el servidor y sin cortar nada, y lo que devuelve el catálogo está acotado para que una sola respuesta no se gaste el presupuesto entero.",
+            256 to "El catálogo que lee el delegado trae las herramientas aprendidas con el mismo criterio que una corrida: la voz y la anticipación se las piden al único sitio que lo decide, y ninguna de las dos escribe una lista vacía a mano.",
+            257 to "Una etiqueta de la pantalla se sanea en origen —sin saltos de línea ni el separador con que se unen— y quien la lee es tolerante: una etiqueta rara no hace decir «no lo veo» de algo que está ni infla la cuenta, y el campo enfocado sale entero aunque su texto traiga comillas y paréntesis.",
+            258 to "Sin servicio de accesibilidad las tres herramientas dicen la misma causa con las mismas palabras: qué puedo hacer ya no la calla devolviendo un catálogo vacío, que se lee como que Ü no sabe hacer nada.",
+            259 to "Un doble toque con la burbuja anclada en el modo reunión mutea o desmutea la escucha sin salir de la reunión: `listenLoop` consulta `muted` antes de abrir cada segmento nuevo y, muteada, no abre el micrófono pero sigue viva; ni `toggleMute()` ni ese camino tocan la cola ni el worker de tareas, y el mismo doble toque nunca cae en el micrófono de un solo comando (`onBubbleTap`/`activateMic`).",
         )
         fun promesa(n: Int) = "promesa $n: ${PROMESAS.getValue(n)}"
     }
@@ -980,6 +1010,7 @@ class Contrato002VozGptLive {
         compuertaActiva: Boolean = false,
         ejecutor: suspend (Llamada) -> String = { "hecho: ${it.nombre}" },
         actuaEnPantalla: (String) -> Boolean = { true },
+        utensilios: List<Utensilio> = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar")))),
         bargeIn: Boolean? = null,
         aPelo: Boolean = false,
     ) {
@@ -995,7 +1026,6 @@ class Contrato002VozGptLive {
         var callado = 0
         private val instruccionesVoz = "Eres Ü. Hablas corto y delegas."
         private val instruccionesDelegado = "ERES Ü Y ESTAS SON TUS INSTRUCCIONES COMPLETAS"
-        private val utensilios = listOf(Utensilio("pulsar", "Pulsa algo", listOf(Argumento("que", "qué pulsar"))))
         private val ejecutar: suspend (Llamada) -> String = { ejecutadas += it.id; ejecutor(it) }
         private val reproducir: (ByteArray) -> Unit = { sonado += it }
         private val callar: () -> Unit = { callado++; sonando = false }   // callar vacía la cola: deja de sonar
@@ -2196,5 +2226,441 @@ class Contrato002VozGptLive {
         for ((tag, m) in cuelan) {
             assertTrue(TelemetriaDeVoz.paraRemoto(tag, m)?.contains("SECRETO") != true, promesa(245) + " · «$m» → «${TelemetriaDeVoz.paraRemoto(tag, m)}»")
         }
+    }
+
+    /* ---------- Ojos y catálogo: dónde estoy, qué veo, qué puedo hacer (2B2a) ---------- */
+
+    /** El `uiContext` tal como lo arma hoy el servicio de accesibilidad (`GraphAccessibilityService.uiContext()`). */
+    private fun uiContextComoElDelTurno(
+        paquete: String = "com.whatsapp",
+        tipo: String = "aplicación",
+        teclado: Boolean = true,
+        tocables: Int = 12,
+        campos: Int = 2,
+        enfocado: String = "Mensaje",
+        etiquetas: List<String> = listOf("Cámara", "Enviar", "Enviar audio", "Adjuntar", "Buscar"),
+    ): String = buildString {
+        append("paquete: $paquete\n")
+        append("tipo: $tipo${if (teclado) " · teclado abierto" else ""}\n")
+        append("clickeables: $tocables · campos de texto: $campos")
+        if (enfocado.isNotBlank()) append(" (enfocado: \"$enfocado\")")
+        append("\netiquetas visibles: ")
+        append(etiquetas.joinToString(" · ").ifBlank { "(ninguna)" })
+    }
+
+    /**
+     * EL MISMO ESTADO QUE VIAJA EN EL TURNO DE GRAPH: el `ScreenState` de la accesibilidad pasado por `toTurnState`, sin
+     * captura. Si la voz mirara por otro lado acabaría contando una pantalla distinta de la que ve el cerebro.
+     */
+    private fun pantallaDelTurno(
+        screen: String = "com.whatsapp · WhatsApp",
+        uiContext: String = uiContextComoElDelTurno(),
+        ancho: Int = 1080,
+        alto: Int = 2400,
+    ): TurnScreenState = ScreenState(screen, uiContext, ancho, alto, screenshotPng = byteArrayOf(1, 2, 3))
+        .toTurnState(apps = null, surface = AndroidSurface.from(screen), withScreenshot = false)
+
+    @Test
+    fun promesa247() {
+        val estado = pantallaDelTurno()
+        assertNull(estado.screenshot, promesa(247) + " · mirar no es capturar: la PNG no viaja")
+        assertFalse(ProtocoloGptLive().mira, promesa(247) + " · la voz no se declara capaz de mirar")
+
+        val donde = OjosDeLaVoz.dondeEstoy(estado)
+        for (trozo in listOf("com.whatsapp · WhatsApp", "aplicación", "teclado abierto", "1080×2400")) {
+            assertTrue(trozo in donde, promesa(247) + " · falta «$trozo» en «$donde»")
+        }
+
+        // El tipo de pantalla es el que trae el estado, no uno inventado; sin teclado no se habla de teclado.
+        val home = OjosDeLaVoz.dondeEstoy(
+            pantallaDelTurno(
+                screen = "com.miui.home",
+                uiContext = uiContextComoElDelTurno(
+                    paquete = "com.miui.home", tipo = "launcher de Android (home o cajón de apps)",
+                    teclado = false, campos = 0, enfocado = "",
+                ),
+            ),
+        )
+        assertTrue("launcher de Android (home o cajón de apps)" in home, promesa(247) + " · «$home»")
+        assertFalse("teclado" in home, promesa(247) + " · no hay teclado abierto y se nombra: «$home»")
+
+        // Sin servicio de accesibilidad no hay estado que leer, y se dice en vez de callar o inventar.
+        assertEquals(OjosDeLaVoz.SIN_PANTALLA, OjosDeLaVoz.dondeEstoy(null), promesa(247))
+
+        // Una pantalla protegida: lo que dice el estado, tal cual, y la app al frente se sabe igual.
+        val protegida = OjosDeLaVoz.dondeEstoy(pantallaDelTurno(uiContext = "sin contenido accesible (pantalla vacía o protegida)"))
+        assertTrue("sin contenido accesible (pantalla vacía o protegida)" in protegida, promesa(247) + " · «$protegida»")
+        assertTrue("com.whatsapp · WhatsApp" in protegida, promesa(247) + " · «$protegida»")
+    }
+
+    @Test
+    fun promesa248() {
+        val estado = pantallaDelTurno()
+        val todo = OjosDeLaVoz.queVeo(estado)
+        for (trozo in listOf("12", "Mensaje", "Cámara", "Enviar audio", "Buscar")) {
+            assertTrue(trozo in todo, promesa(248) + " · falta «$trozo» en «$todo»")
+        }
+        assertEquals(5, OjosDeLaVoz.etiquetas(estado), promesa(248))
+
+        // Un filtro contesta si eso está, sin mirar tildes ni mayúsculas.
+        for (filtro in listOf("enviar", "ENVIAR", "Enviar")) {
+            val r = OjosDeLaVoz.queVeo(estado, filtro)
+            assertTrue("«$filtro»: sí" in r, promesa(248) + " · «$filtro» → «$r»")
+            assertTrue("Enviar audio" in r, promesa(248) + " · «$filtro» → «$r»")
+        }
+        val conTilde = OjosDeLaVoz.queVeo(estado, "camara")
+        assertTrue("«camara»: sí" in conTilde && "Cámara" in conTilde, promesa(248) + " · «camara» no encontró «Cámara»: «$conTilde»")
+
+        val no = OjosDeLaVoz.queVeo(estado, "guardar")
+        assertTrue("«guardar»: no" in no, promesa(248) + " · «$no»")
+        assertFalse("Enviar" in no, promesa(248) + " · lo que no se preguntó no se vuelca: «$no»")
+
+        // Un filtro larguísimo no es una búsqueda: se cita recortado.
+        val largo = OjosDeLaVoz.queVeo(estado, "z".repeat(300))
+        assertTrue("z".repeat(OjosDeLaVoz.TOPE_DEL_FILTRO) in largo, promesa(248) + " · «$largo»")
+        assertFalse("z".repeat(OjosDeLaVoz.TOPE_DEL_FILTRO + 1) in largo, promesa(248) + " · el filtro se cita entero: «$largo»")
+
+        // Lo que la pantalla no deja leer se dice tal cual, y un formato que no se reconoce no se inventa.
+        val protegida = "sin contenido accesible (pantalla vacía o protegida)"
+        assertEquals(protegida, OjosDeLaVoz.queVeo(pantallaDelTurno(uiContext = protegida)), promesa(248))
+        assertEquals("""{"otro":"formato"}""", OjosDeLaVoz.queVeo(pantallaDelTurno(uiContext = """{"otro":"formato"}""")), promesa(248))
+        assertEquals(OjosDeLaVoz.SIN_PANTALLA, OjosDeLaVoz.queVeo(null), promesa(248))
+        assertEquals(0, OjosDeLaVoz.etiquetas(null), promesa(248))
+    }
+
+    @Test
+    fun promesa249() = corre {
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val aprendidas = listOf(LearnedTool("calc", "la calculadora", listOf("5", "+")))
+        val mcp = Mcp(mano.gestos, mano.sistema, aprendidas, mano.reproductor)
+        val catalogo = CatalogoDeVoz.capacidades(mcp.tools)
+
+        for (t in mcp.tools) assertTrue(t.name in catalogo, promesa(249) + " · «${t.name}» no está en lo que lee el delegado")
+        for (via in mcp.tools.map { it.via }.distinct()) assertTrue(via in catalogo, promesa(249) + " · sin agrupar por «$via»")
+        assertTrue("calc" in catalogo, promesa(249) + " · una acción nueva (aprendida) no aparece sola")
+        assertEquals(emptyList(), mano.entradas, promesa(249) + " · armar el catálogo tocó el teléfono: ${mano.entradas}")
+
+        // La descripción de `check_simit_fines` son ~1500 caracteres, y encima 40 acciones más: el mensaje sigue cabiendo.
+        val gordo = Mcp(
+            mano.gestos, mano.sistema,
+            aprendidas + (1..40).map { LearnedTool("larga$it", "x".repeat(400), listOf("a")) },
+            mano.reproductor,
+        )
+        val texto = CatalogoDeVoz.capacidades(gordo.tools)
+        assertTrue("check_simit_fines" in texto, promesa(249))
+        assertTrue(texto.length <= CatalogoDeVoz.TOPE_DEL_CATALOGO, promesa(249) + " · ${texto.length} caracteres")
+        val mensaje = ProtocoloGptLive().resultados(listOf(Resultado("call_1", texto))).single()
+        assertTrue(bytesUtf8(mensaje) <= TOPE_DE_UN_RESULTADO, promesa(249) + " · ${bytesUtf8(mensaje)} bytes")
+    }
+
+    @Test
+    fun promesa250() = corre {
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val mcp = Mcp(mano.gestos, mano.sistema, emptyList(), mano.reproductor)
+        val ojos = HerramientasDeVoz(pantalla = { pantallaDelTurno() }, acciones = { mcp.tools }, mirarEn = despachadorDeIo())
+
+        for (nombre in listOf("pulsar", "escribir", "launch_app", "go_home", "abrir_app", "hazme_un_cafe")) {
+            assertEquals(
+                CatalogoDeVoz.TODAVIA_NO,
+                ojos.ejecutar(Llamada("call_x", nombre, mapOf("que" to "Enviar"))),
+                promesa(250) + " · «$nombre»",
+            )
+        }
+        for (u in CatalogoDeVoz.UTENSILIOS) {
+            val r = ojos.ejecutar(Llamada("call_${u.nombre}", u.nombre, emptyMap()))
+            assertNotEquals(CatalogoDeVoz.TODAVIA_NO, r, promesa(250) + " · «${u.nombre}» tenía que contestar lo que ve")
+            assertTrue(r.isNotBlank(), promesa(250) + " · «${u.nombre}» no contestó nada")
+            assertFalse(CatalogoDeVoz.actuaEnPantalla(u.nombre), promesa(250) + " · «${u.nombre}» se declara actuando en la pantalla")
+        }
+        assertEquals(emptyList(), mano.entradas, promesa(250) + " · algo llegó al teléfono: ${mano.entradas}")
+        assertEquals(0, mano.lecturas, promesa(250) + " · el estado lo da quien la construye, no unas manos propias")
+    }
+
+    @Test
+    fun promesa251() = corre {
+        val bytesDeLaSesion = 32_768
+        // LAS INSTRUCCIONES DE VERDAD, las que viajan desde el teléfono. Con dos de juguete la medida era de otra cosa:
+        // decía 1 198 B de una apertura que de verdad ocupa el doble, y el margen que se creía tener no era el que hay.
+        val apertura = p.apertura(PersonaDeLaVoz.INSTRUCCIONES_VOZ, PersonaDeLaVoz.INSTRUCCIONES_DELEGADO, CatalogoDeVoz.UTENSILIOS)
+        val m = json(apertura)
+        assertEquals(setOf("model", "instructions", "audio", "delegation"), m["session"]?.jsonObject?.keys, promesa(251) + " · la sesión de la voz no lleva herramientas")
+        val tools = assertIs<JsonArray>(m.en("session", "delegation", "responses", "tools"), promesa(251))
+        assertEquals(
+            listOf(CatalogoDeVoz.DONDE_ESTOY, CatalogoDeVoz.QUE_VEO, CatalogoDeVoz.QUE_PUEDO_HACER),
+            tools.map { it.texto("name") },
+            promesa(251),
+        )
+        val bytes = bytesUtf8(apertura)
+        assertTrue(bytes < bytesDeLaSesion, promesa(251) + " · la apertura ocupa $bytes B de los $bytesDeLaSesion de la sesión")
+        println("251: la apertura con el catálogo ocupa $bytes bytes y declara ${tools.size} herramientas")
+
+        // Declararlas no gasta items: los 128 son del historial, y la conversación empieza en cero.
+        val v = Voz(utensilios = CatalogoDeVoz.UTENSILIOS)
+        v.guion(
+            llega(sesionAbierta),
+            hace { assertEquals(0, v.conv.itemsEnSesion, promesa(251) + " · declarar el catálogo gastó items de la sesión") },
+            llega(sinHechos),
+        )
+        v.conv.conversar()
+        assertEquals(1, v.tipos().count { it == "session.start" }, promesa(251) + " · ${v.tipos()}")
+        assertEquals(3, assertIs<JsonArray>(v.enviados().first().en("session", "delegation", "responses", "tools"), promesa(251)).size, promesa(251))
+    }
+
+    @Test
+    fun promesa252() = corre {
+        val soltar = CompletableDeferred<String>()
+        val v = Voz(
+            ejecutor = { if (it.id == "call_lento") soltar.await() else "hecho: ${it.nombre}" },
+            actuaEnPantalla = CatalogoDeVoz::actuaEnPantalla,
+            utensilios = CatalogoDeVoz.UTENSILIOS,
+        )
+        v.guion(
+            llega(sesionAbierta),
+            llega(usuario("¿qué ves?")),
+            llega(pide("call_lento", CatalogoDeVoz.QUE_VEO)),
+            llega(pide("call_donde", CatalogoDeVoz.DONDE_ESTOY)),
+            hace { v.conv.oirMicrofono(vozDeLaSala()) },
+            llega(sinHechos),
+            hace {
+                assertEquals(listOf("call_lento", "call_donde"), v.ejecutadas, promesa(252) + " · la segunda lectura esperó detrás de la retenida")
+                assertEquals(listOf<String?>("call_donde"), v.salidas().map { it.texto("item", "call_id") }, promesa(252) + " · y se contestó sin esperarla")
+                assertEquals(1, v.audios().size, promesa(252) + " · el micrófono se quedó esperando a la lectura")
+                assertEquals(0, v.cuenta("response.create"), promesa(252) + " · con una lectura sin contestar no se pide respuesta")
+            },
+            hace { soltar.complete("veo la cámara") },
+            llega(sinHechos),
+            hace { v.reloj.ms += 2000 },
+            llega(sinHechos),
+        )
+        v.conv.conversar()
+        assertEquals(listOf<String?>("call_donde", "call_lento"), v.salidas().map { it.texto("item", "call_id") }, promesa(252))
+        assertEquals(1, v.cuenta("response.create"), promesa(252) + " · ${v.tipos()}")
+        assertEquals("response.create", v.tipos().last(), promesa(252))
+        assertEquals(1, v.enLog("usuario dijo: ¿qué ves?"), promesa(252) + " · el turno no cerró: ${v.log}")
+    }
+
+    @Test
+    fun promesa253() = corre {
+        val etiquetas = listOf("Zorbax", "Qwyk", "3001234567")
+        val secretos = etiquetas + listOf("WhatsApp", "Cámara")
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val mcp = Mcp(mano.gestos, mano.sistema, emptyList(), mano.reproductor)
+        val lineas = mutableListOf<Pair<String, String>>()
+        val ojos = HerramientasDeVoz(
+            pantalla = { pantallaDelTurno(uiContext = uiContextComoElDelTurno(etiquetas = etiquetas, enfocado = "Zorbax")) },
+            acciones = { mcp.tools },
+            mirarEn = despachadorDeIo(),
+            log = { tag, mensaje -> lineas += tag to mensaje },
+        )
+        ojos.ejecutar(Llamada("call_1", CatalogoDeVoz.DONDE_ESTOY, emptyMap()))
+        ojos.ejecutar(Llamada("call_2", CatalogoDeVoz.QUE_VEO, mapOf(CatalogoDeVoz.FILTRO to "Qwyk")))
+        ojos.ejecutar(Llamada("call_3", CatalogoDeVoz.QUE_PUEDO_HACER, emptyMap()))
+        ojos.ejecutar(Llamada("call_4", "pulsar", mapOf("que" to "Zorbax")))
+        assertEquals(4, lineas.size, promesa(253) + " · cada llamada deja su medida y una sola: $lineas")
+
+        for ((tag, mensaje) in lineas) {
+            assertTrue(TelemetriaDeVoz.esDeLaVoz(tag), promesa(253) + " · «$tag» no pasa por el filtro de la voz")
+            for (secreto in secretos) assertFalse(secreto in mensaje, promesa(253) + " · «$secreto» en el log: «$mensaje»")
+        }
+
+        // La medida sobrevive el viaje entero: el filtro de la voz y, detrás, la puerta de la telemetría (spec 005).
+        val remoto = lineas.mapNotNull { (tag, mensaje) -> TelemetriaDeVoz.paraRemoto(tag, mensaje)?.let { PuertaDeTelemetria.mensaje(it) } }
+        assertEquals(4, remoto.size, promesa(253) + " · $remoto")
+        assertTrue(remoto.any { "3 etiquetas" in it }, promesa(253) + " · la medida se perdió por el camino: $remoto")
+        assertTrue(remoto.any { CatalogoDeVoz.QUE_VEO in it }, promesa(253) + " · qué se miró se pierde: $remoto")
+        for (linea in remoto) {
+            for (secreto in secretos) assertFalse(secreto in linea, promesa(253) + " · «$secreto» sale del teléfono en «$linea»")
+        }
+    }
+
+    /* ---------- Los arreglos del control de la 2B2a ---------- */
+
+    /**
+     * LO QUE ESPERA LA LECTURA TRABADA A QUE LA SUELTEN. Quien la suelta es un paso del guion, y los pasos del guion
+     * corren en el HILO DE LA CONVERSACIÓN: si la lectura volviera a ese hilo, el paso no llegaría nunca y la espera
+     * vencería sola. Por eso es un tope y no una espera infinita: el rojo tiene que ser rojo, no un contrato colgado.
+     */
+    private val topeDeLaTraba = 5_000L
+
+    /**
+     * Cede hasta que [condicion] se cumpla, con tope. Lo que corre en OTRO despachador vuelve dispachado a este hilo,
+     * así que no basta con los `yield` del canal: hay que dejar correr el reloj de verdad. Acotado, para que lo que no
+     * llega salga rojo con su nombre en vez de colgar el contrato.
+     */
+    private suspend fun esperaA(que: String, condicion: () -> Boolean) {
+        repeat(2_000) {
+            if (condicion()) return
+            delay(1)
+        }
+        fail("$que · no llegó en 2 s")
+    }
+
+    @Test
+    fun promesa254() = corre {
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val mcp = Mcp(mano.gestos, mano.sistema, emptyList(), mano.reproductor)
+        val traba = Traba()
+        val soltada = mutableListOf<Boolean>()
+        val ojos = HerramientasDeVoz(
+            // BLOQUEA EL HILO, no suspende la corrutina: es lo único que separa un despachador propio de uno compartido.
+            // Con un `CompletableDeferred` (lo que hace la 252) el hilo se suelta y la conversación sigue igual.
+            pantalla = { soltada += traba.esperaBloqueando(topeDeLaTraba); pantallaDelTurno() },
+            acciones = { mcp.tools },
+            mirarEn = despachadorDeIo(),
+        )
+        val v = Voz(ejecutor = ojos::ejecutar, actuaEnPantalla = CatalogoDeVoz::actuaEnPantalla, utensilios = CatalogoDeVoz.UTENSILIOS)
+        v.guion(
+            llega(sesionAbierta),
+            llega(usuario("¿qué ves?")),
+            llega(pide("call_mira", CatalogoDeVoz.QUE_VEO)),
+            // No mira la pantalla, así que no se traba: es la prueba de que la conversación sigue atendiendo.
+            llega(pide("call_catalogo", CatalogoDeVoz.QUE_PUEDO_HACER)),
+            hace { v.conv.oirMicrofono(vozDeLaSala()) },
+            llega(sinHechos),
+            hace {
+                // TODO ESTO OCURRE CON LA LECTURA TRABADA, y este paso corre en el hilo de la conversación.
+                // La otra llamada también vuelve por su despachador, así que se le da tiempo a llegar, acotado: si
+                // hiciera cola detrás de la trabada no llegaría nunca, y eso es lo que se está juzgando.
+                esperaA(promesa(254) + " · la otra llamada hizo cola detrás de la lectura trabada") { v.salidas().isNotEmpty() }
+                assertEquals(1, v.audios().size, promesa(254) + " · el micrófono se quedó esperando a la lectura")
+                assertEquals(
+                    listOf<String?>("call_catalogo"),
+                    v.salidas().map { it.texto("item", "call_id") },
+                    promesa(254) + " · se contestó otra cosa con la lectura todavía trabada",
+                )
+                assertEquals(0, v.cuenta("response.create"), promesa(254) + " · con una lectura sin contestar no se pide respuesta")
+                traba.abrir()
+            },
+            llega(sinHechos),
+            // Soltada, su salida también vuelve por su despachador: se espera a que llegue antes de cerrar el turno.
+            hace { esperaA(promesa(254) + " · la lectura trabada no se contestó al soltarla") { v.salidas().size == 2 } },
+            hace { v.reloj.ms += 2000 },
+            llega(sinHechos),
+        )
+        v.conv.conversar()
+        assertEquals(
+            listOf(true),
+            soltada,
+            promesa(254) + " · la lectura estuvo $topeDeLaTraba ms trabada sin que nadie la abriera: corrió en el hilo de la conversación, que es justo quien tenía que abrirla",
+        )
+        assertEquals(listOf<String?>("call_catalogo", "call_mira"), v.salidas().map { it.texto("item", "call_id") }, promesa(254))
+        assertEquals(1, v.cuenta("response.create"), promesa(254) + " · ${v.tipos()}")
+        assertEquals(1, v.enLog("usuario dijo: ¿qué ves?"), promesa(254) + " · el turno no cerró: ${v.log}")
+
+        // EL TOPE ES EL DE LA CLASE, no uno inyectado por la prueba: una lectura que no vuelve se contesta igual.
+        val nunca = Traba()
+        val lineas = mutableListOf<String>()
+        val lentos = HerramientasDeVoz(
+            pantalla = { nunca.esperaBloqueando(HerramientasDeVoz.TOPE_DE_LA_MIRADA_MS + 1_000); pantallaDelTurno() },
+            acciones = { nunca.esperaBloqueando(HerramientasDeVoz.TOPE_DE_LA_MIRADA_MS + 1_000); mcp.tools },
+            mirarEn = despachadorDeIo(),
+            log = { tag, mensaje -> lineas += "$tag: $mensaje" },
+        )
+        for (nombre in listOf(CatalogoDeVoz.DONDE_ESTOY, CatalogoDeVoz.QUE_VEO)) {
+            assertEquals(
+                OjosDeLaVoz.NO_PUDE_MIRAR,
+                lentos.ejecutar(Llamada("call_lento", nombre, emptyMap())),
+                promesa(254) + " · «$nombre» dejó muda a la voz en vez de decir que no pudo mirar",
+            )
+        }
+        nunca.abrir()
+        assertEquals(2, lineas.count { "${HerramientasDeVoz.TOPE_DE_LA_MIRADA_MS} ms" in it }, promesa(254) + " · sin medida de lo que se esperó: $lineas")
+        // Y la medida sale del teléfono como medida: la puerta de la telemetría la deja pasar entera (spec 005).
+        for (linea in lineas) {
+            val remoto = TelemetriaDeVoz.paraRemoto("voz-ojos", linea.substringAfter(": "))?.let { PuertaDeTelemetria.mensaje(it) }
+            assertNotNull(remoto, promesa(254))
+            assertTrue("${HerramientasDeVoz.TOPE_DE_LA_MIRADA_MS} ms" in remoto, promesa(254) + " · la medida no sobrevive el viaje: «$remoto»")
+        }
+    }
+
+    @Test
+    fun promesa255() = corre {
+        // UNA SOLA RESPUESTA NO SE GASTA LA SESIÓN: el catálogo cabe varias veces en el presupuesto entero.
+        assertTrue(
+            CatalogoDeVoz.TOPE_DEL_CATALOGO * 4 <= ConversacionViva.TOPE_DE_BYTES,
+            promesa(255) + " · el catálogo puede ocupar ${CatalogoDeVoz.TOPE_DEL_CATALOGO} de los ${ConversacionViva.TOPE_DE_BYTES} de la sesión",
+        )
+        val mano = Contrato003FrenoYPuerta.Mano()
+        val gordo = Mcp(
+            mano.gestos, mano.sistema,
+            (1..40).map { LearnedTool("larga$it", "x".repeat(400), listOf("a")) },
+            mano.reproductor,
+        )
+        assertTrue(
+            bytesUtf8(CatalogoDeVoz.capacidades(gordo.tools)) <= CatalogoDeVoz.TOPE_DEL_CATALOGO,
+            promesa(255) + " · ${bytesUtf8(CatalogoDeVoz.capacidades(gordo.tools))} bytes de catálogo",
+        )
+
+        // LA CUENTA DE LA SESIÓN: lo que se manda y lo que pide el delegado, contado en bytes.
+        val v = Voz(ejecutor = { "x".repeat(31_000) })
+        val aviso = "de los ${ConversacionViva.TOPE_DE_BYTES}"
+        v.guion(
+            llega(sesionAbierta),
+            hace { assertEquals(0, v.conv.bytesEnSesion, promesa(255) + " · la conversación no empieza en cero bytes") },
+            llega(pide("call_1", "pulsar")),
+            llega(sinHechos),
+            hace {
+                assertTrue(
+                    v.conv.bytesEnSesion >= ConversacionViva.AVISO_DE_BYTES,
+                    promesa(255) + " · un resultado de 31 000 caracteres dejó la sesión en ${v.conv.bytesEnSesion} bytes",
+                )
+                assertEquals(1, v.enLog(aviso), promesa(255) + " · se cruzó el aviso de bytes sin decirlo: ${v.log}")
+            },
+            llega(pide("call_2", "pulsar")),
+            llega(sinHechos),
+            hace {
+                assertEquals(1, v.enLog(aviso), promesa(255) + " · el aviso de bytes se repite: ${v.log}")
+                assertTrue(v.salidas().size >= 2, promesa(255) + " · pasado el aviso se dejó de contestar: no se corta nada")
+            },
+            corte(),
+            llega(sesionAbierta),
+            hace {
+                assertTrue(
+                    v.conv.bytesEnSesion < ConversacionViva.AVISO_DE_BYTES,
+                    promesa(255) + " · la conexión nueva heredó los ${v.conv.bytesEnSesion} bytes de la anterior: su sesión es otra",
+                )
+            },
+        )
+        v.conv.conversar()
+    }
+
+    @Test
+    fun promesa257() {
+        // EN ORIGEN: ni saltos de línea, ni el separador con que se unen, ni más de lo que cabe.
+        assertEquals("Mensaje nuevo", etiquetaDePantalla("Mensaje\nnuevo"), promesa(257))
+        assertEquals("Mensaje nuevo", etiquetaDePantalla("Mensaje\r\n\tnuevo"), promesa(257))
+        assertEquals("Enviar - audio", etiquetaDePantalla("Enviar · audio"), promesa(257) + " · el separador sigue partiendo la etiqueta")
+        assertEquals("a·b", etiquetaDePantalla("a·b"), promesa(257) + " · un punto medio sin espacios no parte nada y no se toca")
+        assertEquals(TOPE_DE_UNA_ETIQUETA, etiquetaDePantalla("z".repeat(80)).length, promesa(257))
+        assertEquals("", etiquetaDePantalla("  \n  "), promesa(257))
+
+        // Y QUIEN LAS LEE ES TOLERANTE: aunque llegue sin sanear, ni se infla la cuenta ni se pierde lo que está.
+        val sucio = pantallaDelTurno(uiContext = uiContextComoElDelTurno(etiquetas = listOf("Enviar\naudio", "Buscar")))
+        assertEquals(2, OjosDeLaVoz.etiquetas(sucio), promesa(257) + " · una etiqueta con salto de línea partió el resumen")
+        val visto = OjosDeLaVoz.queVeo(sucio, "Buscar")
+        assertTrue("«Buscar»: sí" in visto, promesa(257) + " · dice que no ve algo que está: «$visto»")
+
+        // EL CAMPO ENFOCADO SALE ENTERO aunque su texto traiga la comilla y el paréntesis con que se cierra.
+        val raro = pantallaDelTurno(uiContext = uiContextComoElDelTurno(enfocado = "dijo \") y siguió"))
+        assertTrue("dijo \") y siguió" in OjosDeLaVoz.queVeo(raro), promesa(257) + " · el enfocado se truncó: «${OjosDeLaVoz.queVeo(raro)}»")
+    }
+
+    @Test
+    fun promesa258() = corre {
+        val sinServicio = HerramientasDeVoz(pantalla = { null }, acciones = { null }, mirarEn = despachadorDeIo())
+        val respuestas = CatalogoDeVoz.UTENSILIOS.associate { u ->
+            u.nombre to sinServicio.ejecutar(Llamada("call_${u.nombre}", u.nombre, emptyMap()))
+        }
+        for ((nombre, r) in respuestas) {
+            assertTrue(OjosDeLaVoz.SIN_SERVICIO in r, promesa(258) + " · «$nombre» calla la causa: «$r»")
+        }
+        assertEquals(OjosDeLaVoz.SIN_PANTALLA, respuestas.getValue(CatalogoDeVoz.DONDE_ESTOY), promesa(258))
+        assertEquals(OjosDeLaVoz.SIN_PANTALLA, respuestas.getValue(CatalogoDeVoz.QUE_VEO), promesa(258))
+        assertEquals(CatalogoDeVoz.SIN_CATALOGO, respuestas.getValue(CatalogoDeVoz.QUE_PUEDO_HACER), promesa(258))
+
+        // CON SERVICIO Y SIN NINGUNA ACCIÓN NO ES LO MISMO, y no se puede contestar como si lo fuera.
+        val vacio = HerramientasDeVoz(pantalla = { pantallaDelTurno() }, acciones = { emptyList() }, mirarEn = despachadorDeIo())
+        val r = vacio.ejecutar(Llamada("call_x", CatalogoDeVoz.QUE_PUEDO_HACER, emptyMap()))
+        assertFalse(OjosDeLaVoz.SIN_SERVICIO in r, promesa(258) + " · un catálogo vacío no es un servicio apagado: «$r»")
     }
 }

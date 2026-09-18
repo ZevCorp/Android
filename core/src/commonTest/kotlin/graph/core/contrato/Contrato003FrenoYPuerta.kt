@@ -297,7 +297,7 @@ class Contrato003FrenoYPuerta {
             )
             val voz = Voz()
             val bitacora = Bitacora()
-            val dijo = freno.enTarea("abre la calculadora") { motor(cerebro, p, freno, voz, bitacora).run("abre la calculadora") }
+            val dijo = freno.enTarea("abre la calculadora") { motor(cerebro, p, freno, voz, bitacora).run("abre la calculadora", dijoLaPersona = "abre la calculadora") }
 
             assertEquals(listOf("tap"), mano.entradas, promesa(303) + " · llegaron al teléfono tras el alto")
             assertEquals(1, cerebro.turnos, promesa(303) + " · pidió otro turno con el freno echado")
@@ -319,7 +319,7 @@ class Contrato003FrenoYPuerta {
                 BrainTurn(actions = listOf(AgentAction.Tap(1, 1), AgentAction.Mcp("set_alarm", mapOf("hour" to "7")))),
                 alPensar = { freno.pide("botón") },
             )
-            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, Voz(), Bitacora()).run("pon una alarma") }
+            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, Voz(), Bitacora()).run("pon una alarma", dijoLaPersona = "pon una alarma") }
             assertEquals(emptyList(), mano.entradas, promesa(303) + " · el turno pensado con el alto echado tocó el teléfono")
             assertEquals(1, cerebro.turnos, promesa(303))
             assertTrue(dijo.startsWith("paraste:"), promesa(303) + " · «$dijo»")
@@ -334,7 +334,7 @@ class Contrato003FrenoYPuerta {
                 BrainTurn(actions = listOf(AgentAction.Tap(1, 1))),
                 BrainTurn(done = true, text = "listo"),
             )
-            val dijo = freno.enTarea("toca una vez") { motor(cerebro, p, freno, Voz(), Bitacora()).run("toca una vez") }
+            val dijo = freno.enTarea("toca una vez") { motor(cerebro, p, freno, Voz(), Bitacora()).run("toca una vez", dijoLaPersona = "toca una vez") }
             assertEquals(listOf("tap"), mano.entradas, promesa(303))
             assertEquals(1, cerebro.turnos, promesa(303) + " · pidió otro turno a Graph con el freno echado")
             assertTrue(dijo.startsWith("paraste:"), promesa(303) + " · «$dijo»")
@@ -354,7 +354,7 @@ class Contrato003FrenoYPuerta {
                 alPensar = { freno.pide("botón") },
             )
             val voz = Voz()
-            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, voz, Bitacora(), usuario).run("pon una alarma") }
+            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, voz, Bitacora(), usuario).run("pon una alarma", dijoLaPersona = "pon una alarma") }
             assertEquals(emptyList(), preguntas, promesa(303) + " · preguntó al usuario con el freno echado")
             assertTrue(voz.dicho.isEmpty(), promesa(303) + " · habló con el freno echado: ${voz.dicho}")
             assertTrue("pensando la hora" !in voz.narrado, promesa(303) + " · narró el turno pensado tras el alto: ${voz.narrado}")
@@ -368,7 +368,7 @@ class Contrato003FrenoYPuerta {
             val p = puerta(freno, Mano())
             val cerebro = CerebroGuionado(BrainTurn(done = true, text = "Alarma puesta"), alPensar = { freno.pide("botón") })
             val voz = Voz()
-            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, voz, Bitacora()).run("pon una alarma") }
+            val dijo = freno.enTarea("pon una alarma") { motor(cerebro, p, freno, voz, Bitacora()).run("pon una alarma", dijoLaPersona = "pon una alarma") }
             assertTrue(dijo.startsWith("paraste:"), promesa(303) + " · un turno done tras el alto no terminó como cancelación: «$dijo»")
             assertTrue(voz.dicho.isEmpty(), promesa(303) + " · dijo el resumen de una corrida parada: ${voz.dicho}")
             assertTrue(voz.narrado.none { "¡Listo!" in it }, promesa(303) + " · celebró una corrida parada: ${voz.narrado}")
@@ -383,7 +383,7 @@ class Contrato003FrenoYPuerta {
             val dijo = freno.enTarea("espera larga") {
                 coroutineScope {
                     launch { delay(120); freno.pide("botón") }
-                    motor(cerebro, p, freno, Voz(), Bitacora()).run("espera larga")
+                    motor(cerebro, p, freno, Voz(), Bitacora()).run("espera larga", dijoLaPersona = "espera larga")
                 }
             }
             val tardo = inicio.elapsedNow()
@@ -410,7 +410,7 @@ class Contrato003FrenoYPuerta {
             var salida: Result<String>? = null
             coroutineScope {
                 val trabajo = launch {
-                    salida = runCatching { freno.enTarea("colgada") { motor(colgado, p, freno, voz, Bitacora()).run("colgada") } }
+                    salida = runCatching { freno.enTarea("colgada") { motor(colgado, p, freno, voz, Bitacora()).run("colgada", dijoLaPersona = "colgada") } }
                 }
                 pensando.await()
                 trabajo.cancel()

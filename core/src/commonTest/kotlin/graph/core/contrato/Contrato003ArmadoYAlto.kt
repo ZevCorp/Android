@@ -86,7 +86,7 @@ class Contrato003ArmadoYAlto {
             val transporte = TransporteGuionado(turno(*acciones), fin)
             val sesion = armado.arma(manos(mano), cerebro = { graph(transporte) }, voz = Voz(), pausa = { 0 })
 
-            val salida = runCatching { armado.correr("abre ajustes") { sesion.motor.run("abre ajustes") } }
+            val salida = runCatching { armado.correr("abre ajustes") { sesion.motor.run("abre ajustes", dijoLaPersona = "abre ajustes") } }
 
             assertIs<Paraste>(salida.exceptionOrNull(), promesa(309) + " · $caso · la corrida no terminó como cancelación: $salida")
             assertEquals(listOf("tap"), mano.entradas, promesa(309) + " · $caso · llegaron al teléfono acciones tras el alto")
@@ -136,7 +136,7 @@ class Contrato003ArmadoYAlto {
         )
         val sesion = armado.arma(manos, { deFuera }, Voz(), pausa = { 0 }, workflows = workflows)
         val objetivo = "abre ajustes y entra a wifi y luego a bluetooth"
-        val salida = runCatching { armado.correr(objetivo) { sesion.motor.run(objetivo) } }
+        val salida = runCatching { armado.correr(objetivo) { sesion.motor.run(objetivo, dijoLaPersona = objetivo) } }
         return Escena(salida, mano, freno, bitacora, avisos, lecturas, conscientes, deFuera.turnos)
     }
 

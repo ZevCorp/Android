@@ -143,8 +143,13 @@ class DeepgramTranscriber(private val apiKey: String) : Transcriber {
     }
 }
 
-/** Fallback sin API key: el SpeechRecognizer del sistema (mismo motor del 🎤 del chat). */
-class SystemTranscriber(private val context: Context) : Transcriber {
+/**
+ * Fallback sin API key: el SpeechRecognizer del sistema (mismo motor del 🎤 del chat). Con
+ * [preferOffline] pide reconocimiento EN EL DISPOSITIVO (spec 007: la escucha de la palabra de
+ * activación tiene que ser gratis y no depender de internet); el resto de los llamadores (el chat,
+ * el modo reunión) sigue con el default de siempre, sin pedirlo.
+ */
+class SystemTranscriber(private val context: Context, private val preferOffline: Boolean = false) : Transcriber {
 
     private var recognizer: SpeechRecognizer? = null
     override var onPartial: ((String) -> Unit)? = null
@@ -184,7 +189,8 @@ class SystemTranscriber(private val context: Context) : Transcriber {
             })
             r.startListening(Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH)
                 .putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM)
-                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true))
+                .putExtra(RecognizerIntent.EXTRA_PARTIAL_RESULTS, true)
+                .putExtra(RecognizerIntent.EXTRA_PREFER_OFFLINE, preferOffline))
             cont.invokeOnCancellation { runCatching { r.destroy() } }
         }
     }

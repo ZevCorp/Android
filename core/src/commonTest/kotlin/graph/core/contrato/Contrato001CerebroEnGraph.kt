@@ -233,7 +233,7 @@ class Contrato001CerebroEnGraph {
             fin,
         )
         val motor = ExecutionEngine(brain = { cerebro(t) }, phone = TelefonoFalso, mcp = Mcp(GestosFalsos, SistemaFalso), stepDelay = { 0 })
-        assertEquals("listo", motor.run("probá", announce = false), promesa(4))
+        assertEquals("listo", motor.run("probá", announce = false, dijoLaPersona = "probá"), promesa(4))
         assertEquals(listOf("acción desconocida: teleport", "ok"), t.requests[1].json.lista("results"), promesa(4))
     }
 
