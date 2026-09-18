@@ -57,8 +57,12 @@ object Ejecucion {
     /** Con el alto pedido lanza `Paraste`: tras un motor, quien tiene algo más que hacer lo mira primero. */
     fun sigue() = armado.sigue()
 
-    /** Un paso consciente de un workflow; si lo paras dentro, la corrida entera termina. */
-    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine): Boolean = armado.pasoConsciente(objetivo, motor)
+    /**
+     * Un paso consciente de un workflow; si lo paras dentro, la corrida entera termina. El objetivo lo escribe el workflow,
+     * así que lo que autoriza una acción sensible es [dijoLaPersona] (spec 006, promesa 615).
+     */
+    suspend fun pasoConsciente(objetivo: String, motor: ExecutionEngine, dijoLaPersona: String?): Boolean =
+        armado.pasoConsciente(objetivo, motor, dijoLaPersona)
 
     /** Arma una corrida sobre la puerta: el motor, el MCP y, si hay [workflows], su reproductor. */
     fun <B : Brain> arma(
@@ -71,8 +75,9 @@ object Ejecucion {
         pausa: () -> Long = { 350 },
         aprendidas: List<LearnedTool> = emptyList(),
         workflows: ArmadoDeEjecucion.Workflows? = null,
+        apps: suspend () -> List<String> = { emptyList() },
     ): ArmadoDeEjecucion.Sesion<B> =
-        armado.arma(manos(service), cerebro, voz, usuario, maxTurnos, modo, pausa, aprendidas, workflows)
+        armado.arma(manos(service), cerebro, voz, usuario, maxTurnos, modo, pausa, aprendidas, workflows, apps)
 
     /** El catálogo MCP de una corrida, sin ejecutar nada. */
     fun herramientas(service: GraphAccessibilityService, aprendidas: List<LearnedTool>): List<McpTool> =

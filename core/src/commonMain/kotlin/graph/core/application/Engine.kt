@@ -5,6 +5,7 @@ import graph.core.precision.Freno
 import graph.core.precision.PARASTE_TU
 import graph.core.precision.Paraste
 import graph.core.precision.SIN_TAREA
+import graph.core.pregunta.CompuertaDePregunta
 import kotlinx.coroutines.delay
 import kotlin.time.TimeSource
 
@@ -46,15 +47,27 @@ class ExecutionEngine(
     private val stepDelay: () -> Long = { 350 },
     /** El freno de la tarea en curso. Sin él, el motor solo reacciona a la [Paraste] de la puerta. */
     private val freno: Freno? = null,
+    /**
+     * PREGUNTA ANTES DE EJECUTAR (spec 006). Se consulta antes de cada acción: lo sensible que el pedido no autorizó, un
+     * destino ambiguo o un dato que falta no se ejecutan, se preguntan. Sin ella, el motor hace todo lo que le manden.
+     */
+    private val compuerta: CompuertaDePregunta? = null,
 ) {
     /**
      * Ejecuta un objetivo hasta que el modelo devuelve el control con texto. Devuelve ese resumen.
      * `announce=false` para objetivos internos (reencaminado / acción anticipada): no narra el texto
      * del objetivo (que puede ser largo) ni el "¡Listo!" final.
+     *
+     * [dijoLaPersona] es lo que la persona escribió o dictó, que NO siempre es el [goal]: una acción anticipada autónoma y
+     * el «CONTEXTO INMEDIATO» de una propuesta los redacta el modelo. Solo esto autoriza lo sensible (spec 006, promesa
+     * 611); `null` cuando no hay nada suyo. NO TIENE DEFAULT, y es a propósito (promesa 621): el default era el objetivo, y
+     * así un llamador con un objetivo sintético se autorizaba a sí mismo con solo olvidarse. Quien corre el motor dice qué
+     * autoriza, y eso lo pide el compilador en vez de un comentario.
      */
-    suspend fun run(goal: String, announce: Boolean = true): String {
+    suspend fun run(goal: String, announce: Boolean = true, dijoLaPersona: String?): String {
         val b = brain()
         b.begin(goal)
+        compuerta?.empieza(dijoLaPersona.orEmpty()) // solo lo que dijo la persona autoriza (spec 006, promesas 601 y 611)
         if (announce) voice.narrate("¡Vamos! $goal")
         log.log("run", "▶ objetivo de ${goal.length} caracteres")
         val started = TimeSource.Monotonic.markNow()
@@ -71,6 +84,7 @@ class ExecutionEngine(
                 turns++
                 val turnStart = TimeSource.Monotonic.markNow()
                 val state = phone.state(withScreenshot = wantShot)
+                compuerta?.vio(state) // lo que se ve ahora: con eso se resuelve un destino ambiguo (spec 006)
                 val turn = b.next(state, results)
                 sigue() // el alto pudo llegar mientras Graph pensaba: ese turno ni se narra, ni pregunta, ni celebra
                 conTarea()
@@ -146,7 +160,17 @@ class ExecutionEngine(
         else if (f.duerme(ms)) throw Paraste(PARASTE_TU)
     }
 
+    /**
+     * Una acción: la compuerta decide si se hace o si primero se pregunta (spec 006). Una acción frenada no señala vía ni
+     * toca nada, y deja su línea como cualquier otra: la medida delante del «—», el detalle detrás, para el modelo.
+     */
     private suspend fun execute(action: AgentAction): String {
+        val result = compuerta?.revisa(action) ?: ejecuta(action)
+        log.log("run", "  ▪ ${describe(action)} → ${result.substringBefore(" — ")}") // el detalle nombra etiquetas: es para el modelo
+        return result
+    }
+
+    private suspend fun ejecuta(action: AgentAction): String {
         // Aviso de vía: MCP = subconsciente, computer-use = consciente (Wait no cambia de vía).
         if (action !is AgentAction.Wait && action !is AgentAction.Unknown) mode?.executing(action is AgentAction.Mcp)
         // Las MCP devuelven su propio detalle de fallo (p.ej. qué taps de una aprendida no salieron):
@@ -162,7 +186,6 @@ class ExecutionEngine(
             is AgentAction.Wait -> { espera(action.ms); "ok" }
             is AgentAction.Unknown -> "acción desconocida: ${action.kind}"
         }
-        log.log("run", "  ▪ ${describe(action)} → ${result.substringBefore(" — ")}") // el detalle nombra etiquetas: es para el modelo
         return result
     }
 

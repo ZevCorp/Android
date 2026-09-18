@@ -1,6 +1,6 @@
 # Plan de implementación: la voz es GPT-Live — conversación fluida por voz
 
-Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · Nace de portar la voz de `U-Windows-App`,
+Estado: **fases A1, A2, B1a y B1b implementadas** (2026-09-15; promesas 201-246 verdes; la corrida en el teléfono, nivel 4, pendiente de confirmación del Capitán) · **fase 2B2a implementada** (2026-09-16; promesas 247-253 verdes: el delegado ya sabe dónde está, qué ve y qué podrá hacer; cada promesa se vio ROJA con un sabotaje real, abajo; la corrida en el teléfono, nivel 4, pendiente) · **arreglos del control de la 2B2a** (2026-09-16; promesas 254-258 verdes, **132 en total**: mirar ya no congela la charla, la sesión cuenta sus bytes y el catálogo es el de verdad; siete sabotajes, cada uno rojo sobre su promesa) · **ergonomía del modo reunión: silencio con doble toque** (2026-09-16; promesa 259 verde: doble toque en la burbuja con el modo reunión anclado mutea/desmutea sin salir de la reunión y sin chocar con el micrófono de un solo comando) · Nace de portar la voz de `U-Windows-App`,
 que ya conversa con GPT-Live-1 medido contra el servidor · Rama: `yokh/voz-gpt-live`
 
 El Android de hoy no conversa: escucha una orden, piensa y contesta. Windows ya mantiene una
@@ -108,6 +108,19 @@ si cambia uno, cambia el otro en el mismo commit.
 | 244 | La cola del altavoz guarda como mucho 30 segundos y al llenarse descarta lo más viejo; suena solo si tiene bytes, nunca por volumen, y callar la vacía en el acto. | B1b |
 | 245 | A la telemetría remota de la voz solo llega la medida: el largo de cada frase y el cierre del turno; ninguna frase, argumento ni texto del delegado sale del teléfono. | B1b |
 | 246 | La voz en vivo solo se arranca desde el panel de desarrollador y toma su clave del build interno, nunca de la configuración remota. | B1b |
+| 247 | Dónde estoy: la voz contesta con la app al frente, el tipo de pantalla y su tamaño, leídos del mismo estado que ya arma el turno de Graph y sin pedir captura; si no hay pantalla que leer lo dice y no se la inventa. | 2B2a |
+| 248 | Qué veo: las etiquetas visibles, cuántos elementos se pueden tocar y el campo enfocado salen del `uiContext` que ya viaja a Graph; un filtro de hasta 60 caracteres contesta si algo está en pantalla sin mirar tildes ni mayúsculas, y lo que la pantalla no deja leer se dice tal cual. | 2B2a |
+| 249 | Qué puedo hacer: el catálogo de capacidades se deriva del catálogo real de acciones, así que una acción nueva aparece sin tocar la voz; va agrupado por vía y cabe en un resultado aunque una descripción sea enorme. | 2B2a |
+| 250 | Las tres herramientas de la voz solo leen: no reciben manos, así que ninguna toca la pantalla ni abre nada, y cualquier otra llamada del delegado se contesta «todavía no» sin ejecutar nada. | 2B2a |
+| 251 | La sesión abre con las tres herramientas dentro de la delegación y ninguna en la voz; declararlas no gasta items, así que la conversación empieza en cero de los 128, y la apertura entera cabe de sobra en los 32 768 bytes de la sesión. | 2B2a |
+| 252 | Leer no congela la charla: las tres son de control, así que una lectura retenida no frena a las que vienen detrás, ni el micrófono, ni el cierre del turno. | 2B2a |
+| 253 | Del teléfono solo sale la medida de lo que se mira —cuántas etiquetas y cuántos caracteres—: ni una etiqueta, ni el filtro, ni lo que la pantalla muestra llegan al log local, y lo que llega a la telemetría remota pasa por el filtro de la voz y por la puerta sin una palabra de la pantalla. | 2B2a |
+| 254 | Mirar no congela la conversación: la lectura de pantalla corre en su propio despachador y no en el hilo de la voz, así que aunque BLOQUEE el hilo el micrófono sigue viajando y las demás llamadas se contestan; y si tarda más que el tope se contesta que no se pudo mirar, en vez de dejar muda a la voz. | 2B2a |
+| 255 | La sesión cuenta sus bytes además de sus items: cada item suma lo que ocupa, se avisa una vez antes de cruzar los 32 768 bytes que admite el servidor y sin cortar nada, y lo que devuelve el catálogo está acotado para que una sola respuesta no se gaste el presupuesto entero. | 2B2a |
+| 256 | El catálogo que lee el delegado trae las herramientas aprendidas con el mismo criterio que una corrida: la voz y la anticipación se las piden al único sitio que lo decide, y ninguna de las dos escribe una lista vacía a mano. | 2B2a |
+| 257 | Una etiqueta de la pantalla se sanea en origen —sin saltos de línea ni el separador con que se unen— y quien la lee es tolerante: una etiqueta rara no hace decir «no lo veo» de algo que está ni infla la cuenta, y el campo enfocado sale entero aunque su texto traiga comillas y paréntesis. | 2B2a |
+| 258 | Sin servicio de accesibilidad las tres herramientas dicen la misma causa con las mismas palabras: qué puedo hacer ya no la calla devolviendo un catálogo vacío, que se lee como que Ü no sabe hacer nada. | 2B2a |
+| 259 | Con la burbuja anclada en el modo reunión, `listenLoop` consulta `muted` antes de abrir cada segmento nuevo: muteada, no abre el micrófono pero el bucle sigue vivo. Un doble toque en la burbuja llama a `VoiceDock.toggleMute()` y nunca cae en el micrófono de un solo comando (`onBubbleTap`/`activateMic`), esté o no escuchando en ese instante. Ni `toggleMute()` ni el camino de silencio de `listenLoop` tocan `taskQueue`, `taskWorker` ni `Ejecucion.parar` | Silencio |
 
 **La que cierra el asunto es la 203.** Un traductor que ejecuta la llamada tres veces, la primera
 sin argumentos, hace otra cosa que lo que se pidió y no avisa. Las demás protegen el camino; la
@@ -176,6 +189,57 @@ salida que no llama a `acabar()`— da rojo con su nombre en vez de dejar el con
 | 244 | Recién nacida y con un trozo vacío no suena. 31 segundos cuyas muestras dicen qué segundo son: quedan 1 440 000 B, se cuentan 48 000 descartados, lo primero que sale es el segundo 1 y lo último el 30. Un trozo de 35 s sobre uno de 1 s: se queda el final del grande (sale primero su segundo 5) y se cuentan 6 s. 100 ms de ceros en cola suenan, y la compuerta los ve sonando. `sacar` da muestras enteras (4799 pedidos son 4798), en orden a través de trozos y sin rellenar. Callar deja la cola sin nada que sacar, y lo que llega después suena solo |
 | 245 | Una conversación entera con el canal con guion: el usuario dice su clave con tildes y un emoji, el delegado pide una herramienta con argumentos y escribe texto, llega un evento desconocido con un secreto y Ü contesta. El log local lo trae todo; pasado por el filtro, ni una palabra de eso: salen `usuario dijo: 37 caracteres` y `Ü dijo: 32 caracteres` (el emoji cuenta uno), del evento desconocido solo su tipo, y cada línea sin contenido —el cierre de la escucha y de la sesión incluidos— pasa igual. A mano: el `toString` de `Llamada`, `Resultado`, `Pide`, `DiceU` y `DiceElUsuario`, un JSON del canal y un «dijo:» a mitad de línea no sacan su contenido; fuera de los tags `voz-` no se toca nada |
 | 246 | Fuentes de `app` sin comentarios: el botón «Voz en vivo (prueba)» y toda aparición de `VozEnVivoDev` —calificada, en un `typealias` o en un import con `as`— están dentro de `if (mode == MODE_DEV) { … }`, salvo el import simple; `MODE_DEV` es «dev» y `mode` solo sale de la preferencia. Ningún otro archivo nombra a `VozEnVivoDev` ni a `ConversacionViva`, y en el suyo la conversación vive dentro de la clase. En `VozEnVivoDev.kt` no aparece «remote»; la credencial es `claveDelBuildInterno()`, una expresión que solo nombra `prefs.getString("openaiKey", …)` y `BuildConfig.DEFAULT_OPENAI_KEY`. `LogBus` nombra una vez a `Telemetry` y a `enqueue`, en `TelemetriaDeVoz.paraRemoto(tag, message)?.let { Telemetry.enqueue(tag, it) }`, sin reasignar `tag` ni `message`; nadie más en `app` encola ni declara otro `TelemetriaDeVoz`. Y parar no depende de la pantalla: `detener()` se llama una vez, dentro de `alcance.launch { … }`, con `alcance` propio de la voz |
+| 247 | Un `TurnScreenState` armado como el del turno (paquete·título, el `uiContext` de la accesibilidad, 1080×2400): la respuesta nombra la app, el tipo de pantalla, el teclado y el tamaño, y nunca pide `screenshot`. Sin estado que leer sale la frase de que no puede ver; un `uiContext` de «sin contenido accesible» sale tal cual |
+| 248 | El `uiContext` de una pantalla con 12 tocables, 2 campos, uno enfocado y 28 etiquetas: salen las etiquetas y las cuentas. Filtros «enviar», «ENVIAR» y «camara» sobre «Cámara»: sí, con lo que encontró; «guardar», que no está: no, y lo dice. Un filtro de 300 caracteres se recorta a 60. Un `uiContext` con otro formato no se inventa: vuelve tal cual |
+| 249 | Un `Mcp` de verdad sobre manos falsas: cada nombre de `tools` aparece en el texto, agrupado por vía. Se añade una herramienta aprendida y aparece sin tocar la voz. Con la descripción de 1 500 caracteres de `check_simit_fines` y 40 herramientas de relleno, el mensaje que viaja sigue por debajo del tope de 32 768 B |
+| 250 | El ejecutor se construye sin teléfono, gestos ni sistema: no hay con qué tocar. `pulsar`, `escribir`, `launch_app`, `go_home` y un nombre inventado se contestan «todavía no», y el catálogo real que se le pasó no se llama ni una vez |
+| 251 | La apertura con el catálogo, parseada: sus `tools` son las tres, la sesión no lleva `tools` fuera de la delegación, `itemsEnSesion` es 0 con la sesión ya confirmada, y los bytes UTF-8 del `session.start` se cuentan contra los 32 768 de la sesión |
+| 252 | Una lectura retenida y detrás otra llamada y un trozo de micrófono: la segunda se contesta y el audio viaja con la primera aún retenida; al soltarla salen su salida y un único `response.create`, y el turno cierra |
+| 253 | Una pantalla con etiquetas sembradas («Zorbax», «Qwyk» y un teléfono) y un filtro secreto: ninguna línea del log trae un trozo de ellos, solo cuentas y largos; y cada línea pasada por `TelemetriaDeVoz.paraRemoto` y por `PuertaDeTelemetria` conserva su medida sin una palabra de la pantalla |
+| 254 | Un ejecutor que BLOQUEA el hilo —un `CountDownLatch` de verdad, no un `CompletableDeferred` que suspende— retiene la lectura, y la traba solo la abre un paso del guion, que corre en el hilo de la conversación: si la lectura volviera a ese hilo, ese paso no llegaría nunca y la espera vencería sola, con ese rojo y no un contrato colgado. Con la lectura trabada viajan el micrófono y la salida de otra herramienta, y no se pide respuesta. El tope se juzga dejando vencer el DE LA CLASE, no uno inyectado, y la medida de lo que se esperó sobrevive la puerta de la telemetría |
+| 255 | Una conversación con el canal con guion: `bytesEnSesion` empieza en cero, suma lo que se manda y lo que pide el delegado, un resultado de 31 000 caracteres cruza el aviso y deja UNA línea —ni una más, y se sigue contestando—, y la conexión nueva no hereda los bytes de la anterior. El tope del catálogo entra cuatro veces en los 32 768 de la sesión, medido con 40 herramientas de relleno |
+| 256 | Las fuentes de `app`: `aprendidasDisponibles()` se declara UNA vez, la voz y la anticipación la usan las dos, y ninguna escribe `emptyList()` en la llamada al catálogo. Y por comportamiento, un `Mcp` de verdad con una herramienta aprendida: `que_puedo_hacer` la nombra pasando por el ejecutor, no por el catálogo suelto |
+| 257 | Etiquetas con salto de línea, con el separador dentro, con un punto medio pegado y de más de 40 caracteres. Y sin sanear, como si llegaran de otra versión del servicio: la cuenta sigue siendo 2 y «Buscar» se encuentra. Un campo enfocado cuyo texto trae `")` sale entero |
+| 258 | Sin pantalla y sin catálogo, las tres respuestas nombran el servicio de accesibilidad con las mismas palabras; y con servicio pero sin ninguna acción, la respuesta NO dice que el servicio esté apagado |
+| 259 | Fuentes de `app`, igual que 246/256 (`app` no corre en `jvmTest`): que `muted`/`toggleMute()` existan en `VoiceDock`; que el chequeo de `muted` en `listenLoop` esté ANTES de abrir el segmento (`listening = true`) y su bloque no llame a `defaultTranscriber`; que el doble toque en el `when` de `FloatingBubble`, con la burbuja anclada, llame a `toggleMute()` sin pasar nunca por `onBubbleTap()` ni `activateMic()`; y que ni `toggleMute()` ni ese bloque de `listenLoop` nombren `taskQueue`, `taskWorker` ni `Ejecucion.parar` |
+
+
+### Sabotajes de la fase 2B2a (cada uno pone roja su promesa)
+
+Aplicados sobre `fb4e9cc`, uno a uno y revertidos con `git checkout -- core/src app/src`.
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| S247 | dónde estoy deja de decir el tamaño de la pantalla | 247 |
+| S248 | el filtro vuelve a comparar con tildes y mayúsculas | 248 |
+| S249 | el catálogo se escribe a mano: solo las tres primeras acciones | 249 |
+| S250 | lo que no se sabe hacer se contesta como si se hubiera hecho | 250 |
+| S251 | la delegación declara además una herramienta que actuaría | 251 (y 250) |
+| S252 | las lecturas se declaran actuando en la pantalla y hacen cola | 252 (y 250) |
+| S253 | el log escribe el filtro que buscó la persona | 253 |
+
+### Sabotajes de los arreglos (cada uno pone roja su promesa)
+
+Aplicados sobre `0863403`, uno a uno y revertidos con `git checkout -- core/src app/src`. Las dos mitades de la 254 y de
+la 257 se sabotean por separado: una promesa con dos mitades y un solo sabotaje deja media promesa sin juzgar.
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| S254a | la lectura vuelve al hilo único de la conversación | 254 |
+| S254b | la mirada no tiene tope: se espera para siempre | 254 |
+| S255 | los bytes del item no se acumulan en la sesión | 255 |
+| S256 | la voz vuelve a pedir el catálogo con una lista vacía | 256 |
+| S257a | la etiqueta no se sanea en origen | 257 |
+| S257b | el enfocado cierra por la PRIMERA comilla-paréntesis | 257 |
+| S258 | un catálogo ausente se contesta como un catálogo vacío | 258 |
+
+### Sabotaje de la ergonomía de silencio (pone roja su promesa)
+
+Aplicado sobre esta corrida y revertido con `git checkout -- app/src`.
+
+| Sabotaje | Qué rompe | Rojo |
+|---|---|---|
+| S259 | el doble toque con la burbuja anclada llama a `activateMic()` en vez de `voiceDock.toggleMute()` | 259 |
 
 ---
 
@@ -257,6 +321,126 @@ corrida a mano en el teléfono como nivel 4.
 
 Dos cuidados que el cableado hereda: `cabeceras()` devuelve la clave (`Bearer …`) en un `Map`, y `Llamada` y
 `Hecho.Falla` son data classes cuyo `toString` incluye los argumentos y el mensaje. **Nunca se loguean enteros.**
+
+### Fase 2B2a — ojos y catálogo para el delegado (esta corrida)
+
+El delegado abría **sin herramientas** y lo decía en su propio prompt. Esta fase le da tres, todas de **solo lectura**:
+dónde está, qué ve y qué podrá hacer. Ejecutar es la fase siguiente; aquí no hay manos que dar.
+
+Lo puro en `core/src/commonMain/kotlin/graph/core/voz/`, y en `app` solo el cable:
+
+- `OjosDeLaVoz.kt` — `donde_estoy` y `que_veo` sobre el **mismo `TurnScreenState`** que arma el turno de Graph
+  (`screen`, `uiContext`, tamaño): no hay una segunda lectura de la pantalla que pueda decir otra cosa, y `screenshot`
+  no se pide nunca (`mira = false`). Lo que no encaja con el formato del `uiContext` vuelve tal cual: inventar lo que
+  hay en pantalla es justo lo que la persona de la voz prohíbe.
+- `CatalogoDeVoz.kt` — las tres `Utensilio` que van en la delegación, y el texto de capacidades **derivado del catálogo
+  real de acciones** (`Mcp.tools`, el mismo que ve el cerebro), agrupado por vía y acotado: una acción nueva aparece
+  sola, sin una lista a mano que se desincronice. Ninguna de las tres actúa en la pantalla, así que son de control y
+  corren en el acto (promesa 234): una lectura lenta no deja mudo al delegado.
+- `HerramientasDeVoz.kt` — el ejecutor que la conversación llama. **No recibe manos**: solo el estado de pantalla y el
+  catálogo. Lo que pediría ejecutar se contesta «todavía no», sin tocar nada.
+- `app/…/voice/live/VozEnVivoDev.kt` — le pasa a la conversación el catálogo, el ejecutor y `actuaEnPantalla`; el estado
+  sale del `Phone` que ya expone la app y el catálogo, de `Ejecucion.herramientas(…)`, que lo arma sobre la puerta
+  (spec 003, promesa 307). Leer la pantalla pasa siempre por la puerta: mirar no es actuar.
+
+Al log de la voz solo van medidas —cuántas etiquetas, cuántos caracteres—: una etiqueta es lo que la pantalla muestra, y
+el log acaba en la telemetría remota (spec 005). Por eso `donde_estoy`, `que_veo` y `que_puedo_hacer` se suman a la lista
+cerrada de `PuertaDeTelemetria` con su promesa, y `etiquetas` pasa a ser sustantivo de medida.
+
+**Medido en la propia prueba (promesa 251), no supuesto:** la apertura con el catálogo ocupa **2 295 B** de los 32 768 que
+el servidor admite por sesión, y declara **3 herramientas**. Declararlas **no gasta items**: la conversación empieza en 0 de
+los 128, porque las herramientas viajan dentro del `session.start` y no son historial.
+
+> La primera medida de esta fase decía **1 198 B**, y era de otra cosa: la prueba medía con dos instrucciones de juguete
+> («Eres Ü.») porque las de verdad vivían en `app`, fuera del alcance del contrato. Por eso la persona se mudó a
+> `core/…/voz/PersonaDeLaVoz.kt`: ahora la 251 mide lo que de verdad viaja desde el teléfono. **Una medida que no se toma
+> sobre lo que viaja no es una medida**, y el margen que se creía tener era casi el doble del real. Lo que el servidor cuenta de verdad
+como item solo se sabrá en el nivel 4; por eso el catálogo se agrupa en `que_puedo_hacer` en vez de declarar una
+herramienta por acción, que habría metido las ~25 del catálogo real en cada apertura.
+
+Pone verdes: **247-253**.
+
+#### Lo que el control encontró, y cómo quedó (promesas 254-258)
+
+**Mirar congelaba la conversación.** `GraphAccessibilityService.state()` recorre el árbol de accesibilidad con **IPC
+binder síncrono**: bloquea el hilo en vez de suspenderlo. Como las herramientas de control corren dentro del hilo único
+de `ConversacionViva`, mientras durara el recorrido no se procesaba el audio que llegaba ni entraba el micrófono —con
+una lista larga, corte audible; con el servicio colgado, la voz muda y sin decir por qué. La regla ya estaba escrita en
+`ConversacionViva.kt`; lo que faltaba era cumplirla. Ahora la lectura salta a **su propio despachador** (`mirarEn`, el
+de entrada/salida, **sin default** para que ningún sitio se olvide de decirlo) y lleva tope.
+
+> **El tope es 2 500 ms, y es un tope de CONVERSACIÓN, no de operación.** Mientras la lectura no vuelve, el delegado no
+> tiene salida y la voz está callada; un silencio de más de dos segundos y medio ya se lee como que se colgó. Y queda muy
+> por encima de lo que tarda un árbol normal —decenas de ms, cientos en una lista larga—, así que solo lo cruza una
+> pantalla patológica o un servicio colgado, y entonces vale más decirlo que esperar. Vencido, se contesta que no se pudo
+> mirar en vez de dejar muda a la voz.
+>
+> **No alcanzaba con `withTimeoutOrNull`:** una corrutina que BLOQUEA el hilo no se puede cancelar, así que el tope solo
+> vence si lo que se espera es una suspensión. La mirada corre en su propia corrutina —y en un alcance que **no** es hijo
+> del que espera, porque con `coroutineScope` habría que esperar a la que quedó bloqueada, que es justo el cuelgue del que
+> se huye— y el tope va sobre el `await`.
+
+**La 252 no podía atrapar esto, y no se puede reforzar para que lo atrape.** Juzga con un ejecutor que *suspende*
+(`CompletableDeferred`), y algo que suspende suelta el hilo: la conversación sigue igual corra donde corra. Su punto
+ciego es estructural, no un caso que le falte. Por eso la **254** usa un ejecutor que **bloquea el hilo de verdad**
+(`CountDownLatch`), y la traba solo la abre un paso del guion, que corre en el hilo de la conversación: si la lectura
+volviera a ese hilo, ese paso no llegaría nunca. El enunciado de la 252 queda igual.
+
+**La sesión contaba items pero no bytes.** El límite del servidor tiene dos mitades —128 items **y** 32 768 B— y el
+historial se llena por la que llegue antes; el recorte mide cada resultado **por separado**, así que dos que caben de a
+uno se pasan juntos. Ahora se acumulan los bytes y se avisa una vez a los 30 720, sin cortar nada. El catálogo baja de
+12 000 a **4 000** y se acota **en bytes** y no en caracteres, que es como cuenta el servidor («á» son dos): entra cuatro
+veces en el presupuesto, y el catálogo real de hoy ocupa ~1 833.
+
+**El catálogo de la voz omitía las aprendidas.** Pedía las herramientas con `emptyList()` mientras el otro llamador sí
+las pasaba: en el teléfono la voz prometía un catálogo que no era el del cerebro. El criterio vive ahora en **un solo
+sitio** (`GraphApp.aprendidasDisponibles()`) y lo usan los dos.
+
+**Una etiqueta con salto de línea rompía el parseo.** El resumen es texto plano y une las etiquetas con « · », así que
+una etiqueta multilínea partía el resumen en una sección que nadie escribió —y se contestaba «no lo veo» de algo que sí
+estaba— y una que trajera el separador inflaba la cuenta. Se sanea **en origen** (`etiquetaDePantalla`) y el que la lee
+es **tolerante**. El saneo no cambia el sentido de lo que ve el cerebro, que come el mismo texto: un salto pasa a espacio
+y el separador a guion. El campo enfocado cierra por la **última** comilla-paréntesis, así que un texto que traiga `")`
+ya no lo trunca.
+
+**Sin servicio, cada herramienta lo contaba a su manera.** `que_puedo_hacer` callaba la causa y devolvía un catálogo
+vacío, que se lee como que Ü no sabe hacer nada. Ahora `acciones` devuelve `null` —que no es una lista vacía— y las tres
+dicen la misma causa con las mismas palabras.
+
+Pone verdes: **254-258**.
+
+#### Ergonomía del modo reunión: silencio con doble toque (promesa 259, esta corrida)
+
+La única forma de callar el modo reunión era sacar la burbuja de la esquina, lo que además corta cualquier tarea que
+el worker esté por tomar de la cola — apagar todo para pedirle a Ü que no escuche un momento. Y había un choque
+latente: en el hueco entre segmentos (`docked && !listening`, mientras el cerebro piensa o Ü habla) un doble toque
+caía en `onBubbleTap()` → `activateMic()`, que abre OTRA escucha de un solo comando encima del modo reunión ya
+corriendo.
+
+Puro `app/`, sin cambios en `core`:
+
+- `VoiceDock.kt` — `@Volatile var muted` (solo lectura hacia afuera, como `docked`/`listening`) y `toggleMute()`, que
+  invierte el silencio, corta un segmento abierto (lo dicho hasta ahí se procesa igual que con un toque) y lo anota en
+  el log. `listenLoop()` consulta `muted` en cada vuelta, ANTES de abrir el micrófono: muteada, ni transcribe ni
+  avanza el segmento — solo espera un rato corto y vuelve a mirar, con el mismo patrón que ya usa la espera de
+  `quietUntil`. El bucle sigue vivo, las notas quedan y `taskWorker`/`taskQueue` siguen procesando la cola: mutear
+  nunca cancela una tarea en curso ni las que esperan turno. El aviso (`showBadge`) cambia a «🔇 muteado · toca dos
+  veces para volver a escuchar», distinto del «🎧 en la reunión…» de siempre.
+- `FloatingBubble.kt` — mientras `voiceDock.docked` (esté o no `listening`), el toque ya no cae en el `when` general:
+  va a `onDockedTap()`, que cuenta toques en su propia ventana (separada de `tapCount`/`tapJob`, para no cruzarse con
+  el gesto normal). Un DOBLE toque llama a `voiceDock.toggleMute()`; nunca llega a `onBubbleTap()` ni a
+  `activateMic()`. Un solo toque, si había un segmento abierto, lo corta (el mismo gesto de siempre); sin segmento
+  abierto, no hace nada — se prioriza que el doble toque mutee de forma confiable sobre conservar ese atajo.
+
+`cancel()` y `undock()` no miran `muted`: sacar la burbuja de la esquina sigue siendo la única forma de apagar el modo
+reunión entero, muteado o no. `dock()` arranca siempre sin mute (una reunión nueva empieza escuchando).
+
+Juzgado por fuente, igual que 246/256 (`app` no corre en `jvmTest`): que `muted`/`toggleMute` existan, que el chequeo
+de `muted` en `listenLoop` esté antes de `listening = true` y su bloque no abra el micrófono, que el doble toque en
+`FloatingBubble` llame a `toggleMute()` sin pasar por `onBubbleTap()`/`activateMic()`, y que ni `toggleMute()` ni ese
+bloque toquen `taskQueue`, `taskWorker` ni `Ejecucion.parar`.
+
+Pone verdes: **259**.
 
 ---
 

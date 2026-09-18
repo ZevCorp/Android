@@ -1,9 +1,15 @@
 package graph.core.contrato
 
 import graph.core.contrato.Contrato002VozGptLive.Companion.promesa
+import graph.core.domain.LearnedTool
+import graph.core.domain.Mcp
+import graph.core.voz.CatalogoDeVoz
+import graph.core.voz.HerramientasDeVoz
+import graph.core.voz.Llamada
 import java.io.File
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 import kotlin.test.fail
 
@@ -19,9 +25,12 @@ class Contrato002VozEnVivoDev {
 
     private companion object {
         const val VOZ = "app/src/main/kotlin/com/zevcorp/graph/voice/live/VozEnVivoDev.kt"
+        const val APP = "app/src/main/kotlin/com/zevcorp/graph/GraphApp.kt"
         const val PANTALLA = "app/src/main/kotlin/com/zevcorp/graph/ui/MainActivity.kt"
         const val BUS = "app/src/main/kotlin/com/zevcorp/graph/platform/LogBus.kt"
         const val TELEMETRIA = "app/src/main/kotlin/com/zevcorp/graph/platform/Telemetry.kt"
+        const val VOICE_DOCK = "app/src/main/kotlin/com/zevcorp/graph/ui/VoiceDock.kt"
+        const val BUBBLE = "app/src/main/kotlin/com/zevcorp/graph/ui/FloatingBubble.kt"
         const val BOTON = "Voz en vivo (prueba)"
         val RAMA_DEV = Regex("""\bif\s*\(\s*mode\s*==\s*MODE_DEV\s*\)\s*\{""")
 
@@ -226,5 +235,166 @@ class Contrato002VozEnVivoDev {
             assertEquals(emptyList(), f.apariciones("enqueue").map(f::linea), promesa(246) + " · a la telemetría solo encola LogBus, no ${f.ruta}")
         }
         assertEquals(listOf("fun enqueue(tag: String, message: String) {"), telemetria.apariciones("enqueue").map(telemetria::linea), promesa(246) + " · Telemetry no se encola por otro camino")
+    }
+
+    /**
+     * LA 256 SE JUZGA IGUAL, LEYENDO LAS FUENTES, porque lo que falló no es un cálculo sino un CABLE: el catálogo de la
+     * voz pedía las acciones con `emptyList()` mientras el otro llamador pasaba las aprendidas, y las dos ramas eran
+     * correctas por separado. Lo que hay que atrapar es que se separen otra vez, y eso se ve en el código, no en un
+     * doble. El comportamiento —que una aprendida llegue hasta lo que lee el delegado— va detrás, con un `Mcp` real.
+     */
+    @Test
+    fun promesa256() {
+        val voz = fuente(VOZ)
+        val app = fuente(APP)
+
+        // UN SOLO SITIO DECIDE cuáles aprendidas ve una corrida; si hay dos, vuelven a separarse.
+        assertEquals(
+            1,
+            Regex("""\bfun\s+aprendidasDisponibles\s*\(""").findAll(app.soloCodigo).count(),
+            promesa(256) + " · aprendidasDisponibles() se declara una sola vez en GraphApp",
+        )
+        // Y lo usan los DOS: la anticipación de GraphApp y el catálogo de la voz.
+        assertTrue(
+            app.apariciones("aprendidasDisponibles").size >= 2,
+            promesa(256) + " · GraphApp declara el criterio y no lo usa: ${app.apariciones("aprendidasDisponibles").map(app::linea)}",
+        )
+        assertEquals(
+            1,
+            voz.apariciones("aprendidasDisponibles").size,
+            promesa(256) + " · la voz no pide las aprendidas al único sitio que lo decide: ${voz.apariciones("aprendidasDisponibles").map(voz::linea)}",
+        )
+        // NADIE escribe la lista vacía a mano en la llamada al catálogo: ese fue el bug.
+        for (f in todas()) {
+            assertEquals(
+                emptyList(),
+                f.lineas(Regex("""\bherramientas\s*\([^\n]*\bemptyList\b""")),
+                promesa(256) + " · ${f.ruta} pide el catálogo con una lista vacía escrita a mano",
+            )
+        }
+
+        // ── Y POR COMPORTAMIENTO: una aprendida llega hasta lo que lee el delegado, pasando por el ejecutor ──────────
+        corre {
+            val mano = Contrato003FrenoYPuerta.Mano()
+            val aprendida = LearnedTool("pedir_un_taxi", "Pide un taxi como se lo enseñaron", listOf("a"))
+            val mcp = Mcp(mano.gestos, mano.sistema, listOf(aprendida), mano.reproductor)
+            val ojos = HerramientasDeVoz(pantalla = { null }, acciones = { mcp.tools }, mirarEn = despachadorDeIo())
+            val leido = ojos.ejecutar(Llamada("call_1", CatalogoDeVoz.QUE_PUEDO_HACER, emptyMap()))
+            assertTrue(aprendida.name in leido, promesa(256) + " · la aprendida no llega a lo que lee el delegado: «$leido»")
+            assertEquals(emptyList(), mano.entradas, promesa(256) + " · enumerar el catálogo tocó el teléfono: ${mano.entradas}")
+        }
+    }
+
+    /**
+     * LA 259 SE JUZGA IGUAL, LEYENDO LAS FUENTES DE `app` (modo reunión, ergonomía del silencio). `VoiceDock` y
+     * `FloatingBubble` son puro Android (accesibilidad, overlay, gestos con la mano) y no corren en `jvmTest`, pero lo
+     * que prometen está escrito: dónde se consulta `muted`, dónde se llama `toggleMute()` y por dónde NUNCA puede caer
+     * un doble toque con el modo reunión anclado.
+     */
+    @Test
+    fun promesa259() {
+        val dock = fuente(VOICE_DOCK)
+        val bubble = fuente(BUBBLE)
+
+        // ── VoiceDock declara el estado y la acción del gesto ──────────────────────────────────────────────────────
+        assertTrue(
+            Regex("""@Volatile\s+var\s+muted\s*=\s*false""").containsMatchIn(dock.soloCodigo),
+            promesa(259) + " · VoiceDock no declara `muted` como @Volatile var",
+        )
+        assertTrue(
+            Regex("""\bfun\s+toggleMute\s*\(\s*\)""").containsMatchIn(dock.soloCodigo),
+            promesa(259) + " · VoiceDock no declara toggleMute()",
+        )
+
+        // ── listenLoop consulta `muted` ANTES de abrir el segmento, y ese bloque no abre el micrófono ──────────────
+        val firmaLoop = Regex("""private\s+suspend\s+fun\s+listenLoop\s*\(\s*\)""").find(dock.soloCodigo)
+            ?: fail(promesa(259) + " · no encuentro listenLoop() en VoiceDock")
+        val cuerpoLoop = dock.bloque(dock.soloCodigo.indexOf('{', firmaLoop.range.last))
+        fun dentroDelLoop(pos: Int) = pos in cuerpoLoop
+
+        val chequeoMuted = Regex("""\bif\s*\(\s*muted\s*\)\s*\{""").findAll(dock.soloCodigo)
+            .firstOrNull { dentroDelLoop(it.range.first) }
+            ?: fail(promesa(259) + " · listenLoop no tiene un bloque `if (muted) { … }`")
+        val abreSegmento = Regex("""\blistening\s*=\s*true\b""").findAll(dock.soloCodigo)
+            .firstOrNull { dentroDelLoop(it.range.first) }
+            ?: fail(promesa(259) + " · no encuentro dónde listenLoop abre el segmento (`listening = true`)")
+        assertTrue(
+            chequeoMuted.range.first < abreSegmento.range.first,
+            promesa(259) + " · el chequeo de `muted` no está antes de abrir el segmento",
+        )
+
+        val bloqueMuted = dock.bloque(chequeoMuted.range.last)
+        val textoBloqueMuted = dock.sinComentarios.substring(bloqueMuted.first, bloqueMuted.last + 1)
+        assertFalse(abreSegmento.range.first in bloqueMuted, promesa(259) + " · `listening = true` cae dentro del bloque de `muted`: abre el micrófono igual")
+        assertFalse("defaultTranscriber" in textoBloqueMuted, promesa(259) + " · muteada, la escucha abre el micrófono igual")
+        assertTrue("continue" in textoBloqueMuted, promesa(259) + " · muteada, el bucle no vuelve a mirar (falta `continue`)")
+
+        // ── Mutear no cancela nada del worker de tareas ────────────────────────────────────────────────────────────
+        val firmaToggle = Regex("""\bfun\s+toggleMute\s*\(\s*\)\s*\{""").find(dock.soloCodigo)
+            ?: fail(promesa(259) + " · no encuentro el cuerpo de toggleMute()")
+        val cuerpoToggle = dock.bloque(firmaToggle.range.last)
+        val textoToggle = dock.sinComentarios.substring(cuerpoToggle.first, cuerpoToggle.last + 1)
+        for (prohibido in listOf("taskQueue", "taskWorker", "Ejecucion.parar")) {
+            assertFalse(prohibido in textoToggle, promesa(259) + " · toggleMute() toca `$prohibido`")
+            assertFalse(prohibido in textoBloqueMuted, promesa(259) + " · el camino de silencio en listenLoop toca `$prohibido`")
+        }
+
+        // ── FloatingBubble: el doble toque con el modo reunión anclado va a toggleMute(), nunca al micrófono de un
+        //    solo comando ─────────────────────────────────────────────────────────────────────────────────────────
+        val firmaListener = Regex("""bubble\.setOnClickListener\s*\{""").find(bubble.soloCodigo)
+            ?: fail(promesa(259) + " · no encuentro bubble.setOnClickListener en FloatingBubble")
+        val cuerpoListener = bubble.bloque(firmaListener.range.last)
+        val textoListener = bubble.sinComentarios.substring(cuerpoListener.first, cuerpoListener.last + 1)
+        assertTrue(
+            Regex("""voiceDock\.docked\s*->\s*onDockedTap\s*\(\s*\)""").containsMatchIn(textoListener),
+            promesa(259) + " · con la burbuja anclada, el toque ya no va a onDockedTap()",
+        )
+
+        // ── El ORDEN importa: `execLive` se resuelve antes que `voiceDock.docked` — cortar la
+        //    narración de la ejecución con un solo toque sigue siendo el gesto esperado aunque el
+        //    modo reunión siga anclado. Invertir el orden dejaría esa narración sonando (el toque
+        //    caería siempre en onDockedTap() sin pasar por stopExecLive()) ───────────────────────
+        val posExecLive = Regex("""(?<![\p{L}\p{N}_])execLive\s*->""").find(textoListener)
+            ?: fail(promesa(259) + " · no encuentro la rama `execLive ->` en el listener")
+        val posDockedRama = Regex("""voiceDock\s*\.\s*docked\s*->""").find(textoListener)
+            ?: fail(promesa(259) + " · no encuentro la rama `voiceDock.docked ->` en el listener")
+        assertTrue(
+            posExecLive.range.first < posDockedRama.range.first,
+            promesa(259) + " · `execLive` tiene que evaluarse antes que `voiceDock.docked` en el listener",
+        )
+
+        // ── Cuando `execLive` Y `voiceDock.docked` son ciertos A LA VEZ (una duda de una tarea de
+        //    la reunión respondida con "Responder con voz" mientras esa tarea sigue corriendo), el
+        //    toque no puede perderse para el gesto de mutear: tiene que seguir contando, o hacen
+        //    falta TRES toques en vez de dos para llegar al doble toque que mutea ───────────────────
+        val ramaExecLive = Regex("""(?<![\p{L}\p{N}_])execLive\s*->\s*\{""").find(bubble.soloCodigo)
+            ?: fail(promesa(259) + " · la rama `execLive` no abre un bloque `{ … }` en el listener")
+        val cuerpoRamaExecLive = bubble.bloque(ramaExecLive.range.last)
+        val textoRamaExecLive = bubble.sinComentarios.substring(cuerpoRamaExecLive.first, cuerpoRamaExecLive.last + 1)
+        assertTrue(
+            Regex("""\bstopExecLive\s*\(\s*\)""").containsMatchIn(textoRamaExecLive),
+            promesa(259) + " · el toque con `execLive` encendido ya no corta la narración de la ejecución",
+        )
+        assertTrue(
+            Regex("""if\s*\(\s*voiceDock\s*\.\s*docked\s*\)\s*\{?\s*onDockedTap\s*\(\s*\)\s*\}?""").containsMatchIn(textoRamaExecLive),
+            promesa(259) + " · con `voiceDock.docked` a la vez que `execLive`, el toque no llama a onDockedTap(): se pierde para el doble toque que mutea",
+        )
+
+        val firmaOnDockedTap = Regex("""\bfun\s+onDockedTap\s*\(\s*\)\s*\{""").find(bubble.soloCodigo)
+            ?: fail(promesa(259) + " · FloatingBubble no declara onDockedTap()")
+        val cuerpoOnDockedTap = bubble.bloque(firmaOnDockedTap.range.last)
+        val textoOnDockedTap = bubble.sinComentarios.substring(cuerpoOnDockedTap.first, cuerpoOnDockedTap.last + 1)
+        assertTrue(
+            Regex("""voiceDock\s*\.\s*toggleMute\s*\(\s*\)""").containsMatchIn(textoOnDockedTap),
+            promesa(259) + " · onDockedTap() no llama a voiceDock.toggleMute()",
+        )
+        assertFalse(
+            Regex("""(?<![\p{L}\p{N}_])onBubbleTap(?![\p{L}\p{N}_])""").containsMatchIn(textoOnDockedTap),
+            promesa(259) + " · onDockedTap() cae en onBubbleTap(): un doble toque anclado activaría el menú/tema",
+        )
+        assertFalse(
+            Regex("""(?<![\p{L}\p{N}_])activateMic(?![\p{L}\p{N}_])""").containsMatchIn(textoOnDockedTap),
+            promesa(259) + " · onDockedTap() cae en activateMic(): chocaría con la escucha permanente ya corriendo",
+        )
     }
 }

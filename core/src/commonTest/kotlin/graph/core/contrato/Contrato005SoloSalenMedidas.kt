@@ -305,6 +305,13 @@ class Contrato005SoloSalenMedidas {
         assertTrue(consciente.endsWith("(IllegalStateException)") && "consciente" in consciente, promesa(p) + " · workflow: $consciente")
         val transitorio = puerta.mensaje("step consciente falló (SocketTimeoutException)")
         assertTrue(transitorio.endsWith("(SocketTimeoutException)") && "consciente" in transitorio, promesa(p) + " · workflow: $transitorio")
+        // Las otras clases que la app emite de verdad y el panel tiene que poder distinguir: una URL mal escrita no es un corte
+        // de red (`GraphTransport.causa`), un servidor que no habla HTTP tampoco (`CanalOkHttp.tipo`), y un aviso que revienta
+        // al inicializarse llega como `Error` (`Freno.dile`).
+        for (clase in listOf("MalformedURLException", "ProtocolException", "ExceptionInInitializerError")) {
+            val linea = puerta.mensaje("step consciente falló ($clase)")
+            assertTrue(linea.endsWith("($clase)") && "consciente" in linea, promesa(p) + " · workflow: $linea")
+        }
         val desconocida = puerta.mensaje("step consciente falló (AnaMariaError)")
         assertTrue(desconocida.endsWith("(‹${n("AnaMariaError")}›)") && "consciente" in desconocida, promesa(p) + " · workflow: $desconocida")
         val ajena = puerta.mensaje("step consciente falló (JuanPerezException)")

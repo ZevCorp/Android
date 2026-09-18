@@ -111,6 +111,15 @@ class ConversacionViva(
         const val TOPE_DE_ITEMS = 128
         const val AVISO_DE_ITEMS = 120
 
+        /**
+         * EL LÍMITE DE LA SESIÓN TIENE DOS MITADES Y HASTA AHORA SOLO SE CONTABA UNA. Los 128 items se vigilaban; los
+         * 32 768 B, no, y el recorte de un resultado mide cada resultado POR SEPARADO contra ese mismo número: dos
+         * resultados que caben de a uno se pasan juntos. Con las manos de la fase siguiente esto se multiplica.
+         */
+        const val TOPE_DE_BYTES = 32_768
+        /** La misma holgura que con los items (120 de 128): avisar con el 6 % por delante, sin cortar nada. */
+        const val AVISO_DE_BYTES = 30_720
+
         const val AVISO_DEL_SISTEMA = "[aviso del sistema] "
 
         /** La salida de una llamada retirada: el servidor la espera igual, y sin ella rechaza el siguiente `response.create`. */
@@ -160,6 +169,9 @@ class ConversacionViva(
         var segundos = 0.0
         var items = 0
 
+        /** Los bytes UTF-8 del historial de ESTA sesión: la otra mitad del límite del servidor. */
+        var bytes = 0
+
         fun anotar(porque: String?, dicho: String) {
             if (porque == null || causa != null) return
             causa = porque
@@ -202,6 +214,14 @@ class ConversacionViva(
 
     /** Items creados en la sesión del servidor en curso: llamadas del delegado, mensajes escritos, resultados y avisos. */
     val itemsEnSesion: Int get() = conexion?.items ?: 0
+
+    /**
+     * Los bytes UTF-8 que lleva gastados el HISTORIAL de la sesión, de los [TOPE_DE_BYTES] que admite el servidor. Se
+     * cuenta lo mismo que cuentan los items: lo que entra al historial. La apertura —instrucciones y catálogo— no es
+     * historial y no suma aquí; lo que ocupa se mide aparte (promesa 251), y si el servidor la cuenta o no solo se
+     * sabrá en el nivel 4.
+     */
+    val bytesEnSesion: Int get() = conexion?.bytes ?: 0
 
     private var detenida = false
     private var conexion: Conexion? = null
@@ -657,7 +677,7 @@ class ConversacionViva(
                 for (l in hecho.llamadas) {
                     if (c.sinContestar.none { it === l }) c.sinContestar += l
                     // El function_call del delegado también es un item de la sesión del servidor, aunque no lo mande la voz.
-                    contarItem(c)
+                    contarItem(c, bytesDeLaLlamada(l))
                 }
                 val (enPantalla, deControl) = hecho.llamadas.partition { actuaEnPantalla(it.nombre) }
                 if (enPantalla.isNotEmpty()) c.tandas.trySend(Tanda(c, enPantalla))
@@ -816,12 +836,27 @@ class ConversacionViva(
     /** Un item de la sesión del servidor. Se llama con el [escritor] tomado. */
     private suspend fun mandarItem(c: Conexion, json: String) {
         canal.enviar(json)
-        contarItem(c)
+        contarItem(c, bytesUtf8(json))
     }
 
-    /** Pasado el tope el servidor rechaza lo que llegue: se avisa antes, una vez, sin cortar. */
-    private fun contarItem(c: Conexion) {
+    /**
+     * Lo que se sabe que ocupa una llamada del delegado: su nombre y sus argumentos. El sobre lo pone el servidor y no
+     * se ve desde aquí, así que es una cota por abajo —contar de menos avisa tarde, pero nunca avisa de lo que no hay.
+     */
+    private fun bytesDeLaLlamada(l: Llamada): Int =
+        bytesUtf8(l.nombre) + l.args.entries.sumOf { bytesUtf8(it.key) + bytesUtf8(it.value) }
+
+    /**
+     * Pasado el tope el servidor rechaza lo que llegue: se avisa antes, una vez, sin cortar. SON DOS CUENTAS Y NO UNA
+     * —128 items Y 32 768 bytes—, y hasta ahora solo se miraba la primera: el historial se llena por la que llegue antes.
+     */
+    private fun contarItem(c: Conexion, bytes: Int) {
         c.items++
+        val antes = c.bytes
+        c.bytes += bytes
+        if (antes < AVISO_DE_BYTES && c.bytes >= AVISO_DE_BYTES) {
+            log(TAG, "la sesión lleva ${c.bytes} bytes de los $TOPE_DE_BYTES que admite el servidor; pasado el tope rechaza lo que se le mande (response_input_buffer_full). No se corta nada")
+        }
         if (c.items == AVISO_DE_ITEMS) {
             log(TAG, "la sesión lleva $AVISO_DE_ITEMS items de los $TOPE_DE_ITEMS que admite el servidor; pasado el tope rechaza lo que se le mande (response_input_buffer_full). No se corta nada")
         }

@@ -1,6 +1,6 @@
-# Contrato retrofit: voz en vivo (Realtime) — el payload que evita la respuesta fantasma
+# Contrato retrofit 008: voz en vivo (Realtime) — el payload que evita la respuesta fantasma
 
-Estado: **promesa 201 verde** (2026-09-17) · Rama: `yokh/cliente-graph` · Retrofit sobre commits
+Estado: **promesa 801 verde** (2026-09-17) · Rama: `yokh/cliente-graph` · Retrofit sobre commits
 `616fdab` (feat: voz en vivo con gpt-realtime) y `14e2197` (fix: respuesta fantasma), que entraron
 sin pasar por el método de este repo (ver `docs/como-trabajamos.md`).
 
@@ -50,15 +50,15 @@ donde el portero la espera, juzgada de verdad, no una decoración.
 ## La especificación
 
 Sigue la numeración reservada para esta spec (`NNN×100+1` en adelante, ver `scripts/contrato.sh`):
-**002 → desde 201**. El enunciado es literal el del test
-(`core/src/commonTest/kotlin/graph/core/contrato/Contrato002VozRealtime.kt`, método `promesa201`).
+**008 → desde 801**. El enunciado es literal el del test
+(`core/src/commonTest/kotlin/graph/core/contrato/Contrato008VozRealtime.kt`, método `promesa801`).
 
 | # | Promesa |
 |---|---|
-| 201 | El `session.update` de la voz en vivo (Realtime) manda `turn_detection.create_response:false`, `tools:[]`, `pcm16` en entrada y salida y transcripción con `whisper-1`; sin `create_response:false` el servidor podía generar una respuesta fantasma que cortaba el audio real a mitad de camino. |
+| 801 | El `session.update` de la voz en vivo (Realtime) manda `turn_detection.create_response:false`, `tools:[]`, `pcm16` en entrada y salida y transcripción con `whisper-1`; sin `create_response:false` el servidor podía generar una respuesta fantasma que cortaba el audio real a mitad de camino. |
 
 ### Con qué se juzga
 
 | # | Cómo se juzga sin tocar nada |
 |---|---|
-| 201 | `RealtimeSession.sessionUpdatePayload()` corrido en `commonTest`, sin red ni Android: se inspecciona el `JsonObject` resultante campo por campo (`type`, `session.modalities`, `session.input_audio_format`/`output_audio_format`, `session.turn_detection.type`/`create_response`, `session.tools`, `session.input_audio_transcription.model`). |
+| 801 | `RealtimeSession.sessionUpdatePayload()` corrido en `commonTest`, sin red ni Android: se inspecciona el `JsonObject` resultante campo por campo (`type`, `session.modalities`, `session.input_audio_format`/`output_audio_format`, `session.turn_detection.type`/`create_response`, `session.tools`, `session.input_audio_transcription.model`). |

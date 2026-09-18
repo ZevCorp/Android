@@ -10,6 +10,8 @@
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
+    <!-- Apagado por gesto (spec 007): vibración corta al explotar la burbuja, sin sonido nuevo. -->
+    <uses-permission android:name="android.permission.VIBRATE" />
     <!-- Auto-actualización: instalar el APK descargado (el sistema pide confirmación). -->
     <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <!-- Modo usuario: tiempo real de pantalla para la gráfica "versus". Se concede en Ajustes → Acceso a uso. -->
