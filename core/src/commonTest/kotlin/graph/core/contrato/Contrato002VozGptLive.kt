@@ -132,7 +132,7 @@ class Contrato002VozGptLive {
             243 to "La clave viaja solo en la cabecera, nunca en la URL ni en el log, y cerrar el canal dos veces no rompe nada ni deja hilos vivos.",
             244 to "La cola del altavoz guarda como mucho 30 segundos y al llenarse descarta lo más viejo; suena solo si tiene bytes, nunca por volumen, y callar la vacía en el acto.",
             245 to "A la telemetría remota de la voz solo llega la medida: el largo de cada frase y el cierre del turno; ninguna frase, argumento ni texto del delegado sale del teléfono.",
-            246 to "La voz en vivo solo se arranca desde el panel de desarrollador y toma su clave del build interno, nunca de la configuración remota.",
+            246 to "La voz en vivo solo se arranca desde el panel de desarrollador y se conecta con el device_id del teléfono al path real del proxy de Graph (/api/android-live-session, no la ruta con rewrite), nunca directo a OpenAI ni con una key real en el APK.",
             247 to "Dónde estoy: la voz contesta con la app al frente, el tipo de pantalla y su tamaño, leídos del mismo estado que ya arma el turno de Graph y sin pedir captura; si no hay pantalla que leer lo dice y no se la inventa.",
             248 to "Qué veo: las etiquetas visibles, cuántos elementos se pueden tocar y el campo enfocado salen del `uiContext` que ya viaja a Graph; un filtro de hasta 60 caracteres contesta si algo está en pantalla sin mirar tildes ni mayúsculas, y lo que la pantalla no deja leer se dice tal cual.",
             249 to "Qué puedo hacer: el catálogo de capacidades se deriva del catálogo real de acciones, así que una acción nueva aparece sin tocar la voz; va agrupado por vía y cabe en un resultado aunque una descripción sea enorme.",
