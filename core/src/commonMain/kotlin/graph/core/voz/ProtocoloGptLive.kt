@@ -32,7 +32,20 @@ internal val VozJson: Json = Json { ignoreUnknownKeys = true }
  *  - NO HAY MARCAS DE TURNO ([marcaLosTurnos] = false): las pone [TurnosSinMarca].
  */
 @OptIn(ExperimentalEncodingApi::class)
-class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEGADO) {
+class ProtocoloGptLive(
+    val modelo: String = MODELO,
+    val delegado: String = DELEGADO,
+    /**
+     * A DÓNDE CONECTA Y QUÉ CABECERAS MANDA. Por defecto, el protocolo REAL de OpenAI: [URL] con
+     * `Authorization: Bearer <clave>` — así lo mide este archivo entero y así lo cuentan los contratos.
+     * Android en producción NUNCA usa el default: pasa por el proxy de Graph (sin key en el cliente,
+     * `VozEnVivoDev` decide la URL con el `device_id` y cabeceras vacías), porque `gpt-live-1` no tiene
+     * token efímero. Overridear aquí y no la constante [URL] es a propósito: la constante sigue siendo
+     * la referencia fiel de cómo habla OpenAI, la que mide Windows y la que verifican los contratos.
+     */
+    private val urlDeConexion: String = URL,
+    private val cabecerasDeConexion: (clave: String) -> Map<String, String> = { clave -> mapOf("Authorization" to "Bearer $clave") },
+) {
 
     companion object {
         const val URL = "wss://api.openai.com/v1/live/sessions"
@@ -59,7 +72,7 @@ class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEG
         const val AL_DICTAR = "Di exactamente esto, sin añadir nada ni comentarlo: "
     }
 
-    val url: String = URL
+    val url: String = urlDeConexion
     val ritmo: Int = RITMO
 
     /**
@@ -74,8 +87,11 @@ class ProtocoloGptLive(val modelo: String = MODELO, val delegado: String = DELEG
     /** Sí: `session.started`. Un error antes de él es que no abrió (sin crédito, instrucciones de más). */
     val confirmaQueAbrio: Boolean = true
 
-    /** La clave va en la cabecera, NUNCA en la URL: una URL acaba en los logs. */
-    fun cabeceras(clave: String): Map<String, String> = mapOf("Authorization" to "Bearer $clave")
+    /**
+     * La clave va en la cabecera, NUNCA en la URL: una URL acaba en los logs. Así habla OpenAI de
+     * verdad (default de [cabecerasDeConexion]); el proxy de Graph no lleva ninguna, por diseño.
+     */
+    fun cabeceras(clave: String): Map<String, String> = cabecerasDeConexion(clave)
 
     /** Un solo `session.start`. Las herramientas y las instrucciones completas van a la delegación. */
     fun apertura(instruccionesVoz: String, instruccionesDelegado: String, utensilios: List<Utensilio>): String = mensaje {

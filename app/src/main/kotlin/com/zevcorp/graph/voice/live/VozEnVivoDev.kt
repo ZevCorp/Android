@@ -1,7 +1,6 @@
 package com.zevcorp.graph.voice.live
 
 import android.content.Context
-import com.zevcorp.graph.BuildConfig
 import com.zevcorp.graph.Ejecucion
 import com.zevcorp.graph.GraphApp
 import com.zevcorp.graph.platform.GraphAccessibilityService
@@ -39,8 +38,21 @@ import kotlinx.coroutines.withTimeoutOrNull
  * sobre la puerta única (spec 003, promesa 307): leer la pantalla pasa siempre, porque mirar no es actuar. Manos no se le
  * dan a nadie aquí: ejecutar es la fase siguiente.
  *
- * LA CLAVE ES LA DEL BUILD INTERNO: la pref `openaiKey` o la horneada. Nunca la de la configuración remota, que baja de una
- * tabla pública.
+ * NUNCA HAY UNA KEY REAL EN EL APK: se conecta al proxy de Graph (`/api/android/live/session?device_id=…`), que
+ * retransmite hacia OpenAI con SU clave — el celular nunca la ve. `ProtocoloGptLive` en sí mismo sigue documentando el
+ * protocolo real de OpenAI (misma URL y `Authorization` que mide Windows); acá se lo overridea con la URL del proxy y
+ * cabeceras vacías. Antes de este cableado esto usaba `BuildConfig.DEFAULT_OPENAI_KEY` horneada en el build como
+ * placeholder temporal — ya no.
+ *
+ * EL PROXY VA A CORTAR EL SOCKET CADA VEZ QUE LA FUNCIÓN SERVERLESS DE VERCEL LLEGUE A SU TOPE DE DURACIÓN, a mitad de
+ * una conversación real: no hace falta lógica nueva para eso. `ConversacionViva` YA reconecta sola frente a cualquier
+ * cierre cuyo motivo no matchee una causa fatal conocida (`causaFatal`, `Fatales.kt`) — el número de cierre no se mira
+ * (1013 del RFC es «reintentá»), y por eso un corte del proxy por su propio límite de tiempo entra ahí sin que haga
+ * falta reconocer su motivo exacto de antemano (promesa 223: hasta 4 veces con espera creciente, el contador vuelve a
+ * cero en cada turno cerrado; promesa 219: «Se cortó un instante. Sigo, pero olvidé lo último que hablábamos.»). LO QUE
+ * SÍ QUEDA PENDIENTE cuando el proxy esté desplegado: si alguna vez rechaza un `device_id` no autorizado —por HTTP en
+ * el apretón de manos o cerrando el socket con un motivo propio—, ese motivo hay que sumarlo a `CAUSAS` en
+ * `Fatales.kt` para que no reconecte 4 veces en vano contra algo que nunca va a abrir.
  *
  * TIENE SU PROPIO ALCANCE, y parar vive en él. Desde el alcance cancelado de una Activity que se cierra, `detener()` lanza
  * antes de correr y el micrófono queda abierto. Micrófono y altavoz se sueltan cuando `conversar()` vuelve, por la vía que sea:
@@ -98,8 +110,11 @@ class VozEnVivoDev(private val contexto: Context) {
             }
             val conv = ConversacionViva(
                 canal = CanalOkHttp(log = ::registrar),
-                protocolo = ProtocoloGptLive(),
-                credencial = { claveDelBuildInterno() },
+                protocolo = ProtocoloGptLive(
+                    urlDeConexion = urlDelProxy(),
+                    cabecerasDeConexion = { emptyMap() },
+                ),
+                credencial = { deviceIdDelProxy() },
                 instruccionesVoz = PersonaDeLaVoz.INSTRUCCIONES_VOZ,
                 instruccionesDelegado = PersonaDeLaVoz.INSTRUCCIONES_DELEGADO,
                 utensilios = CatalogoDeVoz.UTENSILIOS,
@@ -177,9 +192,23 @@ class VozEnVivoDev(private val contexto: Context) {
             Ejecucion.herramientas(it, GraphApp.instance.aprendidasDisponibles())
         }
 
-    private fun claveDelBuildInterno(): String? =
-        GraphApp.instance.prefs.getString("openaiKey", null)?.trim()?.ifBlank { null }
-            ?: BuildConfig.DEFAULT_OPENAI_KEY.trim().ifBlank { null }
+    /**
+     * `wss://{graphBaseUrl}/api/android/live/session?device_id=<id>`: mismo `graphBaseUrl` que resuelve el cerebro
+     * remoto (`GraphApp.resolvedGraphBaseUrl()`, pref `graphBaseUrl` o la horneada), pasado de http(s) a ws(s) porque
+     * es un socket, no una request. El backend valida el `device_id` contra su whitelist y hace de relay hacia OpenAI
+     * con su propia clave: el APK no lleva ninguna.
+     */
+    private fun urlDelProxy(): String {
+        val base = GraphApp.instance.resolvedGraphBaseUrl()
+            .replaceFirst(Regex("^https://"), "wss://")
+            .replaceFirst(Regex("^http://"), "ws://")
+        val id = java.net.URLEncoder.encode(GraphApp.instance.resolvedDeviceId(), "UTF-8")
+        return "$base/api/android/live/session?device_id=$id"
+    }
+
+    /** El mismo `X-Miracle-Device-Id` que ya usa `GraphBrain`/`RealtimeVoiceClient`. Sin él no hay a quién autorizar. */
+    private fun deviceIdDelProxy(): String? =
+        GraphApp.instance.resolvedDeviceId().trim().ifBlank { null }
 
     private fun alDecir(frase: String) {
         registrar(TAG, "dice: $frase")
