@@ -34,11 +34,8 @@ class Contrato002VozEnVivoDev {
         const val BOTON = "Voz en vivo (prueba)"
         val RAMA_DEV = Regex("""\bif\s*\(\s*mode\s*==\s*MODE_DEV\s*\)\s*\{""")
 
-        /** Lo único que puede nombrar la expresión de la clave: las prefs del teléfono y lo horneado al compilar. */
-        val NOMBRES_DE_LA_CLAVE = setOf(
-            "GraphApp", "instance", "prefs", "getString", "null", "trim", "ifBlank", "BuildConfig", "DEFAULT_OPENAI_KEY",
-            "com", "zevcorp", "graph",
-        )
+        /** Lo único que puede nombrar la expresión del device_id: el ID del teléfono, nunca una key. */
+        val NOMBRES_DEL_DEVICE_ID = setOf("GraphApp", "instance", "resolvedDeviceId", "trim", "ifBlank", "null")
     }
 
     private val raiz: File = generateSequence(File(System.getProperty("user.dir")).absoluteFile) { it.parentFile }
@@ -190,24 +187,40 @@ class Contrato002VozEnVivoDev {
             promesa(246) + " · y ese sitio está dentro de `alcance.launch { … }`",
         )
 
-        // ── LA CLAVE ES LA DEL BUILD INTERNO: prefs `openaiKey` o BuildConfig, nunca la configuración remota ─────────────
+        // ── LA CREDENCIAL ES EL DEVICE_ID DEL PROXY: nunca una key, nunca la configuración remota ─────────────────────
         val remota = Regex("(?i)remote")
         assertEquals(emptyList(), remota.findAll(voz.sinComentarios).map { voz.linea(it.range.first) }.toList(), promesa(246) + " · VozEnVivoDev no toca la configuración remota (RemoteConfig ni las prefs «remote…»)")
         for (r in ramas) {
             assertTrue(remota.find(pantalla.sinComentarios.substring(r.first, r.last + 1)) == null, promesa(246) + " · ni la rama MODE_DEV le pasa nada remoto")
         }
         assertEquals(1, Regex("""\bcredencial\s*=""").findAll(voz.soloCodigo).count(), promesa(246) + " · una sola credencial")
-        assertEquals(1, Regex("""\bcredencial\s*=\s*\{\s*claveDelBuildInterno\s*\(\s*\)\s*\}""").findAll(voz.soloCodigo).count(), promesa(246) + " · la credencial es claveDelBuildInterno()")
-        val declaracion = Regex("""\bfun\s+claveDelBuildInterno\s*\(\s*\)\s*:\s*String\?\s*=""").findAll(voz.soloCodigo).toList()
-        assertEquals(1, declaracion.size, promesa(246) + " · claveDelBuildInterno() se declara una vez, como expresión")
-        assertEquals(2, voz.apariciones("claveDelBuildInterno").size, promesa(246) + " · y solo se usa como credencial")
+        assertEquals(1, Regex("""\bcredencial\s*=\s*\{\s*deviceIdDelProxy\s*\(\s*\)\s*\}""").findAll(voz.soloCodigo).count(), promesa(246) + " · la credencial es deviceIdDelProxy()")
+        val declaracion = Regex("""\bfun\s+deviceIdDelProxy\s*\(\s*\)\s*:\s*String\?\s*=""").findAll(voz.soloCodigo).toList()
+        assertEquals(1, declaracion.size, promesa(246) + " · deviceIdDelProxy() se declara una vez, como expresión")
+        assertEquals(2, voz.apariciones("deviceIdDelProxy").size, promesa(246) + " · y solo se usa como credencial")
         // La expresión llega hasta la primera línea en blanco.
         val expresion = voz.sinComentarios.substring(declaracion.single().range.last + 1).split(Regex("\n[ \t]*\n"), limit = 2)[0]
-        assertEquals(listOf("openaiKey"), Regex("\"([^\"]*)\"").findAll(expresion).map { it.groupValues[1] }.toList(), promesa(246) + " · la única pref que lee es «openaiKey»: $expresion")
-        assertTrue(Regex("""\bprefs\s*\.\s*getString\s*\(\s*"openaiKey"\s*,""").containsMatchIn(expresion), promesa(246) + " · lee prefs.getString(\"openaiKey\", …): $expresion")
-        assertTrue(Regex("""\bBuildConfig\s*\.\s*DEFAULT_OPENAI_KEY\b""").containsMatchIn(expresion), promesa(246) + " · y si no, BuildConfig.DEFAULT_OPENAI_KEY: $expresion")
+        assertEquals(emptyList(), Regex("\"([^\"]*)\"").findAll(expresion).map { it.groupValues[1] }.toList(), promesa(246) + " · el device_id no cita ninguna pref por nombre: $expresion")
+        assertTrue(Regex("""\bGraphApp\s*\.\s*instance\s*\.\s*resolvedDeviceId\s*\(\s*\)""").containsMatchIn(expresion), promesa(246) + " · lee GraphApp.instance.resolvedDeviceId(): $expresion")
+        assertFalse(Regex("""\bBuildConfig\b""").containsMatchIn(expresion), promesa(246) + " · ninguna key horneada en la credencial: $expresion")
         val nombres = Regex("""[\p{L}_][\p{L}\p{N}_]*""").findAll(expresion.replace(Regex("\"[^\"]*\""), "\"\"")).map { it.value }.toSet()
-        assertEquals(emptySet(), nombres - NOMBRES_DE_LA_CLAVE, promesa(246) + " · la clave no pasa por nadie más: $expresion")
+        assertEquals(emptySet(), nombres - NOMBRES_DEL_DEVICE_ID, promesa(246) + " · el device_id no pasa por nadie más: $expresion")
+
+        // ── LA URL ES LA DEL PROXY DE GRAPH: nunca api.openai.com directo, nunca una cabecera con una key real ─────────
+        assertEquals(
+            0,
+            Regex("""api\.openai\.com""").findAll(voz.sinComentarios.replace(Regex("\"[^\"]*\""), "\"\"")).count(),
+            promesa(246) + " · VozEnVivoDev no puede nombrar api.openai.com: eso es del protocolo, no de esta capa",
+        )
+        assertTrue(Regex("""\burlDeConexion\s*=\s*urlDelProxy\s*\(\s*\)""").containsMatchIn(voz.soloCodigo), promesa(246) + " · el protocolo conecta a urlDelProxy()")
+        assertTrue(Regex("""\bcabecerasDeConexion\s*=\s*\{\s*emptyMap\s*\(\s*\)\s*\}""").containsMatchIn(voz.soloCodigo), promesa(246) + " · sin cabeceras: nunca un Authorization con una key real")
+        val declaracionUrl = Regex("""\bfun\s+urlDelProxy\s*\(\s*\)\s*:\s*String\s*\{""").findAll(voz.soloCodigo).toList()
+        assertEquals(1, declaracionUrl.size, promesa(246) + " · urlDelProxy() se declara una vez")
+        val cuerpoUrl = voz.bloque(declaracionUrl.single().range.last)
+        val textoUrl = voz.sinComentarios.substring(cuerpoUrl.first, cuerpoUrl.last + 1)
+        assertTrue(Regex("""\bresolvedGraphBaseUrl\s*\(\s*\)""").containsMatchIn(textoUrl), promesa(246) + " · la URL sale de resolvedGraphBaseUrl(), el mismo que usa el cerebro remoto: $textoUrl")
+        assertTrue(Regex("""\bresolvedDeviceId\s*\(\s*\)""").containsMatchIn(textoUrl), promesa(246) + " · la URL lleva el device_id: $textoUrl")
+        assertTrue(Regex("""device_id=""").containsMatchIn(textoUrl), promesa(246) + " · el query param es device_id: $textoUrl")
 
         // ── LOGBUS SOLO ENCOLA LO QUE DEJA PASAR TelemetriaDeVoz ───────────────────────────────────────────────────────
         assertEquals(1, bus.apariciones("Telemetry").size, promesa(246) + " · LogBus nombra a Telemetry una sola vez: ${bus.apariciones("Telemetry").map(bus::linea)}")
