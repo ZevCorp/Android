@@ -38,7 +38,8 @@ import kotlinx.coroutines.withTimeoutOrNull
  * sobre la puerta única (spec 003, promesa 307): leer la pantalla pasa siempre, porque mirar no es actuar. Manos no se le
  * dan a nadie aquí: ejecutar es la fase siguiente.
  *
- * NUNCA HAY UNA KEY REAL EN EL APK: se conecta al proxy de Graph (`/api/android/live/session?device_id=…`), que
+ * NUNCA HAY UNA KEY REAL EN EL APK: se conecta al proxy de Graph (`/api/android-live-session?device_id=…`, el path
+ * real de la función — su rewrite `/api/android/live/session` no se aplica a un WebSocket upgrade), que
  * retransmite hacia OpenAI con SU clave — el celular nunca la ve. `ProtocoloGptLive` en sí mismo sigue documentando el
  * protocolo real de OpenAI (misma URL y `Authorization` que mide Windows); acá se lo overridea con la URL del proxy y
  * cabeceras vacías. Antes de este cableado esto usaba `BuildConfig.DEFAULT_OPENAI_KEY` horneada en el build como
