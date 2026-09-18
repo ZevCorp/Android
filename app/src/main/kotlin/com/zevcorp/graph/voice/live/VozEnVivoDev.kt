@@ -193,17 +193,22 @@ class VozEnVivoDev(private val contexto: Context) {
         }
 
     /**
-     * `wss://{graphBaseUrl}/api/android/live/session?device_id=<id>`: mismo `graphBaseUrl` que resuelve el cerebro
+     * `wss://{graphBaseUrl}/api/android-live-session?device_id=<id>`: mismo `graphBaseUrl` que resuelve el cerebro
      * remoto (`GraphApp.resolvedGraphBaseUrl()`, pref `graphBaseUrl` o la horneada), pasado de http(s) a ws(s) porque
      * es un socket, no una request. El backend valida el `device_id` contra su whitelist y hace de relay hacia OpenAI
      * con su propia clave: el APK no lleva ninguna.
+     *
+     * EL PATH ES EL REAL DE LA FUNCIÓN, NO EL "BONITO" `/api/android/live/session`. Medido contra producción
+     * (2026-09-18): los rewrites de `vercel.json` de Graph no se aplican a un WebSocket upgrade (solo a HTTP
+     * normal) — conectar a la ruta con rewrite daba 404 sin llegar a la función; conectar directo a
+     * `/api/android-live-session` sí llega y responde (403 con un `device_id` no autorizado, como se espera).
      */
     private fun urlDelProxy(): String {
         val base = GraphApp.instance.resolvedGraphBaseUrl()
             .replaceFirst(Regex("^https://"), "wss://")
             .replaceFirst(Regex("^http://"), "ws://")
         val id = java.net.URLEncoder.encode(GraphApp.instance.resolvedDeviceId(), "UTF-8")
-        return "$base/api/android/live/session?device_id=$id"
+        return "$base/api/android-live-session?device_id=$id"
     }
 
     /** El mismo `X-Miracle-Device-Id` que ya usa `GraphBrain`/`RealtimeVoiceClient`. Sin él no hay a quién autorizar. */
