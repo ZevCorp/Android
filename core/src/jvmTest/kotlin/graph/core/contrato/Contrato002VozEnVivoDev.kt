@@ -221,6 +221,11 @@ class Contrato002VozEnVivoDev {
         assertTrue(Regex("""\bresolvedGraphBaseUrl\s*\(\s*\)""").containsMatchIn(textoUrl), promesa(246) + " · la URL sale de resolvedGraphBaseUrl(), el mismo que usa el cerebro remoto: $textoUrl")
         assertTrue(Regex("""\bresolvedDeviceId\s*\(\s*\)""").containsMatchIn(textoUrl), promesa(246) + " · la URL lleva el device_id: $textoUrl")
         assertTrue(Regex("""device_id=""").containsMatchIn(textoUrl), promesa(246) + " · el query param es device_id: $textoUrl")
+        // MEDIDO CONTRA PRODUCCIÓN (2026-09-18): los rewrites de Graph no se aplican a un WebSocket upgrade
+        // (solo a HTTP normal) -- la ruta "bonita" /api/android/live/session da 404 sin llegar a la función;
+        // hay que conectar directo al path real del archivo (/api/android-live-session).
+        assertTrue(Regex("""/api/android-live-session""").containsMatchIn(textoUrl), promesa(246) + " · conecta al path real de la función, no al de un rewrite que no aplica a WebSocket: $textoUrl")
+        assertFalse(Regex("""/api/android/live/session""").containsMatchIn(textoUrl), promesa(246) + " · nunca la ruta con rewrite, que da 404 en un WebSocket upgrade real: $textoUrl")
 
         // ── LOGBUS SOLO ENCOLA LO QUE DEJA PASAR TelemetriaDeVoz ───────────────────────────────────────────────────────
         assertEquals(1, bus.apariciones("Telemetry").size, promesa(246) + " · LogBus nombra a Telemetry una sola vez: ${bus.apariciones("Telemetry").map(bus::linea)}")
